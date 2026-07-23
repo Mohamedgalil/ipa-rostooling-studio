@@ -1,0 +1,53 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Write(**/*.rossystem)",
+            "command": "\"${ROSMODEL_PYTHON:-python3}\" \"${CLAUDE_PLUGIN_ROOT}/scripts/rosmodel_lint.py\" --hook",
+            "timeout": 60,
+            "statusMessage": "Linting .rossystem model"
+          },
+          {
+            "type": "command",
+            "if": "Edit(**/*.rossystem)",
+            "command": "\"${ROSMODEL_PYTHON:-python3}\" \"${CLAUDE_PLUGIN_ROOT}/scripts/rosmodel_lint.py\" --hook",
+            "timeout": 60,
+            "statusMessage": "Linting .rossystem model"
+          },
+          {
+            "type": "command",
+            "if": "Write(**/*.ros2)",
+            "command": "\"${ROSMODEL_PYTHON:-python3}\" \"${CLAUDE_PLUGIN_ROOT}/scripts/rosmodel_lint.py\" --hook",
+            "timeout": 60,
+            "statusMessage": "Linting .ros2 model"
+          },
+          {
+            "type": "command",
+            "if": "Edit(**/*.ros2)",
+            "command": "\"${ROSMODEL_PYTHON:-python3}\" \"${CLAUDE_PLUGIN_ROOT}/scripts/rosmodel_lint.py\" --hook",
+            "timeout": 60,
+            "statusMessage": "Linting .ros2 model"
+          },
+          {
+            "type": "command",
+            "if": "Write(**/*.ros)",
+            "command": "\"${ROSMODEL_PYTHON:-python3}\" \"${CLAUDE_PLUGIN_ROOT}/scripts/rosmodel_lint.py\" --hook",
+            "timeout": 60,
+            "statusMessage": "Linting .ros message spec"
+          },
+          {
+            "type": "command",
+            "if": "Edit(**/*.ros)",
+            "command": "\"${ROSMODEL_PYTHON:-python3}\" \"${CLAUDE_PLUGIN_ROOT}/scripts/rosmodel_lint.py\" --hook",
+            "timeout": 60,
+            "statusMessage": "Linting .ros message spec"
+          }
+        ]
+      }
+    ]
+  }
+}

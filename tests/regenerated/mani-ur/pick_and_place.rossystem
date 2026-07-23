@@ -1,0 +1,34 @@
+pick_and_place:
+  fromFile: "moveit2_scripts/launch/pick_and_place.launch.py"
+  nodes:
+    "controller_manager":
+      from: "controller_manager.controller_manager"
+    "controller_stopper":
+      from: "ur_robot_driver.controller_stopper_node"
+    "dashboard_client":
+      from: "ur_robot_driver.dashboard_client"
+    "initial_joint_controller":
+      from: "controller_manager.controller_manager"
+    "initial_joint_controller_spawner_stopped":
+      from: "controller_manager.controller_manager"
+    "moveit_simple_controller_manager":
+      from: "moveit_simple_controller_manager.moveit_simple_controller_manager"
+    "robot_state_publisher_node":
+      from: "robot_state_publisher.robot_state_publisher"
+    "ur_ros2_control_node":
+      from: "ur_robot_driver.ur_ros2_control_node"
+    "urscript_interface":
+      from: "ur_robot_driver.urscript_interface"
+  parameters:
+    "activate_joint_controller":
+      type: Boolean
+    "initial_joint_controller":
+      type: String
+    "robot_ip":
+      type: String
+      default: "192.168.56.2"
+    "ur_type":
+      type: String
+      default: "ur5e"
+    "use_fake_hardware":
+      type: Boolean

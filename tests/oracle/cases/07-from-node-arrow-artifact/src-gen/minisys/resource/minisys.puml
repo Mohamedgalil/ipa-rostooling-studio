@@ -1,0 +1,14 @@
+@startuml
+
+/'SUBSYSTEMS'/
+
+  component n1 {
+
+/' PORTS DEFINED AS AVAILABLE IN THE ROSSYSTEM FILE '/
+    portout n1.chatter as "chatter" #blue
+
+/' PORTS FROM THE ORIGINAL NODE '/
+  }
+
+
+@enduml

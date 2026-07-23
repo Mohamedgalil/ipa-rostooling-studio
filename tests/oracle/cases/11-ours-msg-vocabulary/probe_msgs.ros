@@ -1,0 +1,57 @@
+probe_msgs:
+  msgs:
+    AllTypes
+      message
+        bool a_bool
+        int8 a_int8
+        uint8 a_uint8
+        int16 a_int16
+        uint16 a_uint16
+        int32 a_int32
+        uint32 a_uint32
+        int64 a_int64
+        uint64 a_uint64
+        float32 a_float32
+        float64 a_float64
+        string a_string
+        byte a_byte
+        char a_char
+        time a_time
+        duration a_duration
+        Header header
+    Arrays
+      message
+        bool[] bools
+        uint8[] bytes_arr
+        float64[] doubles
+        string[] strings
+        char[] chars
+    Consts
+      message
+        uint8 FAN_OFF=0
+        uint8 FAN_ON=1
+        string MODE="auto"
+    CrossRef
+      message
+        "geometry_msgs/msg/Twist" cmd
+        "geometry_msgs/msg/Pose"[] poses
+        "probe_msgs/msg/AllTypes" local_ref
+    KeywordNames
+      message
+        string name
+        string value
+        int32 type
+  srvs:
+    Probe
+      request
+        string name
+      response
+        bool ok
+  actions:
+    Do
+      goal
+        string what
+      result
+        bool ok
+      feedback
+        float32 pct

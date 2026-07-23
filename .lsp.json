@@ -1,0 +1,34 @@
+{
+  "rostooling-ros2": {
+    "command": "java",
+    "args": [
+      "-cp",
+      "C:/Users/mae/Downloads/adm-mae/CoreSense/material/code/vscode-RosTooling/resources/de.fraunhofer.ipa.ros2.xtext.ide-3.0.0-SNAPSHOT-ls.jar",
+      "org.eclipse.xtext.ide.server.ServerLauncher"
+    ],
+    "transport": "stdio",
+    "extensionToLanguage": {
+      ".ros2": "ros2"
+    },
+    "startupTimeout": 60000,
+    "shutdownTimeout": 10000,
+    "restartOnCrash": false,
+    "diagnostics": true
+  },
+  "rostooling-ros": {
+    "command": "java",
+    "args": [
+      "-cp",
+      "C:/Users/mae/Downloads/adm-mae/CoreSense/material/code/vscode-RosTooling/resources/de.fraunhofer.ipa.ros.xtext.ide-3.0.0-SNAPSHOT-ls.jar",
+      "org.eclipse.xtext.ide.server.ServerLauncher"
+    ],
+    "transport": "stdio",
+    "extensionToLanguage": {
+      ".ros": "ros"
+    },
+    "startupTimeout": 60000,
+    "shutdownTimeout": 10000,
+    "restartOnCrash": false,
+    "diagnostics": true
+  }
+}

@@ -1,0 +1,11 @@
+boolprobe:
+  artifacts:
+    probe:
+      node: probe
+      parameters:
+        'upper_bool':
+          type: Boolean
+          value: True
+        'lower_bool':
+          type: Boolean
+          value: true

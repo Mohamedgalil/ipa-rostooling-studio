@@ -1,0 +1,7 @@
+minipkg:
+  artifacts:
+    my_artifact:
+      node: my_node
+      publishers:
+        'chatter':
+          type: 'std_msgs/msg/String'

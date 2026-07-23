@@ -1,0 +1,43 @@
+image_system_example:
+  fromGitRepo: "https://github.com/jane-doe/project_example.git:branch"
+  artifacts:
+    image_filter:
+      node: image_filter
+      publishers:
+        'description_out':
+          type: 'std_msgs/msg/String'
+          qos:
+            depth: 100
+        'image_out':
+          type: 'sensor_msgs/msg/Image'
+          qos:
+            profile: sensor_qos
+            reliability: reliable
+      subscribers:
+        'image_in':
+          type: 'sensor_msgs/msg/Image'
+          qos:
+            profile: sensor_qos
+        'laser_in':
+          type: 'sensor_msgs/msg/LaserScan'
+          qos:
+            profile: sensor_qos
+            reliability: reliable
+      parameters:
+        'description_label':
+          type: String
+          default: "default image"
+    consumer:
+      node: consumer
+      publishers:
+        'image_out':
+          type: 'sensor_msgs/msg/Image'
+          qos:
+            profile: sensor_qos
+      subscribers:
+        'description_in':
+          type: 'std_msgs/msg/String'
+        'image_in':
+          type: 'sensor_msgs/msg/Image'
+          qos:
+            profile: sensor_qos

@@ -1,0 +1,13 @@
+turtlesim_system:
+  fromFile: "turtlesim/launch/turtlesim_system.launch.py"
+  nodes:
+    "turtlesim_node":
+      from: "turtlesim.turtlesim_node"
+      interfaces:
+        - "cmd_vel_sub": sub-> "turtlesim_node::cmd_vel"
+    "teleop":
+      from: "turtlesim.turtle_teleop_key"
+      interfaces:
+        - "cmd_vel_pub": pub-> "turtle_teleop_key::cmd_vel"
+  connections:
+    - ["cmd_vel_pub" , "cmd_vel_sub"]

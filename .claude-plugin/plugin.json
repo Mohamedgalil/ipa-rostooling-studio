@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "rostooling-modeler",
+  "displayName": "RosTooling Modeler",
+  "version": "0.1.0",
+  "description": "Generates and validates RosTooling ROS 2 model files (.ros2, .rossystem) against a pinned Xtext grammar subset.",
+  "author": {
+    "name": "Fraunhofer IPA — CoreSense x Humanoid, work item E1"
+  },
+  "keywords": ["ros2", "xtext", "dsl", "modelling", "rostooling"]
+}

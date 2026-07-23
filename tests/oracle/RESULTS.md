@@ -1,0 +1,233 @@
+# Oracle run — the real toolchain's verdict
+
+**Run 2026-07-21.** First time anything in this plugin was checked by RosTooling itself rather than
+by our Python reimplementation of its rules.
+
+- **Java:** Temurin 21.0.11 LTS (`AppData\Local\Programs\Eclipse Adoptium\jdk-21.0.11.10-hotspot`)
+- **Server:** `de.fraunhofer.ipa.ros2.xtext.ide-3.0.0-SNAPSHOT-ls.jar`, `Bundle-Version 3.0.0.202408011124` (built 2024-08-01)
+- **Launcher:** `java -cp <jar> org.eclipse.xtext.ide.server.ServerLauncher` — stdio LSP
+- **Driver:** `ask_oracle.py`, one server instance per case, each case its own workspace root
+- Reproduce: `py ask_oracle.py --all`
+
+## Results
+
+| # | Case | Predicted | Actual | |
+|---|---|---|---|---|
+| 01 | corpus `turtlesim.ros2` (unmodified) | accepted | **ACCEPTED** 0E/0W | ✅ |
+| 02 | corpus `robot_state_publisher.ros2` (unmodified, machine-extracted) | accepted | **ACCEPTED** 0E/0W | ✅ |
+| 03 | **our generated `turtlesim.ros2`** | accepted | **ACCEPTED** 0E/0W | ✅ |
+| 04 | ours + `lease_duration:` | rejected | **REJECTED** 6E | ✅ |
+| 05 | ours + `msgs:` block | rejected | **REJECTED** 1E | ✅ |
+| 06 | ours, package `Turtlesim` | ERROR (not warning) | **REJECTED** 1E | ✅ |
+
+Six for six.
+
+## Run 2 — 2026-07-21, defect-fix pass
+
+Seven further cases, added while fixing three confirmed defects. A `.rossystem` language server
+had been built locally by then (`build/rossystem-ls/`), so cases 07-09 are the **first
+`.rossystem` results ever obtained from the real toolchain**.
+
+| # | Case | Predicted | Actual | |
+|---|---|---|---|---|
+| 07 | `from: pkg.NODE` + arrow `artifact::iface` | accepted | **ACCEPTED** 0E/0W | ✅ |
+| 08 | same, but `from: pkg.ARTIFACT` | rejected | **REJECTED** 2E | ✅ |
+| 09 | same, but arrow `node::iface` | rejected | **REJECTED** 2E | ✅ |
+| 10 | our regenerated `turtlesim.ros` **with message fields** | accepted | **ACCEPTED** 0E/0W | ✅ |
+| 11 | every primitive, array, constant, spec ref, keyword field name, srv, action | accepted | **ACCEPTED** 0E/0W | ✅ |
+| 12 | bounded array `float32[3]` / `string<=10` | rejected | **REJECTED** 5E | ✅ |
+| `_deps` | the shared dependency specs | accepted | **ACCEPTED** 0E/0W | ✅ |
+
+Thirteen for thirteen across both runs. Cases 01-06 are unchanged and still produce the run-1
+verdicts, so they remain a working regression gate.
+
+### 07/08/09 — the `from:` defect, settled empirically
+
+The skill used to emit `from: "<package>.<artifact>"`. It is `<package>.<node>`. The three cases
+share one `minipkg.ros2` in which artifact and node deliberately differ:
+
+```
+minipkg:
+  artifacts:
+    my_artifact:            <- artifact
+      node: my_node         <- node
+      publishers:
+        'chatter': ...      <- interface
+```
+
+| Case | `from:` | arrow target | Verdict |
+|---|---|---|---|
+| 07 | `"minipkg.my_node"` | `"my_artifact::chatter"` | **ACCEPTED** |
+| 08 | `"minipkg.my_artifact"` | `"my_artifact::chatter"` | `Couldn't resolve reference to Node 'minipkg.my_artifact'` |
+| 09 | `"minipkg.my_node"` | `"my_node::chatter"` | `Couldn't resolve reference to Publisher 'my_node::chatter'` |
+
+**Case 08 is exactly what the old skill emitted.** It does not link.
+
+This matches `RosQNP.xtend` exactly: a `Node`'s qualified name is
+`pkg.name + "." + node_name` (taken from `obj.eContainer.eContainer as Package`, skipping the
+artifact), while all six interface kinds and `Parameter` are
+`art.name + "::" + interface.name` (from `obj.eContainer.eContainer as Artifact`, skipping the
+package). **Two opposite levels of the same file** — which is why the defect survived review.
+
+A corpus sweep run the same day agrees in both directions, with no counter-examples: of 339
+`from:` values, 52 resolve as node-only and **0** as artifact-only; of 788 arrow targets, 201
+resolve as artifact-only and **0** as node-only. The remainder are files where `artifact == node`
+(244 and 499) or whose target is not in the corpus.
+
+### 10/11 — the skill can now express message fields
+
+Case 10 is our regenerated `turtlesim.ros` carrying all five `Pose` fields that an earlier
+adversarial test dropped. Case 11 exercises the whole `MessagePart` vocabulary in one file: every
+scalar primitive, every array form, constants (`uint8 FAN_OFF=0`), cross-package and
+same-package spec references, field names that collide with grammar keywords (`string name`,
+`int32 type`), plus a `srvs:` and an `actions:` spec. Both ACCEPTED, 0 diagnostics.
+
+Two facts were established by iterating case 11 against the server rather than by reading:
+
+- **A bare spec reference never resolves, even within its own package.** `AllTypes local_ref`
+  produced `Couldn't resolve reference to TopicSpec 'AllTypes'`; `"probe_msgs/msg/AllTypes"
+  local_ref` made the file clean. There is no short form — `RosQNP` qualifies every spec as
+  `pkg/msg/Name`, which contains a `/` and so cannot be a bare Xtext `ID`.
+- **`time`, `duration` and `Header` have no array form.** `time[] stamps` gives
+  `no viable alternative at input '[]'`. The grammar lists exactly fourteen `*Array` rules and
+  these three are not among them.
+
+### 12 — no bounded or fixed-size arrays
+
+```
+line 5  Invalid token float32[3
+line 5  mismatched input ']' expecting RULE_END
+```
+
+`Invalid token` is a **lexer** error, so one bounded array costs the whole file. ROS IDL's
+`float32[3]` and `string<=10` have no production; the grammar hard-codes the literal `'[]'`.
+`rosmodel_lint.py` reports this as `RM075` at ERROR on that evidence.
+
+## Run 3 — 2026-07-21, oracle rebuilt from current source
+
+The oracle itself changed. Runs 1 and 2 used the JAR shipped in `vscode-RosTooling/resources/`,
+built **2024-08-01**. Run 3 uses `de.fraunhofer.ipa.rostooling.ls-3.1.0-SNAPSHOT-ls.jar`, built
+from `ipa-esa/RosTooling@esa/main` commit `5b7d897` — one unified server for `.ros`, `.ros2` and
+`.rossystem`.
+
+**15/15**, every case matching its prediction:
+
+```
+ACCEPTED  01 02 03 04 07 10 11 13 _deps
+REJECTED  05 06 08 09 12 14
+```
+
+### 04 — the flip, causally attributed
+
+Case 04 existed only because the 2024 parser had no token for `lease_duration`. Same directory,
+same file, only the JAR swapped:
+
+| `ROSMODEL_ORACLE` | Verdict |
+|---|---|
+| `legacy` | **REJECTED** (6) — `mismatched input 'lease_duration' expecting RULE_END` |
+| default | **ACCEPTED** (0) |
+
+That is the pinned-oracle compromise ending. Its name is now a misnomer — kept for traceability.
+
+### 14 — durations really do overflow at 32 bits
+
+New probe, written to test `RM035` *before* deciding whether to delete it alongside `RM031`:
+
+| Field | Value | Verdict |
+|---|---|---|
+| `lease_duration:` | `"1000"` | clean |
+| `lifespan:` | `infinite` | clean |
+| `deadline:` | `"5000000000"` (5 s) | **ERROR** — *"should be specified as a string of nanoseconds…"* |
+
+`RosValidator.CheckDuration` uses `Integer.parseInt`, so the maximum expressible duration is
+**~2.147 s**. The rule survived, and matters more now than before: these fields only became
+emittable with this rebuild, and every human-plausible timeout exceeds the cap.
+
+### 13 — `True` is silently a string
+
+Probe confirming `RM042`. `terminal BOOLEAN` is `'true'|'false'` only, and `ParameterString`
+precedes `ParameterBoolean` in the `ParameterValue` alternation, so `value: True` under
+`type: Boolean` yields a **string**. Oracle verdict: **ACCEPTED, 0 diagnostics** — nothing in the
+toolchain detects it. This is why the linter is deliberately stricter than the toolchain here, and
+why ~834 corpus parameters are silently mistyped.
+
+## What each proves
+
+### 03 — the deliverable claim
+
+Our generated file is **accepted by the real toolchain with zero diagnostics**, head-to-head with the
+human-authored original (01) on the same system. Both clean. This is the first evidence that the
+skill emits files RosTooling actually accepts, rather than files that satisfy our own copy of its rules.
+
+### 04 — the pinned-oracle decision was correct
+
+```
+line 10  mismatched input 'lease_duration' expecting RULE_END
+line 10  mismatched input '"1000"' expecting RULE_BEGIN
+```
+
+`mismatched input` is a **parser** error, not a validation error. The keyword is not in the 2024
+grammar at all, so the file fails to parse — it never reaches the validator. Confirms the decision to
+exclude `lease_duration` / `liveliness` / `lifespan` / `deadline` from the emission profile while the
+oracle is pinned to this JAR. Emitting them would produce unparseable files.
+
+Note the cascade: one unknown keyword produced 6 errors, including two spurious
+`The required feature 'message' of 'ros.impl.PublisherImpl...'`. A single bad QoS key corrupts the
+enclosing publisher. Cheap to get wrong, expensive to read.
+
+### 05 — skill rule 1 confirmed
+
+```
+line 3  mismatched input 'msgs:' expecting RULE_END
+```
+
+`AmentPackage` genuinely has no `msgs:` block. Message specs belong in `.ros` only. This was our
+highest-ranked hallucination risk and it is now a demonstrated hard failure, not a grammar inference.
+
+### 06 — the ERROR/WARNING split is real
+
+```
+line 1  The name of a package has to follow the ROS naming conventions: Capital letters are not allowed
+```
+
+Verbatim the message in `RosValidator.checkNameConventionsPackage`, and reported at ERROR severity —
+confirming the asymmetry we transcribed (packages error; nodes, artifacts and parameters only warn).
+
+## Correction to an earlier claim
+
+We previously described unresolved cross-file type references as *warnings*, on the basis that
+`RosValidator.CheckMsgsRef*` calls `warning()`. **That is wrong.** They surface as **ERRORs**, because
+resolution fails in Xtext's linking layer before the validator runs. The validator's warning is an
+additional hint, not the primary diagnostic.
+
+This matters operationally: a `.ros2` file is only clean if every `type:` it references is defined by
+a `.ros` file **in the same workspace**. Validating one file alone will always show errors.
+
+## Fixture dependencies
+
+Each case directory carries the `.ros` specs its model references. Built up empirically — the first
+run showed 11 errors, all missing dependencies, and the positive control was only trustworthy once
+they were resolved to zero:
+
+| File | Provides | Source |
+|---|---|---|
+| `ros_core.ros`, `common_msgs.ros` | `std_msgs`, `geometry_msgs`, `sensor_msgs`, `nav_msgs`, … | RosTooling test resources |
+| `turtlesim.ros` | `turtlesim` msgs + srvs | `ros-model-examples` |
+| `std_srvs.ros` | `Trigger`, `Empty`, `SetBool` | corpus `Trigger` + `Empty`/`SetBool` hand-added |
+| `builtin_interfaces.ros` | `Time`, `Duration` | hand-written |
+| `tf2_rosgraph.ros` | `tf2_msgs/TFMessage`, `rosgraph_msgs/Clock` | hand-written |
+
+The four hand-written specs are themselves validated: the `_deps` directory lints ACCEPTED 0E/0W.
+
+## Still not covered
+
+- ~~**`.rossystem` — entirely.**~~ **Closed 2026-07-21** by the locally built
+  `de.fraunhofer.ipa.rossystem.xtext.ide` server — see run 2, cases 07-09. `rosmodel_lint.py` is
+  still a reimplementation, but it is no longer the *only* check available for `.rossystem`.
+- **HEAD-only constructs.** The pinned JAR validates a 2024 language. It can say nothing about the
+  four newer QoS fields except that it does not know them.
+- **The `.rossystem` oracle is locally built, not shipped.** Cases 07-09 ran against
+  `build/rossystem-ls/`, compiled from RosTooling source in a parallel workstream — not against a
+  released artefact. The results are real, but reproducing them requires that build.
+- **Corpus-scale `.rossystem` validation.** Only the three synthetic cases above have been run
+  through the `.rossystem` server. The 52 corpus systems have not.

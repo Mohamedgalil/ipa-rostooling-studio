@@ -1,0 +1,6 @@
+bounded_msgs:
+  msgs:
+    Bounded
+      message
+        float32[3] fixed
+        string<=10 bstr

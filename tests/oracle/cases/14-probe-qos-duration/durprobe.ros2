@@ -1,0 +1,17 @@
+durprobe:
+  artifacts:
+    probe:
+      node: probe
+      publishers:
+        'small_ok':
+          type: "std_msgs/msg/String"
+          qos:
+            lease_duration: "1000"
+        'infinite_ok':
+          type: "std_msgs/msg/String"
+          qos:
+            lifespan: infinite
+        'overflow_5s':
+          type: "std_msgs/msg/String"
+          qos:
+            deadline: "5000000000"

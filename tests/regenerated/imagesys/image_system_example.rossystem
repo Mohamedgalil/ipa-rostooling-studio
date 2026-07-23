@@ -1,0 +1,17 @@
+image_system:
+  fromFile: "image_system_example/launch/image_system.launch.py"
+  processes:
+    "process1":
+      nodes: ["image_filter", "consumer"]
+      threads: 1
+  nodes:
+    "image_filter":
+      from: "image_system_example.image_filter"
+      interfaces:
+        - "image_output": pub-> "image_filter::image_out"
+    "consumer":
+      from: "image_system_example.consumer"
+      interfaces:
+        - "image_input": sub-> "consumer::image_in"
+  connections:
+    - ["image_output" , "image_input"]

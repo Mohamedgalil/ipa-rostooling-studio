@@ -1,0 +1,7 @@
+minisys:
+  fromFile: "minipkg/launch/mini.launch.py"
+  nodes:
+    "n1":
+      from: "minipkg.my_node"
+      interfaces:
+        - "chatter": pub-> "my_artifact::chatter"

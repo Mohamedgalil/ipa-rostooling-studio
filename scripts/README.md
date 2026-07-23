@@ -1,0 +1,440 @@
+# `rosmodel_lint.py` — static linter for `.ros` / `.ros2` / `.rossystem`
+
+Work item **E1**, CoreSense x Humanoid (Fraunhofer IPA).
+
+A standalone Python checker for RosTooling model files. It accepts **`.ros`, `.ros2` and
+`.rossystem`**.
+
+It is no longer the *only* feedback available — Java 21 is installed and `tests/oracle/ask_oracle.py`
+drives the real language servers for `.ros`, `.ros2` and (since a `.rossystem` server was built
+locally) `.rossystem` too. The linter's role is now to give **fast, single-file, offline** feedback
+in the edit loop, and to cover the checks the oracle cannot make (house style, rossdl
+compatibility, provenance sentinels). Where the two disagree, **the oracle wins** — every ERROR in
+this table has been confirmed against it.
+
+`.ros` support was added 2026-07-21, closing a real incoherence: the skill instructs authoring
+`.ros` files, and a package that defines its own message types *requires* one, yet the linter used
+to reject the extension outright with `RM000`.
+
+---
+
+## Usage
+
+> On Windows, bare `python` is the Microsoft Store stub and exits non-zero — use **`py -3`**.
+
+```bash
+python rosmodel_lint.py <file>...
+python rosmodel_lint.py --json <file>...
+python rosmodel_lint.py --min-severity ERROR <file>...
+python rosmodel_lint.py --max-per-rule 0 <file>...    # show every occurrence
+python rosmodel_lint.py --quiet "corpus/**/*.ros2"    # summary line only
+```
+
+Globs are expanded internally, so quoted `**` patterns work regardless of shell.
+
+| Option | Effect |
+|---|---|
+| `--json` | Machine-readable output. Never capped. |
+| `--min-severity {ERROR,WARNING,INFO}` | Suppress findings below this level. Default `INFO`. |
+| `--max-per-rule N` | Text output only: at most `N` findings per rule per file (`0` = unlimited). Default `10`. |
+| `--quiet` | Print only the summary line. |
+| `--hook` | PostToolUse hook mode — see below. |
+
+### `--hook` mode
+
+```bash
+echo '{"tool_input":{"file_path":"x.ros2"}}' | python rosmodel_lint.py --hook
+```
+
+Reads the PostToolUse event JSON on stdin, takes the written path from `tool_input.file_path`,
+and prints `{"decision": "block", "reason": "..."}` on stdout when an **ERROR** survives. Clean
+files, non-model extensions, malformed events and internal errors all exit **0 in silence** — a
+linter that breaks the agent's turn on its own bad day is worse than no linter.
+
+`PostToolUse` fires *after* the write succeeds, so blocking cannot prevent a bad file reaching
+disk; it forces a corrective edit. The invariant is *"no invalid model survives the turn"*, not
+*"no invalid model is ever written"*.
+
+> *Added 2026-07-21.* `hooks/hooks.json` had invoked `--hook` since the plugin was scaffolded, but
+> the flag was never implemented — the hook fired, argparse rejected it with exit 2, and **no file
+> was ever linted by the hook**. Both the `.rossystem` and (newly added) `.ros2` handlers are now
+> functional, verified against a clean file, a two-ERROR file, and a malformed event.
+
+**Exit status:** `1` if any ERROR-severity finding survives `--min-severity` filtering, else `0`.
+
+**Dependencies:** Python 3.8+, standard library, and PyYAML. Without PyYAML the linter still runs
+every byte/layout check and reports the structural checks as skipped (verified — see
+*Test evidence*), rather than crashing.
+
+### Why layout rules fire per line
+
+The real Xtext validators do not short-circuit either — `checkNameConventionsPackage` emits one
+marker *per uppercase character*. A tab-indented file can therefore produce hundreds of identical
+RM001s. `--max-per-rule` caps the text output for readability; the summary counts and the JSON
+output always report the true totals.
+
+---
+
+## Authorities
+
+Findings are derived from three documents, in this order of precedence:
+
+| Authority | Path | Governs |
+|---|---|---|
+| Pinned grammar subset | `../docs/grammar-subset.md` | What the pinned oracle can lex at all |
+| Validator rules | `../research/validator-rules.md` | Semantic constraints + their real severities |
+| Emission profile | `../emission-profile.md` | Normative formatting style |
+
+> **Note on paths.** The E1 task brief located all three under `spec/`. They are actually at
+> `docs/grammar-subset.md`, `research/validator-rules.md` and `emission-profile.md` (repository
+> root). No `spec/` directory exists. Content, not location, was used.
+
+---
+
+## Rule reference
+
+Severity column is what the linter emits. The "Mirrors" column names the Xtend validator method or
+the profile rule the check reproduces.
+
+### Bytes and layout
+
+| ID | Severity | Check | Mirrors |
+|---|---|---|---|
+| `RM000` | ERROR | Unreadable file or unrecognised extension | — |
+| `RM001` | WARNING | Tab character in leading whitespace | profile rule 1 (**demoted 2026-07-21** -- oracle ACCEPTS tabs) |
+| `RM002` | WARNING | CRLF line endings | profile rule 3 (severity lowered — see *Deviations*) |
+| `RM002B` | WARNING | UTF-8 BOM at start of file | — |
+| `RM003` | WARNING | Indent width not a multiple of 2 | profile rule 2 |
+| `RM004` | WARNING | Trailing whitespace | profile rule 5 |
+| `RM005` | WARNING | Missing, or more than one, trailing newline | profile rule 4 |
+| `RM006` | WARNING | Blank line inside an indented block | profile rule 5 |
+| `RM007` | WARNING | Space before the `:` of a key | profile rule 6 |
+| `RM008` | ERROR | YAML parse failure / not UTF-8 / bad root shape | rossdl `yaml.safe_load` compatibility |
+| `RM008T` | WARNING | Tab inside a line (not in indentation) | profile rule 1 |
+| `RM009` | ERROR | Duplicate key in the same mapping | profile rule 28 (uniqueness) |
+
+### `.ros` structure and message fields
+
+Added 2026-07-21. A `.ros` file is **not** parsed as YAML — `float32 x` nested under an
+un-colonned `Pose` is folded by PyYAML into a single multi-line plain scalar, silently discarding
+every field. The `.ros` branch therefore runs its own indentation-stack parser
+(`parse_ros_indent`), modelled on Xtext's `AbstractIndentationTokenSource`: an increase in indent
+opens a `BEGIN`, a decrease closes `END`s, and **absolute column values are never assumed**. The
+corpus steps 3/4/5/6/7/9 spaces and the real parser accepts all of it.
+
+`RosValidator.xtend` declares **no `@Check` at all** on `TopicSpec`, `MessagePart` or
+`AbstractType`. Apart from `checkNameConventionsPackage` there is no validator to mirror here, so
+these rules encode the **grammar** rather than a validator, and every ERROR was confirmed against
+`ask_oracle.py` rather than guessed.
+
+| ID | Severity | Check | Mirrors / oracle evidence |
+|---|---|---|---|
+| `RM070` | ERROR | Not a `PackageSet`: no package, package line indented, or missing trailing `:` | `Ros.xtext:11-14`, `Ros.xtext:25-27` |
+| `RM071` | ERROR | Unknown member at package level; (WARNING) empty package or empty spec block | `Ros.xtext:25-46` |
+| `RM072` | WARNING | `msgs:`/`srvs:`/`actions:` block repeated in one package | `Ros.xtext:30-45` — parses (repeated alternation), still a generator defect |
+| `RM073` | ERROR | Spec-name or body-keyword structure wrong: trailing `:` on a spec name, multi-token spec line, missing/foreign body keyword | `Ros.xtext:81-104`; oracle on a trailing colon: `extraneous input ':' expecting RULE_BEGIN` |
+| `RM074` | ERROR | Unknown type token, or an array form that does not exist (`time[]`, `duration[]`, `Header[]`) | `Basics.xtext:210-213`; oracle on `time[]`: `no viable alternative at input '[]'` |
+| `RM075` | ERROR | Fixed- or bounded-size array (`float32[3]`, `string<=10`) | `Basics.xtext:296-375` hard-codes `'[]'`; oracle: `Invalid token float32[3` — a **lexer** error |
+| `RM076` | WARNING | Quoted spec reference not shaped `<package>/msg/<Type>` | `RosQNP.xtend` qualifies specs as `pkg + "/msg/" + name`; see severity note below |
+| `RM077` | ERROR | Field-line token structure wrong: odd token count, stray spaced `=`, constant in a Type position, or a field name that is not a legal `Data` | `Basics.xtext:201-208`; oracle on `uint8 FAN_OFF = 0`: `mismatched input '=' expecting RULE_END` |
+| `RM078` | WARNING | More than one field on a line | **Legal** — `MessagePart+=MessagePart*` has no line separator and RosTooling's own `basic_msgs/common_msgs.ros` does it. House style only |
+| `RM079` | ERROR | File uses the **brace** serialisation, not the indentation syntax | `RosTooling-NadiaHG` fork's concrete syntax; STATUS.md open question N2 |
+| `RM080` | INFO | A `message`/`request`/`response`/`goal`/`result`/`feedback` section has no fields | Legal and common; surfaced because a bodiless body is also what data loss looks like |
+
+`RM009` (duplicate name), `RM010` (uppercase package name, **ERROR**), `RM015`, `RM016`, `RM020`,
+`RM021`, `RM040` (unsorted block) and `RM044` (`dependencies:`) are shared with the other two file
+types and fire in `.ros` too. So do all the byte/layout rules `RM001`–`RM008T`.
+
+**Two severities chosen deliberately against the obvious reading:**
+
+- **`RM076` is a WARNING, not an ERROR**, even though the oracle reports an unresolvable reference
+  as an ERROR (`Couldn't resolve reference to TopicSpec 'AllTypes'`). Linking is cross-file and
+  this linter sees one file at a time, so it cannot distinguish "wrong shape" from "defined in a
+  file I was not given". The hint says to treat it as an error.
+- **`RM078` is a WARNING, not an ERROR.** Multiple fields per line parse fine. Rejecting them
+  would fail files the real parser accepts — including the fixtures in `tests/oracle/cases/_deps`,
+  which the oracle rates ACCEPTED 0E/0W.
+
+An **unquoted, non-primitive** type token *is* `RM074` at ERROR, and that is not a guess: a spec's
+qualified name always contains `/`, which no bare Xtext `ID` can express, so such a token can never
+link — not even for a type declared three lines above it in the same package. Confirmed both ways
+against the oracle (bare `AllTypes` → rejected; `"probe_msgs/msg/AllTypes"` → ACCEPTED 0E/0W).
+
+**Corpus behaviour.** Over the 31 `.ros` files in `ros-model-examples`, the structural rules
+`RM070`–`RM080` produce **zero** ERRORs. As of 2026-07-21 `RM001` is a WARNING, so there are now **zero** `.ros` ERRORs. (Previously 126 `RM001` tabs, all in the four
+`slam_toolbox_msgs.ros` copies. RosTooling's own `basic_msgs/common_msgs.ros` and `ros_core.ros`
+lint with **0 errors**.
+
+### Names
+
+| ID | Severity | Check | Mirrors |
+|---|---|---|---|
+| `RM010` | **ERROR** | Uppercase in a package name | `checkNameConventionsPackage` (R3) |
+| `RM011` | WARNING | Uppercase in an artifact name | `checkNameConventionsArtifact` (R2) |
+| `RM012` | WARNING | Uppercase in a node name | `checkNameConventionsNode` (R1) |
+| `RM013` | WARNING | Uppercase in a parameter name's **final dot-segment** | `checkNameConventionsParameters` (R4) |
+| `RM014` | WARNING | `/` in a node/artifact name (grammar-legal) | rossdl launch generation |
+| `RM015` | ERROR | Empty interface/parameter name (`'':`) | profile rule 20 |
+| `RM016` | ERROR | RosNames position not expressible as `ROS_CONVENTION_A \| ID` | `Basics.xtext:394` |
+
+The ERROR/WARNING split in RM010–RM013 is the single most important severity distinction in the
+toolchain: four structurally identical Xtend loops, but **only the package one calls `error()`**.
+The message wording tracks it precisely ("are not allowed" vs "are not recommended"). RM013 is a
+WARNING despite its validator message saying "has to follow" — the call is `warning()`, and the
+call wins over the prose.
+
+RM013 implements the dot-suffix carve-out exactly: an uppercase character at index `i` is forgiven
+iff `name[i:]` still contains a `.`. So `Foo.bar` is clean and `foo.Bar` warns.
+
+### Quoting
+
+| ID | Severity | Check | Mirrors |
+|---|---|---|---|
+| `RM020` | ERROR | Unquoted `EString` containing `.` `/` `::` `-` or space | profile rules 10, 12, 13, 14 |
+| `RM021` | ERROR | Quoted name in a `RosNames` position | profile rule 7 |
+| `RM022` | WARNING | `.ros2`/`.rossystem` name unquoted where a bare `ID` would parse | profile rules 11, 12 |
+
+`RM020` and `RM021` are opposites and both are ERRORs, because `EString = STRING | ID` while
+`RosNames = ROS_CONVENTION_A | ID | 'node'` has **no `STRING` alternative**. Quoting is mandatory
+in one position and a parse error in the other.
+
+Per profile rule 15, the linter **never** flags the opposite quote character — Xtext's `STRING`
+accepts both `'` and `"`, so the difference vanishes at parse time.
+
+### `.ros2` structure
+
+| ID | Severity | Check | Mirrors |
+|---|---|---|---|
+| `RM030` | ERROR | `msgs:` / `srvs:` / `actions:` block in a `.ros2` file | grammar-subset §5.2 |
+| `RM031` | INFO | Newer QoS field (`lease_duration`, `liveliness`, `lifespan`, `deadline`) -- legal since the pin was lifted 2026-07-21; flagged for consumer portability only | profile rule 32 |
+| `RM032` | ERROR | Unknown QoS field | `Ros2.xtext:30-42` |
+| `RM033` | ERROR | Bad or quoted QoS enum value; non-integer `depth` | `Ros2.xtext:32-37` |
+| `RM034` | WARNING | `profile:` / `history:` / `depth:` used | profile rule 33 |
+| `RM035` | ERROR | Duration not a quoted int32 digit-string nor `infinite` | `CheckQoS`→`CheckDuration` (R14) |
+| `RM036` | ERROR | Unknown key in a node block, interface, or parameter | `Ros.xtext:121-159`, `Ros2.xtext:49-124` |
+| `RM037` | ERROR | Unknown key at package/system level | `Ros2.xtext:13-24` |
+| `RM038` | ERROR | Missing mandatory member (`node:`, `type:`, `from:`, `value:`) | grammar (non-optional assignments) |
+| `RM039` | WARNING | Member/block ordering deviates from canonical | profile rules 21–25, 27 |
+| `RM040` | WARNING | Entries within a block not alphabetically sorted | profile rule 26 |
+| `RM041` | ERROR | Unreachable, unknown, or quoted parameter type | grammar-subset §5.3, profile rule 16 |
+| `RM042` | ERROR | `True`/`False` instead of `true`/`false` | profile rule 18 (**silent corruption**) |
+| `RM043` | ERROR | `type: Double` with an integer literal | profile rule 19 (**silent corruption**) |
+| `RM044` | WARNING | Zero-corpus-support construct (`dependencies:`, `ns:`, `namespace:`) | profile §3 |
+| `RM045` | WARNING | `Struct` / `List` / `Base64` parameter type | grammar-subset §5.4, profile §3 |
+| `RM046` | INFO | `Array [` with a space before the bracket | profile rule 17 |
+
+### `.rossystem` structure
+
+| ID | Severity | Check | Mirrors |
+|---|---|---|---|
+| `RM050` | ERROR | Connection endpoint is not a declared interface | `checkIfInterfaceInSystem` (S3) |
+| `RM051` | ERROR | Bad connection direction / mismatched pairing | `checkPortPatterns` (S4) |
+| `RM052` | ERROR | `fromFile:` missing `/`, or empty string | `fromFileHelper` (S2) |
+| `RM053` | WARNING | `fromFile:` absent — triggers the NPE bug | `fromFileHelper` (S2) |
+| `RM054` | ERROR | Process references an undeclared node | `checkIfNodeInSystem` (S1) |
+| `RM055` | ERROR | Missing or unknown arrow prefix | `RosSystem.xtext:81-112` |
+| `RM056` | WARNING | Arrow target / parameter ref not `artifact::name` | profile rule 30 |
+| `RM057` | WARNING | `from:` not `<package>.<node>` | profile rule 29 |
+| `RM058` | ERROR | Duplicate interface local name **within one node** | profile rule 28 |
+| `RM059` | WARNING | Top-level block order | profile rule 25 |
+| `RM060` | ERROR | Connection is not a 2-element list | `RosSystem.xtext:126-127`, validator-rules §3.4 |
+| `RM061` | WARNING | `subSystems:` used | profile §3, validator-rules §3.5 |
+| `RM062` | WARNING | `/` in a `.rossystem` node name | rossdl launch generation |
+| `RM063` | WARNING | `processes:` used | profile §3 |
+| `RM064` | INFO | Connected interfaces have differing trailing names | `MatchPortMsgs` (S5), advisory only |
+| `RM065` | WARNING | Connection endpoint name is owned by several nodes | profile rule 28 |
+| `RM066` | INFO | `fromFile:` contains the `TODO` placeholder sentinel | rossystem-syntax §2 derivation ladder |
+| `RM067` | INFO | Uppercase in a `.rossystem` node **label** | house style only — no validator |
+
+`RM051` enforces the only three legal pairings, with `from` always the server/publisher side:
+
+| `from` | `to` |
+|---|---|
+| `pub->` | `sub->` |
+| `ss->` | `sc->` |
+| `as->` | `ac->` |
+
+---
+
+## Deviations from the specs, and why
+
+Each of these is a deliberate judgment call, not an oversight.
+
+**1. `RM002` (CRLF) is a WARNING, though emission-profile rule 3 says MUST.**
+The same document states that working-tree CRLF is a `core.autocrlf=true` checkout artefact and
+"MUST NOT be treated as evidence" — all 305 stored blobs are pure LF. Making this an ERROR would
+fail every file in both corpora for a git setting rather than a model defect. The rule is still
+reported so a generator emitting genuine CRLF is caught.
+
+**2. `RM031` is primary over `RM035` for QoS durations.**
+The task brief asked for duration-value validation (quoted digits, signed 32-bit, or `infinite`).
+But grammar-subset §5.1 states those four fields must **never be emitted** — they are absent from
+the pinned parser's token set, so they fail *lexing*, and §5.1 explicitly calls the duration
+constraint "moot under the pinned profile … retained in documentation, not implemented as a
+validator". Both are implemented: `RM031` (ERROR) fires on the field's presence, and `RM035`
+additionally validates the value, so the check exists and is ready for the day the oracle is
+rebuilt. Note that `validator-rules.md` §0.3 confirms `CheckQoS` is **not even present in the
+shipped JAR bytecode** — so `RM035` mirrors a HEAD-only rule that the pinned oracle would neither
+enforce nor reward.
+
+**3. `default:` is accepted in parameters — the linter was right and the specs were wrong.**
+Linting the corpus surfaced `default:` in real `.ros2` parameters, which the linter initially
+rejected as an unknown key. Reading `Basics.xtext:72-110` showed it is legal: `default:` belongs to
+the **`ParameterType`** rule (`ParameterIntegerType ::= 'Integer' ('default:' default=…)?`, and
+likewise for `String`, `Double`, `Boolean`, `Base64` and `Array[T]`), not to `Parameter`. Because
+`'type:' type=ParameterType` has no `BEGIN`/`END` around it, the default lands as a YAML *sibling*
+of `type:`.
+
+*Resolved 2026-07-21.* This was a genuine gap in all three spec documents, and it caused real
+damage before it was closed: because the skill documented `default:` only under
+`ParameterArrayType`, three of four adversarial regeneration runs concluded it was illegal on a
+scalar parameter and **rewrote `default:` to `value:`** — a silent semantic change (they are
+different metamodel slots) that parsed cleanly and that the linter, correctly, never complained
+about. The gap is now closed in `emission-profile.md` rule 23, `SKILL.md` §9,
+`references/ros2-syntax.md` §6 and the `worked-examples.md` §4 failure catalogue, and
+`tests/roundtrip.py` now extracts `.default` as its own fact category so the rewrite surfaces as a
+difference instead of vanishing.
+
+**3a. `RM066` / `RM067` are linter-originated, not validator-derived.**
+`RM066` (INFO) flags a `fromFile:` still holding the `TODO_PACKAGE/launch/TODO.launch.py` sentinel,
+so a knowingly-synthesised path stays visible rather than passing as verified. `RM067` (INFO)
+replaces a former misuse of `RM012` on `.rossystem` node labels: `checkNameConventionsNode` targets
+`ros::Node`, whereas a `rossystem::RosNode` label is a different metaclass, and
+`RosSystemValidator.xtend` declares **no** name-convention `@Check` at all (its only `@Check`
+methods are `checkIfNodeInSystem`, `fromFileHelper`, `checkIfInterfaceInSystem`,
+`checkPortPatterns`, `MatchPortMsgs`, `CheckParameter`, `BinaryHelp`, `ArrayHelp`, `ListHelp`,
+`StructHelp`). Reporting it as a WARNING under a validator-derived id produced 5 spurious warnings
+on `MT.rossystem` for corpus-correct names such as `static_transform_publisher_vS7Rn4YQfVmDReBi`.
+
+**4. `RM040` is not applied to a `.rossystem` `nodes:` block.**
+Profile rule 26's evidence base is `.ros2` interface and parameter blocks. Corpus B's own
+`MT.rossystem` does not sort its `nodes:` block, and Corpus B is the weighted-decisive authority,
+so sorting nodes is not a house rule.
+
+**5. Interface local-name reuse *across* nodes is not an error.**
+Profile rule 28 scopes uniqueness to *within a node*, and Corpus B declares `clock` in nearly every
+node. An early version flagged cross-node reuse and produced 77 false errors on the reference file.
+The linter now flags it only via `RM065`, when a connection actually references an ambiguous name.
+
+**6. `RM042`/`RM043` are ERRORs although no validator detects them.**
+These are the two documented silent-corruption traps: `True` falls through the `ParameterValue`
+alternation into `ParameterString`, and a bare `10` under `type: Double` becomes a
+`ParameterInteger`. The oracle will report neither. Silent type corruption is a worse failure mode
+than a loud parse error, so the linter is deliberately stricter than the toolchain here.
+
+**7. Tab recovery uses tab-stop 8, not a flat substitution.**
+`RM001` reports tabs as a WARNING, then the file is normalised so structural checks can still run.
+Expansion must advance to the next multiple of 8: a naive `\t` → `··` turns two tabs into 4 columns,
+which is *shallower* than a parent indented with 6 spaces, inverting the nesting and producing
+spurious "expected `<block end>`" errors. Switching to real tab-stop semantics cut YAML parse
+failures on the messy `.rossystem` corpus from 14 to 7.
+
+---
+
+## Known limitations
+
+Constraints that are **not statically checkable** in a single file, and are therefore not
+implemented (severities per `validator-rules.md`):
+
+- **R5–R10** (`CheckMsgsRef*`, WARNING) — all six test `ref.eContainer === null`, i.e. "did this
+  cross-reference resolve". Needs a linking environment: the `.ros` file declaring the spec plus
+  the dependency list.
+- **S5** (`MatchPortMsgs`, ERROR) — Xtend `!==` is *identity* on the `EObject`, not name equality.
+  Both endpoints must resolve to the **same** spec instance. `RM064` reports a name mismatch as
+  INFO only; it cannot confirm or deny the real constraint.
+- **S6** (`CheckParameter`, ERROR) — requires resolving `rosparam.from` into the `.ros2` parameter
+  declaration. Given the defects in `CheckParameterValue` (it recurses while using *instance fields*
+  as loop counters), the safe strategy is to emit scalar parameter values only; `RM045` nudges
+  toward that.
+- **S1/S3** are implemented only within a single file. Cross-file and subsystem-spanning cases are
+  not resolved.
+
+The linter also does **not** verify indentation against Xtext's `AbstractIndentationTokenSource`.
+It checks indentation as YAML plus the profile's 2-space rule. Whether comment-only lines and blank
+lines affect `BEGIN`/`END` synthesis is an open question that needs a JDK 19 to settle; `RM006` is
+conservative for that reason.
+
+---
+
+## Test evidence
+
+Everything below was **executed**. Nothing was run against the Xtext language server — see the
+Java 19 blocker above.
+
+Environment: Python 3.12.6, PyYAML 6.0.3 (`py -3` on Windows).
+
+**Rule coverage: all 55 rule ids were fired at least once** across the corpus plus hand-built
+fixtures. The rule table above and the implementation were cross-checked mechanically — every id in
+the script appears in this README and vice versa, with no orphans in either direction.
+
+> *Amended 2026-07-21.* The rule set is now **57** ids. `RM066` and `RM067` were added after that
+> sweep and are **not** covered by the "fired at least once" claim above; `RM067` has been observed
+> firing 5× on `tests/regenerated/manufact/MT.rossystem`, `RM066` has **not** been exercised by a
+> fixture. The whole-corpus counts below also predate both rules and the `RM034` hint rewording —
+> they have not been re-run.
+
+### Whole-corpus run — 305 files, 0 crashes
+
+| Corpus | Files | Files with ERROR | E | W | I |
+|---|---:|---:|---:|---:|---:|
+| `CS_ros2model_TBs` `.ros2` | 24 | 3 | 3 | 37 | 0 |
+| `CS_ros2model_TBs` `.rossystem` | 1 | 1 | 2 | 15 | 0 |
+| `ros-model-examples` `.ros2` | 229 | 158 | 1595 | 1285 | 91 |
+| `ros-model-examples` `.rossystem` | 51 | 30 | 2741 | 2138 | 12 |
+
+### Independent corroboration of the emission profile
+
+On the clean Corpus B `.ros2` set the linter reproduced four counts that `emission-profile.md`
+measured independently, exactly:
+
+| Finding | Linter | Profile |
+|---|---:|---|
+| `RM003` indent not multiple of 2 | 1 | §1.1 table: one width-5 line |
+| `RM005` missing final newline | 1 | §1.2: only `amcl.ros2` |
+| `RM015` empty name | 3 | §1.5: 3 named files |
+| `RM040` unsorted block | 3 | §1.5: 3 blocks, all caused by the empty name |
+
+`RM058` fired exactly **2** times across the messy corpus, matching profile §1.5's "only 2
+duplicate local names exist corpus-wide, both in Corpus A".
+
+### Positive control
+
+The two canonical reference outputs from `emission-profile.md` §4 (`nav2_amcl.ros2` and
+`manufacturing_tb.rossystem`, the latter with `fromFile:` added per rule 7) lint **completely
+clean — 0 findings, exit 0**. The linter agrees with the profile's own normative examples.
+
+### Negative controls
+
+Hand-built fixtures with planted defects. All were caught with the expected severity, and the
+*valid* constructs in the same files produced no findings:
+
+- `.ros2`: uppercase package (ERROR) vs uppercase artifact/node (WARNING); unquoted `/`-bearing
+  type ref; bad QoS enum; quoted QoS enum; negative `depth`; `lease_duration`/`liveliness`;
+  `True` under `type: Boolean`; `10` under `type: Double`; `type: Any`; `msgs:` block; quoted
+  package name; `my.artifact` and `some/deep/name` in RosNames positions; `deadline: "5000000000"`
+  correctly flagged as int32 overflow while `lifespan: "1000"` was not.
+- `.rossystem`: `fromFile` without `/`; duplicate local name within a node; unquoted arrow target
+  and `from:`; process referencing a ghost node; reversed connection (`sub->` in the `from` slot);
+  mismatched pairing (`pub->`→`sc->`); unknown endpoint; 1-element connection. The three legal
+  connections (`pub`→`sub`, `ss`→`sc`, `as`→`ac`) produced **no** findings.
+
+### Degradation paths
+
+- **Tab-indented files** (25 `.rossystem`, 24 `.ros2` have leading tabs): reported as `RM001`
+  ERROR with a clear message, then normalised so structural checks still run — never an opaque
+  YAML crash.
+- **PyYAML absent** (simulated by blocking the import): layout checks run in full, structural
+  checks reported as skipped via an INFO finding, exit 0, no traceback.
+
+### Genuine defects found in the corpus
+
+Not linter bugs — real problems, verified by reading the source lines:
+
+- `MT.rossystem` (the *clean* reference file) declares **`bt_navigator` twice** (lines 45, 215) and
+  **`robot_state_publisher` twice** (lines 3, 242) in the same `nodes:` mapping. `yaml.safe_load`
+  silently keeps only the last, so rossdl loses a node without any warning.
+- `pickQrCode.rossystem:162` contains a C-style `/* … */` comment inside a flow sequence. The
+  grammar has `SL_COMMENT` (`#`) only and **no block-comment syntax**, so this is invalid in both
+  YAML and the DSL.
+- Four Corpus B `.ros2` files order `actionservers:` before `serviceservers:` — the deviation
+  `emission-profile.md` §5 row 24 deliberately declines to adopt. `RM039` correctly reports them.

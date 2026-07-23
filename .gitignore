@@ -1,0 +1,15 @@
+# Local Maven build tree for the RosTooling language servers (Fraunhofer IPA, Apache-2.0).
+# Not part of the portable plugin. The one JAR the oracle actually needs by default
+# (tests/oracle/ask_oracle.py: JAR_CURRENT) is re-included below.
+build/**
+!build/ros2-ls/
+!build/ros2-ls/target/
+!build/ros2-ls/target/de.fraunhofer.ipa.rostooling.ls-3.1.0-SNAPSHOT-ls.jar
+
+# Python
+__pycache__/
+*.pyc
+
+# Demo content and IDE metadata -- not part of the reusable plugin
+examples/
+.idea/
