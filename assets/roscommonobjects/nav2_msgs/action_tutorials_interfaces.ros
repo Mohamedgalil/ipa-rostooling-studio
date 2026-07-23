@@ -1,0 +1,12 @@
+action_tutorials_interfaces:
+  
+  
+  actions:
+    Fibonacci
+      goal
+        int32 order
+      result
+        int32[] sequence
+      feedback
+        int32[] partial_sequence
+    

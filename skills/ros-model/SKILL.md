@@ -285,6 +285,62 @@ were not available in the input."*
 Full type table, the verbatim productions and a validated end-to-end example:
 `references/ros2-syntax.md` §11.
 
+### 8c. Resolve every `type:` and `from:`/arrow reference against the vendored catalogues
+
+Two real catalogues are vendored into this plugin — `assets/roscommonobjects/` (message/
+service/action **type** specs, indexed in `assets/type_index.json`) and
+`assets/rosmodelscatalog/` (standard package **node** models, indexed in
+`assets/node_index.json`). Browsable tables: `references/type-catalogue.md`,
+`references/node-catalogue.md`.
+
+**Before emitting any `type:` reference**, resolve it against `assets/type_index.json`. If it
+resolves, use the catalogue's exact spelling (package name, kind, and Type all come from a real,
+oracle-shaped source, not memory). If it does not resolve, one of two things is true: the package
+is genuinely project-local — emit a companion `.ros` defining it — or the reference was invented
+and must not be emitted. `rosmodel_lint.py`'s RM081 (WARNING, package not indexed at all — a
+project-local package is legitimate) and RM082 (ERROR, package indexed but this type isn't —
+this is a real typo, not a plausible gap) enforce this at lint time and suggest the nearest match.
+
+**Before emitting any `.rossystem` `from:` or arrow/parameter target**, resolve it the same way
+against `assets/node_index.json`. This is exactly the mistake that shipped in an earlier
+revision of `examples/turtlebot2_navigation.rossystem`: `nav2_amcl.amcl`, `nav2_bt_navigator.
+bt_navigator`, `nav2_planner.planner_server` and `nav2_controller.controller_server` were all
+invented from general Nav2 knowledge with a plausible `nav2_`-style prefix — the real catalogue
+names are `amcl.amcl`, `bt_navigator.bt_navigator`, `planner_server.planner_server`,
+`controller_server.controller_server`, no prefix. `rosmodel_lint.py`'s RM084 (WARNING, `from:`
+package not indexed — project-local nodes are legitimate), RM085 (ERROR, package indexed but node
+name isn't) and RM086 (ERROR, arrow/parameter target resolves to a catalogued node but that
+interface name isn't among its real interfaces) enforce this the same way.
+
+**TurtleBot 2 / Kobuki is not in `assets/rosmodelscatalog/` at all** — only TurtleBot 3 is. A
+reference to a Kobuki-specific package will always miss the catalogue; that is a known scope
+limit of the vendored catalogue, not a defect to fix by guessing a plausible package name for it.
+
+Once a reference resolves, `rosmodel_lint.py` reports which vendored file supplies it (RM083 for
+types, RM087 for nodes) — pass the model straight to `scripts/collect_deps.py <file>... <dir>` to
+stage exactly those files into an oracle case directory, instead of hand-copying `_deps/` files
+and guessing which ones apply.
+
+**Disclose the resolved file inline, on the same line as the reference — not only in a header
+comment.** A reader looking at one `"from:"` line should not have to run the linter, open
+`assets/node_index.json`, or scroll to a file-level summary comment to find out which real file
+backs it. This matters concretely: a `.rossystem` can reference nine nodes where seven resolve to
+pre-existing catalogue files nobody in this session wrote, and two resolve to files freshly
+authored for this model — from the reference alone those two cases are visually indistinguishable
+unless each line says which one it is. Add a trailing comment naming the exact vendored path:
+
+```
+"amcl":
+  from: "amcl.amcl" # assets/rosmodelscatalog/navigation/amcl.ros2
+```
+
+For a project-local node with no catalogue entry, say so instead, e.g. `# project-local, see
+rosnodes/turtlebot3_mission_manager.ros2` — the point is that every `from:` line states in-place
+whether it points at a real vendored file (and which one) or a companion file this session wrote.
+`rosmodel_lint.py`'s RM088 (node `from:`) and RM089 (`type:` refs) check this mechanically: they
+fire a WARNING when a reference resolves against the catalogue but the source line's text doesn't
+contain the resolved file's name.
+
 ### 9. Ordering (grammar-fixed — violating is a parse error)
 
 | Rule | Mandatory order |
@@ -395,6 +451,12 @@ Run every line against the emitted file:
     `fromFile:` from rung 2 or 3 of the ladder (*SYNTHESISED*); any `.ros` message body emitted
     bodiless; any duplicate node label collapsed or renamed; any source defect preserved verbatim.
     Silence about these is the failure mode — none of them is visible to the linter or the harness.
+13. Every `type:` reference resolves against `assets/type_index.json`, and every `.rossystem`
+    `from:`/arrow/parameter target resolves against `assets/node_index.json` — or is a genuine,
+    disclosed project-local reference with its own companion `.ros`/`.ros2`. See §8c.
+14. Every resolved `type:`/`from:` reference names its exact vendored source file in a trailing
+    comment on the same line (`# assets/rosmodelscatalog/navigation/amcl.ros2`), and every
+    project-local one says so and points at its companion file instead. See §8c.
 
 ## Validation
 
@@ -414,6 +476,17 @@ Run every line against the emitted file:
   **`RM034` (`profile:` / `history:` / `depth:` used) is expected and correct when the value came
   from the input.** It warns against *inventing* those fields, not against transcribing them.
   Never drop a concrete value that was present in the source in order to get a clean linter run.
+
+  **RM081-089 are the catalogue checks** (§8c) — RM081/084 (WARNING: reference not indexed at
+  all, a project-local package/node is legitimate) and RM082/085/086 (ERROR: the package/node
+  *is* indexed but this specific type/node/interface name isn't — a real typo, with a
+  suggested nearest match) run automatically whenever `assets/type_index.json` /
+  `assets/node_index.json` exist. Pass `--no-catalogue` to suppress them in a workspace whose
+  references are heavily project-local. RM083/RM087 name exactly which vendored file a
+  resolved reference needs — feed the model straight to `scripts/collect_deps.py <file>...
+  <case-dir>` instead of hand-copying `_deps/` files. RM088/RM089 (WARNING) fire when a
+  reference resolves against the catalogue but its source line doesn't name the resolved file —
+  add the trailing comment they suggest.
 
 - **Round-trip harness**: `tests/roundtrip.py`, which compares two models semantically rather than
   byte-wise (corpus formatting is far too inconsistent for byte-diffing to mean anything).

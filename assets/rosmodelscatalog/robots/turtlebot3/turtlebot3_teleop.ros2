@@ -1,0 +1,7 @@
+turtlebot3_teleop:
+  artifacts:
+    teleop_keyboard:
+      node: teleop_keyboard
+      publishers:
+        "cmd_vel":
+          type: "geometry_msgs/msg/Twist"

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "rostooling-modeler-marketplace",
+  "description": "Single-plugin marketplace hosting the RosTooling Modeler plugin (Fraunhofer IPA — CoreSense x Humanoid, work item E1).",
+  "owner": {
+    "name": "Fraunhofer IPA — CoreSense x Humanoid, work item E1"
+  },
+  "plugins": [
+    {
+      "name": "rostooling-modeler",
+      "description": "Generates and validates RosTooling ROS 2 model files (.ros, .ros2, .rossystem) against the Xtext grammar and validators, with an optional headless language server for real diagnostics.",
+      "author": {
+        "name": "Fraunhofer IPA — CoreSense x Humanoid, work item E1"
+      },
+      "category": "development",
+      "keywords": ["ros2", "xtext", "dsl", "modelling", "rostooling"],
+      "source": "./"
+    }
+  ]
+}

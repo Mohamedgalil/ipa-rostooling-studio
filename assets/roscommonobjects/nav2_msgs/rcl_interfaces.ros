@@ -1,0 +1,102 @@
+rcl_interfaces:
+  msgs:
+    ParameterDescriptor
+      message
+        string name
+        uint8 type
+        string description
+        string additional_constraints
+        bool read_only 
+        bool dynamic_typing 
+    ListParametersResult
+      message
+        string[] names
+        string[] prefixes
+    ParameterEventDescriptors
+      message
+        'rcl_interfaces/msg/ParameterDescriptor'[] new_parameters
+        'rcl_interfaces/msg/ParameterDescriptor'[] changed_parameters
+        'rcl_interfaces/msg/ParameterDescriptor'[] deleted_parameters
+    Parameter
+      message
+        string name
+        'rcl_interfaces/msg/ParameterValue'[] value
+    ParameterValue
+      message
+        uint8 type
+        bool bool_value
+        int64 integer_value
+        float64 double_value
+        string string_value
+        byte[] byte_array_value
+        bool[] bool_array_value
+        int64[] integer_array_value
+        float64[] double_array_value
+        string[] string_array_value
+    IntegerRange
+      message
+        int64 from_value
+        int64 to_value
+        uint64 step
+    ParameterEvent
+      message
+        'builtin_interfaces/msg/Time'[] stamp
+        string 'node'
+        'rcl_interfaces/msg/Parameter'[] new_parameters
+        'rcl_interfaces/msg/Parameter'[] changed_parameters
+        'rcl_interfaces/msg/Parameter'[] deleted_parameters
+    SetParametersResult
+      message
+        bool successful
+        string reason
+    FloatingPointRange
+      message
+        float64 from_value
+        float64 to_value
+        float64 step
+    Log
+      message
+        'builtin_interfaces/msg/Time'[] stamp
+        uint8 level
+        string name
+        string msg
+        string file
+        string function
+        uint32 line
+    ParameterType
+      message
+    
+  srvs:
+    GetParameterTypes
+      request
+        string[] names
+      response
+        uint8[] types
+    DescribeParameters
+      request
+        string[] names
+      response
+        'rcl_interfaces/msg/ParameterDescriptor'[] descriptors
+    SetParametersAtomically
+      request
+        'rcl_interfaces/msg/Parameter'[] parameters
+      response
+        'rcl_interfaces/msg/SetParametersResult'[] result
+    SetParameters
+      request
+        'rcl_interfaces/msg/Parameter'[] parameters
+      response
+        'rcl_interfaces/msg/SetParametersResult'[] results
+    GetParameters
+      request
+        string[] names
+      response
+        'rcl_interfaces/msg/ParameterValue'[] values
+    ListParameters
+      request
+        string[] prefixes
+        uint64 depth
+      response
+        'rcl_interfaces/msg/ListParametersResult'[] result
+    
+  

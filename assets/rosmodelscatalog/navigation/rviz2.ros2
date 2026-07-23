@@ -1,0 +1,68 @@
+rviz2:
+  artifacts:
+    rviz2: # change to exector name
+      node: rviz2
+      subscribers:
+        "downsampled_costmap":
+          type: "nav_msgs/msg/OccupancyGrid"
+        "downsampled_costmap_updates":
+          type: "map_msgs/msg/OccupancyGridUpdate"
+        "global_costmap/costmap":
+          type: "nav_msgs/msg/OccupancyGrid"
+        "global_costmap/costmap_updates":
+          type: "map_msgs/msg/OccupancyGridUpdate"
+        "global_costmap/voxel_marked_cloud":
+          type: "sensor_msgs/msg/PointCloud2"
+        "local_costmap/costmap":
+          type: "nav_msgs/msg/OccupancyGrid"
+        "local_costmap/costmap_updates":
+          type: "map_msgs/msg/OccupancyGridUpdate"
+        "local_costmap/published_footprint":
+          type: "geometry_msgs/msg/PolygonStamped"
+        "local_costmap/voxel_marked_cloud":
+          type: "sensor_msgs/msg/PointCloud2"
+        "local_plan":
+          type: "nav_msgs/msg/Path"
+        "map":
+          type: "nav_msgs/msg/OccupancyGrid"
+        "map_updates":
+          type: "map_msgs/msg/OccupancyGridUpdate"
+        "mobile_base/sensors/bumper_pointcloud":
+          type: "sensor_msgs/msg/PointCloud2"
+        "particle_cloud":
+          type: "nav2_msgs/msg/ParticleCloud"
+        "plan":
+          type: "nav_msgs/msg/Path"
+        "scan":
+          type: "sensor_msgs/msg/LaserScan"
+        "waypoints":
+          type: "visualization_msgs/msg/MarkerArray"
+      publishers:
+        "clicked_point":
+          type: "geometry_msgs/msg/PointStamped"
+        "initialpose":
+          type: "geometry_msgs/msg/PoseWithCovarianceStamped"
+      actionclients:
+        "navigate_through_poses":
+          type: "nav2_msgs/action/NavigateThroughPoses"
+        "navigate_to_pose":
+          type: "nav2_msgs/action/NavigateToPose"
+      parameters:
+        "qos_overrides./parameter_events.publisher.depth":
+          type: Integer
+          value: 1000
+        "qos_overrides./parameter_events.publisher.durability":
+          type: String
+          value: "volatile"
+        "qos_overrides./parameter_events.publisher.history":
+          type: String
+          value: "keep_last"
+        "qos_overrides./parameter_events.publisher.reliability":
+          type: String
+          value: "reliable"
+        "tf_buffer_cache_time_ms":
+          type: Integer
+          value: 10000
+        "use_sim_time":
+          type: Boolean
+          value: False

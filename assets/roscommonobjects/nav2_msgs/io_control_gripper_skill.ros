@@ -1,0 +1,14 @@
+io_control_gripper_skill:
+  
+  
+  actions:
+    IOGripperCommand
+      goal
+        string io_service_server_name
+        bool open
+        int16 timeout
+      result
+        uint16 error_code_id
+      feedback
+        bool open
+    

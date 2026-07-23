@@ -1,0 +1,119 @@
+cartographer_ros_msgs:
+  msgs:
+    LandmarkEntry
+      message
+        string id
+        'geometry_msgs/msg/Pose'[] tracking_from_landmark_transform
+        float64 translation_weight
+        float64 rotation_weight
+    HistogramBucket
+      message
+        float64 bucket_boundary
+        float64 count
+    LandmarkList
+      message
+        'std_msgs/msg/Header'[] header
+        'cartographer_ros_msgs/msg/LandmarkEntry'[] landmarks
+    BagfileProgress
+      message
+        string current_bagfile_name
+        uint32 current_bagfile_id
+        uint32 total_bagfiles
+        uint32 total_messages
+        uint32 processed_messages
+        float32 total_seconds
+        float32 processed_seconds
+    MetricFamily
+      message
+        string name
+        string description
+        'cartographer_ros_msgs/msg/Metric'[] metrics
+    TrajectoryStates
+      message
+        'std_msgs/msg/Header'[] header
+        int32[] trajectory_id
+        uint8[] trajectory_state
+    SubmapTexture
+      message
+        uint8[] cells
+        int32 width
+        int32 height
+        float64 resolution
+        'geometry_msgs/msg/Pose'[] slice_pose
+    Metric
+      message
+        uint8 type
+        'cartographer_ros_msgs/msg/MetricLabel'[] labels
+        float64 value
+        'cartographer_ros_msgs/msg/HistogramBucket'[] counts_by_bucket
+    StatusResponse
+      message
+        uint8 code
+        string message
+    StatusCode
+      message
+    SubmapEntry
+      message
+        int32 trajectory_id
+        int32 submap_index
+        int32 submap_version
+        'geometry_msgs/msg/Pose'[] pose
+        bool is_frozen
+    SubmapList
+      message
+        'std_msgs/msg/Header'[] header
+        'cartographer_ros_msgs/msg/SubmapEntry'[] submap
+    MetricLabel
+      message
+        string key
+        string value
+    
+  srvs:
+    SubmapQuery
+      request
+        int32 trajectory_id
+        int32 submap_index
+      response
+        'cartographer_ros_msgs/msg/StatusResponse'[] status
+        int32 submap_version
+        'cartographer_ros_msgs/msg/SubmapTexture'[] textures
+    WriteState
+      request
+        string filename
+        bool include_unfinished_submaps
+      response
+        'cartographer_ros_msgs/msg/StatusResponse'[] status
+    FinishTrajectory
+      request
+        int32 trajectory_id
+      response
+        'cartographer_ros_msgs/msg/StatusResponse'[] status
+    TrajectoryQuery
+      request
+        int32 trajectory_id
+      response
+        'cartographer_ros_msgs/msg/StatusResponse'[] status
+        'geometry_msgs/msg/PoseStamped'[] trajectory
+    GetTrajectoryStates
+      request
+      response
+        'cartographer_ros_msgs/msg/StatusResponse'[] status
+        'cartographer_ros_msgs/msg/TrajectoryStates'[] trajectory_states
+    StartTrajectory
+      request
+        string configuration_directory
+        string configuration_basename
+        bool use_initial_pose
+        'geometry_msgs/msg/Pose'[] initial_pose
+        int32 relative_to_trajectory_id
+      response
+        'cartographer_ros_msgs/msg/StatusResponse'[] status
+        int32 trajectory_id
+    ReadMetrics
+      request
+      response
+        'cartographer_ros_msgs/msg/StatusResponse'[] status
+        'cartographer_ros_msgs/msg/MetricFamily'[] metric_families
+        'builtin_interfaces/msg/Time'[] timestamp
+    
+  

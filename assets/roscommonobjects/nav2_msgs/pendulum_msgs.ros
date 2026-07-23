@@ -1,0 +1,24 @@
+pendulum_msgs:
+  msgs:
+    JointCommand
+      message
+        float64 position
+    RttestResults
+      message
+        'builtin_interfaces/msg/Time'[] stamp
+        'pendulum_msgs/msg/JointCommand'[] command
+        'pendulum_msgs/msg/JointState'[] state
+        uint64 cur_latency
+        float64 mean_latency
+        uint64 min_latency
+        uint64 max_latency
+        uint64 minor_pagefaults
+        uint64 major_pagefaults
+    JointState
+      message
+        float64 position
+        float64 velocity
+        float64 effort
+    
+  
+  

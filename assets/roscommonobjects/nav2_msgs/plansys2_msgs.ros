@@ -1,0 +1,246 @@
+plansys2_msgs:
+  msgs:
+    DurativeAction
+      message
+        string name
+        'plansys2_msgs/msg/Param'[] parameters
+        'plansys2_msgs/msg/Tree'[] at_start_requirements
+        'plansys2_msgs/msg/Tree'[] over_all_requirements
+        'plansys2_msgs/msg/Tree'[] at_end_requirements
+        'plansys2_msgs/msg/Tree'[] at_start_effects
+        'plansys2_msgs/msg/Tree'[] at_end_effects
+    Tree
+      message
+        'plansys2_msgs/msg/Node'[] nodes
+    ActionExecution
+      message
+        int16 type
+        string node_id
+        string action
+        string[] arguments
+        bool success
+        float32 completion
+        string status
+    Plan
+      message
+        'plansys2_msgs/msg/PlanItem'[] items
+    ActionPerformerStatus
+      message
+        'builtin_interfaces/msg/Time'[] status_stamp
+        int8 state
+        string action
+        string[] specialized_arguments
+        string node_name
+    Action
+      message
+        string name
+        'plansys2_msgs/msg/Param'[] parameters
+        'plansys2_msgs/msg/Tree'[] preconditions
+        'plansys2_msgs/msg/Tree'[] effects
+    PlanItem
+      message
+        float32 time
+        string action
+        float32 duration
+    Param
+      message
+        string name
+        string type
+        string[] sub_types
+    Node
+      message
+        uint8 node_type
+        uint8 expression_type
+        uint8 modifier_type
+        uint32 node_id
+        uint32[] children
+        string name
+        'plansys2_msgs/msg/Param'[] parameters
+        float64 value
+        bool negate
+    Knowledge
+      message
+        string[] instances
+        string[] predicates
+        string[] functions
+        string goal
+    ActionExecutionInfo
+      message
+        int8 status
+        'builtin_interfaces/msg/Time'[] start_stamp
+        'builtin_interfaces/msg/Time'[] status_stamp
+        string action_full_name
+        string action
+        string[] arguments
+        'builtin_interfaces/msg/Duration'[] duration
+        float32 completion
+        string message_status
+    
+  srvs:
+    GetProblem
+      request
+        'std_msgs/msg/Empty'[] 'request'
+      response
+        bool success
+        string problem
+        string error_info
+    GetDomainDurativeActionDetails
+      request
+        string durative_action
+        string[] parameters
+      response
+        bool success
+        'plansys2_msgs/msg/DurativeAction'[] durative_action
+        string error_info
+    GetProblemGoal
+      request
+        'std_msgs/msg/Empty'[] 'request'
+      response
+        bool success
+        'plansys2_msgs/msg/Tree'[] tree
+        string error_info
+    AffectParam
+      request
+        'plansys2_msgs/msg/Param'[] param
+      response
+        bool success
+        string error_info
+    IsProblemGoalSatisfied
+      request
+        'plansys2_msgs/msg/Tree'[] tree
+      response
+        bool success
+        bool satisfied
+        string error_info
+    GetOrderedSubGoals
+      request
+        'std_msgs/msg/Empty'[] 'request'
+      response
+        bool success
+        'plansys2_msgs/msg/Tree'[] sub_goals
+        string error_info
+    AddProblem
+      request
+        string problem
+      response
+        bool success
+        string error_info
+    GetProblemInstances
+      request
+        'std_msgs/msg/Empty'[] 'request'
+      response
+        bool success
+        'plansys2_msgs/msg/Param'[] instances
+        string error_info
+    AddProblemGoal
+      request
+        'plansys2_msgs/msg/Tree'[] tree
+      response
+        bool success
+        string error_info
+    GetDomain
+      request
+        'std_msgs/msg/Empty'[] 'request'
+      response
+        bool success
+        string domain
+        string error_info
+    GetPlan
+      request
+        string domain
+        string problem
+      response
+        bool success
+        'plansys2_msgs/msg/Plan'[] plan
+        string error_info
+    GetProblemInstanceDetails
+      request
+        string instance
+      response
+        bool success
+        'plansys2_msgs/msg/Param'[] instance
+        string error_info
+    ExistNode
+      request
+        'plansys2_msgs/msg/Node'[] 'node'
+      response
+        bool exist
+    GetDomainActionDetails
+      request
+        string action
+        string[] parameters
+      response
+        'plansys2_msgs/msg/Action'[] action
+        bool success
+        string error_info
+    RemoveProblemGoal
+      request
+        'std_msgs/msg/Empty'[] 'request'
+      response
+        bool success
+        string error_info
+    GetDomainName
+      request
+        'std_msgs/msg/Empty'[] 'request'
+      response
+        bool success
+        string name
+        string error_info
+    ClearProblemKnowledge
+      request
+        'std_msgs/msg/Empty'[] 'request'
+      response
+        bool success
+        string error_info
+    GetDomainConstants
+      request
+        string type
+      response
+        bool success
+        string[] constants
+        string error_info
+    GetDomainTypes
+      request
+        'std_msgs/msg/Empty'[] 'request'
+      response
+        bool success
+        string[] types
+        string error_info
+    GetNodeDetails
+      request
+        string expression
+      response
+        bool success
+        'plansys2_msgs/msg/Node'[] 'node'
+        string error_info
+    AffectNode
+      request
+        'plansys2_msgs/msg/Node'[] 'node'
+      response
+        bool success
+        string error_info
+    GetStates
+      request
+        'std_msgs/msg/Empty'[] 'request'
+      response
+        bool success
+        'plansys2_msgs/msg/Node'[] states
+        string error_info
+    GetDomainActions
+      request
+        'std_msgs/msg/Empty'[] 'request'
+      response
+        bool success
+        string[] actions
+        string error_info
+    
+  actions:
+    ExecutePlan
+      goal
+        'plansys2_msgs/msg/Plan'[] plan
+      result
+        bool success
+        'plansys2_msgs/msg/ActionExecutionInfo'[] action_execution_status
+      feedback
+        'plansys2_msgs/msg/ActionExecutionInfo'[] action_execution_status
+    

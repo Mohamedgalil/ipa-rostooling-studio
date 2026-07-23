@@ -58,6 +58,12 @@ These cause hard errors or silent semantic corruption. Never violate them.
 10. Always emit `fromFile:` in a `.rossystem`, quoted and containing at least one `/`. This is
     bug avoidance, not a real rule: `fromFileHelper` dereferences `fromFile` without a null
     guard, so omitting it throws inside the validator.
+11. Every `type:`/`from:` reference that resolves against the vendored catalogues
+    (`assets/type_index.json` / `assets/node_index.json`) gets a trailing comment naming the
+    exact file it resolved to (`# assets/rosmodelscatalog/navigation/amcl.ros2`); every
+    project-local one gets a comment saying so and pointing at its companion `.ros`/`.ros2`.
+    Never leave a reader to guess which lines are real catalogue nodes and which are files this
+    session wrote. `rosmodel_lint.py`'s RM088/RM089 check this mechanically.
 
 ## Things to route around
 

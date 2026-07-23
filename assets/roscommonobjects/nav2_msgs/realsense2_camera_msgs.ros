@@ -1,0 +1,30 @@
+realsense2_camera_msgs:
+  msgs:
+    IMUInfo
+      message
+        'std_msgs/msg/Header'[] header
+        float64[] data
+        float64[] noise_variances
+        float64[] bias_variances
+    Extrinsics
+      message
+        float64[] rotation
+        float64[] translation
+    Metadata
+      message
+        'std_msgs/msg/Header'[] header
+        string json_data
+    
+  srvs:
+    DeviceInfo
+      request
+      response
+        string device_name
+        string serial_number
+        string firmware_version
+        string usb_type_descriptor
+        string firmware_update_id
+        string sensors
+        string physical_port
+    
+  

@@ -1,0 +1,23 @@
+rviz_navigation_dialog_action_client:
+  artifacts:
+    rviz_navigation_dialog_action_client: # change to exector name
+      node: rviz_navigation_dialog_action_client
+      publishers:
+        "waypoints":
+          type: "visualization_msgs/msg/MarkerArray"
+      serviceclients:
+        "lifecycle_manager_localization/is_active":
+          type: "std_srvs/srv/Trigger"
+        "lifecycle_manager_localization/manage_nodes":
+          type: "nav2_msgs/srv/ManageLifecycleNodes"
+        "lifecycle_manager_navigation/is_active":
+          type: "std_srvs/srv/Trigger"
+        "lifecycle_manager_navigation/manage_nodes":
+          type: "nav2_msgs/srv/ManageLifecycleNodes"
+      actionclients:
+        "follow_waypoints":
+          type: "nav2_msgs/action/FollowWaypoints"
+        "navigate_through_poses":
+          type: "nav2_msgs/action/NavigateThroughPoses"
+        "navigate_to_pose":
+          type: "nav2_msgs/action/NavigateToPose"

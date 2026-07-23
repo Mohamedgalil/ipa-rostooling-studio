@@ -1,0 +1,27 @@
+octomap_msgs:
+  msgs:
+    OctomapWithPose
+      message
+        'std_msgs/msg/Header'[] header
+        'geometry_msgs/msg/Pose'[] origin
+        'octomap_msgs/msg/Octomap'[] octomap
+    Octomap
+      message
+        'std_msgs/msg/Header'[] header
+        bool binary
+        string id
+        float64 resolution
+        int8[] data
+    
+  srvs:
+    GetOctomap
+      request
+      response
+        'octomap_msgs/msg/Octomap'[] map
+    BoundingBoxQuery
+      request
+        'geometry_msgs/msg/Point'[] min
+        'geometry_msgs/msg/Point'[] max
+      response
+    
+  

@@ -1,0 +1,22 @@
+position_controllers:
+  fromGitRepo: "https://github.com/ros-controls/ros2_controllers"
+  artifacts:
+    plugin:
+      node: JointGroupPositionController
+      subscribers:
+        "commands":
+          type: "std_msgs/msg/Float64MultiArray"
+      publishers:
+        "transition_event":
+          type: "lifecycle_msgs/msg/TransitionEvent"
+      parameters:
+        "interface_name":
+          type: String
+        "joints":
+          type: Array [String]
+        "robot_description":
+          type: String
+        "update_rate":
+          type: Integer
+        "use_sim_time":
+          type: Boolean

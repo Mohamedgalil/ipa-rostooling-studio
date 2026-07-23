@@ -1,0 +1,16 @@
+ackermann_msgs:
+  msgs:
+    AckermannDrive
+      message
+        float32 steering_angle
+        float32 steering_angle_velocity
+        float32 speed
+        float32 acceleration
+        float32 jerk
+    AckermannDriveStamped
+      message
+        'std_msgs/msg/Header'[] header
+        'ackermann_msgs/msg/AckermannDrive'[] drive
+    
+  
+  

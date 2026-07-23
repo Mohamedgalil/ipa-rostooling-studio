@@ -1,0 +1,57 @@
+turtlesim:
+  msgs:
+    Color
+      message
+        uint8 r
+        uint8 g
+        uint8 b
+    Pose
+      message
+        float32 x
+        float32 y
+        float32 theta
+        float32 linear_velocity
+        float32 angular_velocity
+    
+  srvs:
+    TeleportAbsolute
+      request
+        float32 x
+        float32 y
+        float32 theta
+      response
+    Spawn
+      request
+        float32 x
+        float32 y
+        float32 theta
+        string name
+      response
+        string name
+    TeleportRelative
+      request
+        float32 linear
+        float32 angular
+      response
+    Kill
+      request
+        string name
+      response
+    SetPen
+      request
+        uint8 r
+        uint8 g
+        uint8 b
+        uint8 width
+        uint8 off
+      response
+    
+  actions:
+    RotateAbsolute
+      goal
+        float32 theta
+      result
+        float32 delta
+      feedback
+        float32 remaining
+    

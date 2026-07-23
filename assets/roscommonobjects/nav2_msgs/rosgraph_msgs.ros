@@ -1,0 +1,8 @@
+rosgraph_msgs:
+  msgs:
+    Clock
+      message
+        'builtin_interfaces/msg/Time'[] clock
+    
+  
+  

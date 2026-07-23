@@ -1,0 +1,15 @@
+color_pose_msgs:
+  msgs:
+    ColorPoseArray
+      message
+        'std_msgs/msg/Header'[] header
+        'color_pose_msgs/msg/ColorPose'[] color_poses
+    ColorPose
+      message
+        'std_msgs/msg/Header'[] header
+        string color
+        string element
+        'geometry_msgs/msg/Pose'[] pose
+    
+  
+  

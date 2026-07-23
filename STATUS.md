@@ -12,6 +12,27 @@ been executed, and cannot be on this machine.** Everything below is labelled acc
 "Verified" here means *executed on this machine and the output read*, or *read directly from the
 authoritative source file*. It never means "looks right".
 
+### Installable — verified end-to-end 2026-07-23
+
+The plugin installs into Claude Code and every component registers and runs. Not inferred from the
+manifest — driven from the *installed* copy under `~/.claude/plugins/cache/`:
+
+- `claude plugin marketplace add` + `claude plugin install rostooling-modeler@rostooling-modeler-marketplace`
+  → installed, enabled. The repo self-hosts a marketplace (`.claude-plugin/marketplace.json`).
+- Component inventory (from `claude plugin details`): **Skills 1 · Agents 1 · Hooks 1 · LSP 1**,
+  ~256 tok always-on.
+- The bundled 47 MB LS JAR **travels with the install** and resolves via `${CLAUDE_PLUGIN_ROOT}`;
+  started from the installed path it validated turtlesim **ACCEPTED, 0 diagnostics**.
+- The `PostToolUse` hook, run from the installed `scripts/`, returned correct
+  `{"decision":"block"}` JSON catching `RM010` on an uppercase package name.
+
+Fixes that made this work: `.lsp.json` repointed from the stale 2024 absolute paths to the current
+3.1.0 JAR via `${CLAUDE_PLUGIN_ROOT}`, `.rossystem` added, Java made configurable
+(`${ROSMODEL_JAVA:-java}`); `marketplace.json` added; README install section rewritten. The two
+env vars `ROSMODEL_JAVA` and `ROSMODEL_PYTHON` must be set on this machine (PATH `java` is 1.8,
+`python3` is a Store stub) — documented in the README. Marketplaces consolidated to one
+(`coresense-local` removed; project `settings.json` realigned to the self-hosting marketplace).
+
 | Deliverable | How it was verified |
 |---|---|
 | **`scripts/rosmodel_lint.py`** — 57 rules, 1 647 lines | **Executed** across all 305 corpus files, 0 crashes. Counts reproduce four independent measurements in `emission-profile.md` §1 exactly (RM003×1, RM005×1, RM015×3, RM040×3 on Corpus B; RM058×2 corpus-wide). |

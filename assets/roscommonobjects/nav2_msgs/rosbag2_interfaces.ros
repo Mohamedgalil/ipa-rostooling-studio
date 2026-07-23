@@ -1,0 +1,54 @@
+rosbag2_interfaces:
+  msgs:
+    ReadSplitEvent
+      message
+        string closed_file
+        string opened_file
+    WriteSplitEvent
+      message
+        string closed_file
+        string opened_file
+    
+  srvs:
+    Seek
+      request
+        'builtin_interfaces/msg/Time'[] time
+      response
+        bool success
+    TogglePaused
+      request
+      response
+    Snapshot
+      request
+      response
+        bool success
+    SetRate
+      request
+        float64 rate
+      response
+        bool success
+    Burst
+      request
+        uint64 num_messages
+      response
+        uint64 actually_burst
+    Resume
+      request
+      response
+    Pause
+      request
+      response
+    PlayNext
+      request
+      response
+        bool success
+    GetRate
+      request
+      response
+        float64 rate
+    IsPaused
+      request
+      response
+        bool paused
+    
+  

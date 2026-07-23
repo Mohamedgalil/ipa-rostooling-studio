@@ -1,0 +1,204 @@
+sensor_msgs:
+  msgs:
+    PointCloud
+      message
+        'std_msgs/msg/Header'[] header
+        'geometry_msgs/msg/Point32'[] points
+        'sensor_msgs/msg/ChannelFloat32'[] channels
+    Joy
+      message
+        'std_msgs/msg/Header'[] header
+        float32[] axes
+        int32[] buttons
+    LaserScan
+      message
+        'std_msgs/msg/Header'[] header
+        float32 angle_min
+        float32 angle_max
+        float32 angle_increment
+        float32 time_increment
+        float32 scan_time
+        float32 range_min
+        float32 range_max
+        float32[] ranges
+        float32[] intensities
+    CameraInfo
+      message
+        'std_msgs/msg/Header'[] header
+        uint32 height
+        uint32 width
+        string distortion_model
+        float64[] d
+        float64[] k
+        float64[] r
+        float64[] p
+        uint32 binning_x
+        uint32 binning_y
+        'sensor_msgs/msg/RegionOfInterest'[] roi
+    JoyFeedbackArray
+      message
+        'sensor_msgs/msg/JoyFeedback'[] array
+    TimeReference
+      message
+        'std_msgs/msg/Header'[] header
+        'builtin_interfaces/msg/Time'[] time_ref
+        string source
+    PointCloud2
+      message
+        'std_msgs/msg/Header'[] header
+        uint32 height
+        uint32 width
+        'sensor_msgs/msg/PointField'[] fields
+        bool is_bigendian
+        uint32 point_step
+        uint32 row_step
+        uint8[] data
+        bool is_dense
+    CompressedImage
+      message
+        'std_msgs/msg/Header'[] header
+        string format
+        uint8[] data
+    Imu
+      message
+        'std_msgs/msg/Header'[] header
+        'geometry_msgs/msg/Quaternion'[] orientation
+        float64[] orientation_covariance
+        'geometry_msgs/msg/Vector3'[] angular_velocity
+        float64[] angular_velocity_covariance
+        'geometry_msgs/msg/Vector3'[] linear_acceleration
+        float64[] linear_acceleration_covariance
+    LaserEcho
+      message
+        float32[] echoes
+    MagneticField
+      message
+        'std_msgs/msg/Header'[] header
+        'geometry_msgs/msg/Vector3'[] magnetic_field
+        float64[] magnetic_field_covariance
+    JoyFeedback
+      message
+        uint8 type
+        uint8 id
+        float32 intensity
+    FluidPressure
+      message
+        'std_msgs/msg/Header'[] header
+        float64 fluid_pressure
+        float64 variance
+    RelativeHumidity
+      message
+        'std_msgs/msg/Header'[] header
+        float64 relative_humidity
+        float64 variance
+    Range
+      message
+        'std_msgs/msg/Header'[] header
+        uint8 radiation_type
+        float32 field_of_view
+        float32 min_range
+        float32 max_range
+        float32 range
+    NavSatStatus
+      message
+        int8 status
+        uint16 service
+    ChannelFloat32
+      message
+        string name
+        float32[] values
+    JointState
+      message
+        'std_msgs/msg/Header'[] header
+        string[] name
+        float64[] position
+        float64[] velocity
+        float64[] effort
+    Image
+      message
+        'std_msgs/msg/Header'[] header
+        uint32 height
+        uint32 width
+        string encoding
+        uint8 is_bigendian
+        uint32 step
+        uint8[] data
+    MultiDOFJointState
+      message
+        'std_msgs/msg/Header'[] header
+        string[] joint_names
+        'geometry_msgs/msg/Transform'[] transforms
+        'geometry_msgs/msg/Twist'[] twist
+        'geometry_msgs/msg/Wrench'[] wrench
+    NavSatFix
+      message
+        'std_msgs/msg/Header'[] header
+        'sensor_msgs/msg/NavSatStatus'[] status
+        float64 latitude
+        float64 longitude
+        float64 altitude
+        float64[] position_covariance
+        uint8 position_covariance_type
+    Illuminance
+      message
+        'std_msgs/msg/Header'[] header
+        float64 illuminance
+        float64 variance
+    Temperature
+      message
+        'std_msgs/msg/Header'[] header
+        float64 temperature
+        float64 variance
+    PointField
+      message
+        string name
+        uint32 offset
+        uint8 datatype
+        uint32 count
+    RegionOfInterest
+      message
+        uint32 x_offset
+        uint32 y_offset
+        uint32 height
+        uint32 width
+        bool do_rectify
+    BatteryState
+      message
+        'std_msgs/msg/Header'[] header
+        float32 voltage
+        float32 temperature
+        float32 current
+        float32 charge
+        float32 capacity
+        float32 design_capacity
+        float32 percentage
+        uint8 power_supply_status
+        uint8 power_supply_health
+        uint8 power_supply_technology
+        bool present
+        float32[] cell_voltage
+        float32[] cell_temperature
+        string location
+        string serial_number
+    MultiEchoLaserScan
+      message
+        'std_msgs/msg/Header'[] header
+        float32 angle_min
+        float32 angle_max
+        float32 angle_increment
+        float32 time_increment
+        float32 scan_time
+        float32 range_min
+        float32 range_max
+        'sensor_msgs/msg/LaserEcho'[] ranges
+        'sensor_msgs/msg/LaserEcho'[] intensities
+    
+  srvs:
+    SetCameraInfo
+      request
+        'sensor_msgs/msg/CameraInfo'[] camera_info
+      response
+        bool success
+        string status_message
+    
+  

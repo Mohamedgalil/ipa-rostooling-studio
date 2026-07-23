@@ -1,0 +1,29 @@
+cartographer_occupancy_grid_node:
+  artifacts:
+    cartographer_occupancy_grid_node: # change to exector name
+      node: cartographer_occupancy_grid_node
+      subscribers:
+        "submap_list":
+          type: "cartographer_ros_msgs/msg/SubmapList"
+      publishers:
+        "map":
+          type: "nav_msgs/msg/OccupancyGrid"
+      serviceclients:
+        "submap_query":
+          type: "cartographer_ros_msgs/srv/SubmapQuery"
+      parameters:
+        "qos_overrides./parameter_events.publisher.depth":
+          type: Integer
+          value: 1000
+        "qos_overrides./parameter_events.publisher.durability":
+          type: String
+          value: "volatile"
+        "qos_overrides./parameter_events.publisher.history":
+          type: String
+          value: "keep_last"
+        "qos_overrides./parameter_events.publisher.reliability":
+          type: String
+          value: "reliable"
+        "use_sim_time":
+          type: Boolean
+          value: False

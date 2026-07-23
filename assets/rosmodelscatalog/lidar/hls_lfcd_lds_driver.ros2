@@ -1,0 +1,15 @@
+hls_lfcd_lds_driver:
+  fromGitRepo: "https://github.com/ROBOTIS-GIT/hls_lfcd_lds_driver" 
+  artifacts:
+    hlds_laser_publisher:
+      node: hlds_laser_publisher
+      publishers:
+        scan:
+          type: "sensor_msgs/msg/LaserScan"
+      parameters:
+        port:
+         type: String
+         default: "/dev/ttyUSB0"
+        frame_id:
+          type: String
+          default: "laser"

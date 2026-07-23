@@ -1,0 +1,35 @@
+force_torque_sensor_broadcaster:
+  fromGitRepo: "https://github.com/ros-controls/ros2_controllers"
+  artifacts:
+    plugin:
+      node: ForceTorqueSensorBroadcaster
+      publishers:
+        "wrench":
+          type: "geometry_msgs/msg/WrenchStamped"
+      parameters:
+        "frame_id":
+          type: String
+        "interface_names.force.x":
+          type: String
+        "interface_names.force.y":
+          type: String
+        "interface_names.force.z":
+          type: String
+        "interface_names.torque.x":
+          type: String
+        "interface_names.torque.y":
+          type: String
+        "interface_names.torque.z":
+          type: String
+        "robot_description":
+          type: String
+        "sensor_name":
+          type: String
+        "state_interface_names":
+          type: Array [String]
+        "topic_name":
+          type: String
+        "update_rate":
+          type: Integer
+        "use_sim_time":
+          type: Boolean

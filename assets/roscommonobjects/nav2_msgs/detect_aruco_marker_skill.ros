@@ -1,0 +1,15 @@
+detect_aruco_marker_skill:
+  
+  
+  actions:
+    ArucoMarkerDetection
+      goal
+        int16 marker_id
+        int16 timeout
+        string sub_topic_name
+        int8 required_pose_num
+      result
+        uint16 error_code_id
+        'geometry_msgs/msg/PoseStamped'[] pose
+      feedback
+    

@@ -1,0 +1,88 @@
+ur_dashboard_msgs:
+  msgs:
+    RobotMode
+      message
+        int8 mode
+    ProgramState
+      message
+        string state
+    SafetyMode
+      message
+        uint8 mode
+    
+  srvs:
+    GetRobotMode
+      request
+      response
+        'ur_dashboard_msgs/msg/RobotMode'[] robot_mode
+        string answer
+        bool success
+    IsProgramRunning
+      request
+      response
+        string answer
+        bool program_running
+        bool success
+    GetProgramState
+      request
+      response
+        'ur_dashboard_msgs/msg/ProgramState'[] state
+        string program_name
+        string answer
+        bool success
+    RawRequest
+      request
+        string query
+      response
+        string answer
+    GetSafetyMode
+      request
+      response
+        'ur_dashboard_msgs/msg/SafetyMode'[] safety_mode
+        string answer
+        bool success
+    Load
+      request
+        string filename
+      response
+        string answer
+        bool success
+    AddToLog
+      request
+        string message
+      response
+        string answer
+        bool success
+    IsProgramSaved
+      request
+      response
+        string answer
+        string program_name
+        bool program_saved
+        bool success
+    GetLoadedProgram
+      request
+      response
+        string answer
+        string program_name
+        bool success
+    Popup
+      request
+        string message
+      response
+        string answer
+        bool success
+    
+  actions:
+    SetMode
+      goal
+        int8 target_robot_mode
+        bool stop_program
+        bool play_program
+      result
+        bool success
+        string message
+      feedback
+        int8 current_robot_mode
+        int8 current_safety_mode
+    

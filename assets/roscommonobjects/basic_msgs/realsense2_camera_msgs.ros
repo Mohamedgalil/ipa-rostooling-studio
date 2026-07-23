@@ -1,0 +1,17 @@
+realsense2_camera_msgs:
+  msgs:
+     Extrinsics
+       message
+         float64[] rotation float64[] translation
+     Metadata
+       message
+         "std_msgs/msg/Header" header string json_data
+     IMUInfo
+       message
+         # header.frame_id is either set to "imu_accel" or "imu_gyro" # to distinguish between "accel" and "gyro" info. "std_msgs.Header" header float64[] data float64[] noise_variances float64[] bias_variances
+  srvs:
+     DeviceInfo
+       request
+
+       response
+         string device_name string serial_number string firmware_version string usb_type_descriptor string firmware_update_id string sensors

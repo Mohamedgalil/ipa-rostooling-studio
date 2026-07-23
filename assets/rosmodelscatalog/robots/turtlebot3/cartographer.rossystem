@@ -1,0 +1,10 @@
+cartographer:
+  fromFile: 'turtlebot3_cartographer/launch/cartographer.launch.py'
+  nodes:
+    cartographer_node:
+      from: "cartographer_node.cartographer_node"
+      interfaces:
+       - scan_cart: sub-> "cartographer_node::scan"
+       - odom_cart: sub-> "cartographer_node::odom"
+    cartographer_occupancy_grid_node:
+      from: "cartographer_occupancy_grid_node.cartographer_occupancy_grid_node"

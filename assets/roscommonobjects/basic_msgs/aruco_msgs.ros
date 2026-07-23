@@ -1,0 +1,8 @@
+aruco_msgs:
+  msgs:
+     Marker
+       message
+         "std_msgs/msg/Header" header uint32 id "geometry_msgs/msg/PoseWithCovariance" pose float64 confidence
+     MarkerArray
+       message
+         "std_msgs/msg/Header" header "aruco_msgs/msg/Marker"[] markers

@@ -1,0 +1,43 @@
+camera_driver:
+  artifacts:
+    camera_driver:
+      node: camera_driver
+      publishers:
+        "camera/camera_info":
+          type: "sensor_msgs/msg/CameraInfo"
+        "camera/image_raw":
+          type: "sensor_msgs/msg/Image"
+        "camera/image_raw/compressed":
+          type: "sensor_msgs/msg/CompressedImage"
+        "camera/image_raw/compressedDepth":
+          type: "sensor_msgs/msg/CompressedImage"
+        "camera/image_raw/theora":
+          type: "theora_image_transport/msg/Packet"
+      serviceservers:
+        "set_camera_info":
+          type: "sensor_msgs/srv/SetCameraInfo"
+      parameters:
+        "camera.image_raw.format":
+          type: String
+          value: "jpeg"
+        "camera.image_raw.jpeg_quality":
+          type: Integer
+          value: 95
+        "camera.image_raw.png_level":
+          type: Integer
+          value: 3
+        "camera.image_raw.tiff.res_unit":
+          type: String
+          value: "inch"
+        "camera.image_raw.tiff.xdpi":
+          type: Integer
+          value: -1
+        "camera.image_raw.tiff.ydpi":
+          type: Integer
+          value: -1
+        "update_rate":
+          type: Double
+          value: 30.000000300000004
+        "use_sim_time":
+          type: Boolean
+          value: True

@@ -1,0 +1,13 @@
+# Mission & HMI node: the operator-facing sink. Speaks nav_status out loud.
+# Audio synthesis itself happens outside the ROS graph -- this node's only
+# job is to receive the trigger.
+# Not in RosModelsCatalog -- project-local package, see turtlebot3_mission_manager.ros2
+# for why this file must exist rather than being a disclosed inference.
+turtlebot3_voice_announcer:
+  artifacts:
+    voice_announcer:
+      node: voice_announcer
+      subscribers:
+        # published by turtlebot3_mission_manager's mission_manager node
+        'nav_status':
+          type: 'std_msgs/msg/String'

@@ -1,0 +1,121 @@
+geographic_msgs:
+  msgs:
+    GeoPointStamped
+      message
+        'std_msgs/msg/Header'[] header
+        'geographic_msgs/msg/GeoPoint'[] position
+    GeoPoint
+      message
+        float64 latitude
+        float64 longitude
+        float64 altitude
+    GeoPoseWithCovariance
+      message
+        'geographic_msgs/msg/GeoPose'[] pose
+        float64[] covariance
+    GeoPath
+      message
+        'std_msgs/msg/Header'[] header
+        'geographic_msgs/msg/GeoPoseStamped'[] poses
+    GeoPoseStamped
+      message
+        'std_msgs/msg/Header'[] header
+        'geographic_msgs/msg/GeoPose'[] pose
+    WayPoint
+      message
+        'unique_identifier_msgs/msg/UUID'[] id
+        'geographic_msgs/msg/GeoPoint'[] position
+        'geographic_msgs/msg/KeyValue'[] props
+    GeoPoseWithCovarianceStamped
+      message
+        'std_msgs/msg/Header'[] header
+        'geographic_msgs/msg/GeoPoseWithCovariance'[] pose
+    BoundingBox
+      message
+        'geographic_msgs/msg/GeoPoint'[] min_pt
+        'geographic_msgs/msg/GeoPoint'[] max_pt
+    GeographicMapChanges
+      message
+        'std_msgs/msg/Header'[] header
+        'geographic_msgs/msg/GeographicMap'[] diffs
+        'unique_identifier_msgs/msg/UUID'[] deletes
+    MapFeature
+      message
+        'unique_identifier_msgs/msg/UUID'[] id
+        'unique_identifier_msgs/msg/UUID'[] components
+        'geographic_msgs/msg/KeyValue'[] props
+    RoutePath
+      message
+        'std_msgs/msg/Header'[] header
+        'unique_identifier_msgs/msg/UUID'[] network
+        'unique_identifier_msgs/msg/UUID'[] segments
+        'geographic_msgs/msg/KeyValue'[] props
+    RouteNetwork
+      message
+        'std_msgs/msg/Header'[] header
+        'unique_identifier_msgs/msg/UUID'[] id
+        'geographic_msgs/msg/BoundingBox'[] bounds
+        'geographic_msgs/msg/WayPoint'[] points
+        'geographic_msgs/msg/RouteSegment'[] segments
+        'geographic_msgs/msg/KeyValue'[] props
+    RouteSegment
+      message
+        'unique_identifier_msgs/msg/UUID'[] id
+        'unique_identifier_msgs/msg/UUID'[] start
+        'unique_identifier_msgs/msg/UUID'[] end
+        'geographic_msgs/msg/KeyValue'[] props
+    GeographicMap
+      message
+        'std_msgs/msg/Header'[] header
+        'unique_identifier_msgs/msg/UUID'[] id
+        'geographic_msgs/msg/BoundingBox'[] bounds
+        'geographic_msgs/msg/WayPoint'[] points
+        'geographic_msgs/msg/MapFeature'[] features
+        'geographic_msgs/msg/KeyValue'[] props
+    KeyValue
+      message
+        string key
+        string value
+    GeoPose
+      message
+        'geographic_msgs/msg/GeoPoint'[] position
+        'geometry_msgs/msg/Quaternion'[] orientation
+    
+  srvs:
+    UpdateGeographicMap
+      request
+        'geographic_msgs/msg/GeographicMapChanges'[] updates
+      response
+        bool success
+        string status
+    GetRoutePlan
+      request
+        'unique_identifier_msgs/msg/UUID'[] network
+        'unique_identifier_msgs/msg/UUID'[] start
+        'unique_identifier_msgs/msg/UUID'[] goal
+      response
+        bool success
+        string status
+        'geographic_msgs/msg/RoutePath'[] plan
+    GetGeographicMap
+      request
+        string url
+        'geographic_msgs/msg/BoundingBox'[] bounds
+      response
+        bool success
+        string status
+        'geographic_msgs/msg/GeographicMap'[] map
+    GetGeoPath
+      request
+        'geographic_msgs/msg/GeoPoint'[] start
+        'geographic_msgs/msg/GeoPoint'[] goal
+      response
+        bool success
+        string status
+        'geographic_msgs/msg/GeoPath'[] plan
+        'unique_identifier_msgs/msg/UUID'[] network
+        'unique_identifier_msgs/msg/UUID'[] start_seg
+        'unique_identifier_msgs/msg/UUID'[] goal_seg
+        float64 distance
+    
+  

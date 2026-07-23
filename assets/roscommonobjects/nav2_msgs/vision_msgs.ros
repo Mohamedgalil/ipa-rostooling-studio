@@ -1,0 +1,77 @@
+vision_msgs:
+  msgs:
+    BoundingBox2D
+      message
+        'vision_msgs/msg/Pose2D'[] center
+        float64 size_x
+        float64 size_y
+    Detection2D
+      message
+        'std_msgs/msg/Header'[] header
+        'vision_msgs/msg/ObjectHypothesisWithPose'[] results
+        'vision_msgs/msg/BoundingBox2D'[] bbox
+        string id
+    ObjectHypothesisWithPose
+      message
+        'vision_msgs/msg/ObjectHypothesis'[] hypothesis
+        'geometry_msgs/msg/PoseWithCovariance'[] pose
+    Pose2D
+      message
+        'vision_msgs/msg/Point2D'[] position
+        float64 theta
+    BoundingBox3D
+      message
+        'geometry_msgs/msg/Pose'[] center
+        'geometry_msgs/msg/Vector3'[] size
+    Detection2DArray
+      message
+        'std_msgs/msg/Header'[] header
+        'vision_msgs/msg/Detection2D'[] detections
+    ObjectHypothesis
+      message
+        string class_id
+        float64 score
+    BoundingBox2DArray
+      message
+        'std_msgs/msg/Header'[] header
+        'vision_msgs/msg/BoundingBox2D'[] boxes
+    Detection3D
+      message
+        'std_msgs/msg/Header'[] header
+        'vision_msgs/msg/ObjectHypothesisWithPose'[] results
+        'vision_msgs/msg/BoundingBox3D'[] bbox
+        string id
+    Classification
+      message
+        'std_msgs/msg/Header'[] header
+        'vision_msgs/msg/ObjectHypothesis'[] results
+    Detection3DArray
+      message
+        'std_msgs/msg/Header'[] header
+        'vision_msgs/msg/Detection3D'[] detections
+    VisionInfo
+      message
+        'std_msgs/msg/Header'[] header
+        string method
+        string database_location
+        int32 database_version
+    LabelInfo
+      message
+        'std_msgs/msg/Header'[] header
+        'vision_msgs/msg/VisionClass'[] class_map
+        float32 threshold
+    VisionClass
+      message
+        uint16 class_id
+        string class_name
+    Point2D
+      message
+        float64 x
+        float64 y
+    BoundingBox3DArray
+      message
+        'std_msgs/msg/Header'[] header
+        'vision_msgs/msg/BoundingBox3D'[] boxes
+    
+  
+  

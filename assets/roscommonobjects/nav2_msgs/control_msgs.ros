@@ -1,0 +1,191 @@
+control_msgs:
+  msgs:
+    DynamicJointState
+      message
+        'std_msgs/msg/Header'[] header
+        string[] joint_names
+        'control_msgs/msg/InterfaceValue'[] interface_values
+    AdmittanceControllerState
+      message
+        'std_msgs/msg/Float64MultiArray'[] mass
+        'std_msgs/msg/Float64MultiArray'[] damping
+        'std_msgs/msg/Float64MultiArray'[] stiffness
+        'geometry_msgs/msg/Quaternion'[] rot_base_control
+        'geometry_msgs/msg/TransformStamped'[] ref_trans_base_ft
+        'std_msgs/msg/Int8MultiArray'[] selected_axes
+        'std_msgs/msg/String'[] ft_sensor_frame
+        'geometry_msgs/msg/TransformStamped'[] admittance_position
+        'geometry_msgs/msg/TwistStamped'[] admittance_acceleration
+        'geometry_msgs/msg/TwistStamped'[] admittance_velocity
+        'geometry_msgs/msg/WrenchStamped'[] wrench_base
+        'sensor_msgs/msg/JointState'[] joint_state
+    JointComponentTolerance
+      message
+        string joint_name
+        uint16 component
+        float64 position
+        float64 velocity
+        float64 acceleration
+    JointControllerState
+      message
+        'std_msgs/msg/Header'[] header
+        float64 set_point
+        float64 process_value
+        float64 process_value_dot
+        float64 error
+        float64 time_step
+        float64 command
+        float64 p
+        float64 i
+        float64 d
+        float64 i_clamp
+        bool antiwindup
+    InterfaceValue
+      message
+        string[] interface_names
+        float64[] values
+    PidState
+      message
+        'std_msgs/msg/Header'[] header
+        'builtin_interfaces/msg/Duration'[] timestep
+        float64 error
+        float64 error_dot
+        float64 p_error
+        float64 i_error
+        float64 d_error
+        float64 p_term
+        float64 i_term
+        float64 d_term
+        float64 i_max
+        float64 i_min
+        float64 output
+    GripperCommand
+      message
+        float64 position
+        float64 max_effort
+    JointJog
+      message
+        'std_msgs/msg/Header'[] header
+        string[] joint_names
+        float64[] displacements
+        float64[] velocities
+        float64 duration
+    MecanumDriveControllerState
+      message
+        'std_msgs/msg/Header'[] header
+        float64 front_left_wheel_velocity
+        float64 back_left_wheel_velocity
+        float64 back_right_wheel_velocity
+        float64 front_right_wheel_velocity
+        'geometry_msgs/msg/Twist'[] reference_velocity
+    JointTrajectoryControllerState
+      message
+        'std_msgs/msg/Header'[] header
+        string[] joint_names
+        'trajectory_msgs/msg/JointTrajectoryPoint'[] reference
+        'trajectory_msgs/msg/JointTrajectoryPoint'[] feedback
+        'trajectory_msgs/msg/JointTrajectoryPoint'[] error
+        'trajectory_msgs/msg/JointTrajectoryPoint'[] output
+        'trajectory_msgs/msg/JointTrajectoryPoint'[] desired
+        'trajectory_msgs/msg/JointTrajectoryPoint'[] actual
+        string[] multi_dof_joint_names
+        'trajectory_msgs/msg/MultiDOFJointTrajectoryPoint'[] multi_dof_reference
+        'trajectory_msgs/msg/MultiDOFJointTrajectoryPoint'[] multi_dof_feedback
+        'trajectory_msgs/msg/MultiDOFJointTrajectoryPoint'[] multi_dof_error
+        'trajectory_msgs/msg/MultiDOFJointTrajectoryPoint'[] multi_dof_output
+        'trajectory_msgs/msg/MultiDOFJointTrajectoryPoint'[] multi_dof_desired
+        'trajectory_msgs/msg/MultiDOFJointTrajectoryPoint'[] multi_dof_actual
+    SteeringControllerStatus
+      message
+        'std_msgs/msg/Header'[] header
+        float64[] traction_wheels_position
+        float64[] traction_wheels_velocity
+        float64[] steer_positions
+        float64[] linear_velocity_command
+        float64[] steering_angle_command
+    JointTolerance
+      message
+        string name
+        float64 position
+        float64 velocity
+        float64 acceleration
+    
+  srvs:
+    QueryTrajectoryState
+      request
+        'builtin_interfaces/msg/Time'[] time
+      response
+        bool success
+        string message
+        string[] name
+        float64[] position
+        float64[] velocity
+        float64[] acceleration
+    QueryCalibrationState
+      request
+      response
+        bool is_calibrated
+    
+  actions:
+    JointTrajectory
+      goal
+        'trajectory_msgs/msg/JointTrajectory'[] trajectory
+      result
+      feedback
+    GripperCommandAct
+      goal
+        'control_msgs/msg/GripperCommand'[] command
+      result
+        float64 position
+        float64 effort
+        bool stalled
+        bool reached_goal
+      feedback
+        float64 position
+        float64 effort
+        bool stalled
+        bool reached_goal
+    PointHead
+      goal
+        'geometry_msgs/msg/PointStamped'[] target
+        'geometry_msgs/msg/Vector3'[] pointing_axis
+        string pointing_frame
+        'builtin_interfaces/msg/Duration'[] min_duration
+        float64 max_velocity
+      result
+      feedback
+        float64 pointing_angle_error
+    FollowJointTrajectory
+      goal
+        'trajectory_msgs/msg/JointTrajectory'[] trajectory
+        'trajectory_msgs/msg/MultiDOFJointTrajectory'[] multi_dof_trajectory
+        'control_msgs/msg/JointTolerance'[] path_tolerance
+        'control_msgs/msg/JointComponentTolerance'[] component_path_tolerance
+        'control_msgs/msg/JointTolerance'[] goal_tolerance
+        'control_msgs/msg/JointComponentTolerance'[] component_goal_tolerance
+        'builtin_interfaces/msg/Duration'[] goal_time_tolerance
+      result
+        int32 error_code
+        string error_string
+      feedback
+        'std_msgs/msg/Header'[] header
+        string[] joint_names
+        'trajectory_msgs/msg/JointTrajectoryPoint'[] desired
+        'trajectory_msgs/msg/JointTrajectoryPoint'[] actual
+        'trajectory_msgs/msg/JointTrajectoryPoint'[] error
+        string[] multi_dof_joint_names
+        'trajectory_msgs/msg/MultiDOFJointTrajectoryPoint'[] multi_dof_desired
+        'trajectory_msgs/msg/MultiDOFJointTrajectoryPoint'[] multi_dof_actual
+        'trajectory_msgs/msg/MultiDOFJointTrajectoryPoint'[] multi_dof_error
+    SingleJointPosition
+      goal
+        float64 position
+        'builtin_interfaces/msg/Duration'[] min_duration
+        float64 max_velocity
+      result
+      feedback
+        'std_msgs/msg/Header'[] header
+        float64 position
+        float64 velocity
+        float64 error
+    

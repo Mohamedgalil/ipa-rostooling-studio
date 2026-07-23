@@ -254,6 +254,64 @@ accepts both `'` and `"`, so the difference vanishes at parse time.
 | `ss->` | `sc->` |
 | `as->` | `ac->` |
 
+### Catalogue checks (added 2026-07-23)
+
+Two real catalogues are vendored under `../assets/`: `roscommonobjects/` (message/service/action
+**type** specs, 53 packages) and `rosmodelscatalog/` (standard package **node** models, 48
+nodes across 9 domains — Nav2, TurtleBot 3, arms, cameras, etc.). `build_type_index.py` /
+`build_node_index.py` index them into `assets/type_index.json` / `assets/node_index.json`; these
+rules consume that index. Disable all nine with `--no-catalogue` (or `ROSMODEL_NO_CATALOGUE=1`
+in `--hook` mode) for a workspace whose references are heavily project-local. See `SKILL.md` §8c.
+
+| ID | Severity | Check | Applies to |
+|---|---|---|---|
+| `RM081` | WARNING | Quoted `type:` ref not indexed in `type_index.json` at all | `.ros`, `.ros2` |
+| `RM082` | ERROR | Package indexed, but this type name isn't — suggests nearest match | `.ros`, `.ros2` |
+| `RM083` | INFO | Consolidated: which vendored type file(s) this model needs | `.ros`, `.ros2` |
+| `RM084` | WARNING | `from:` package not indexed in `node_index.json` at all | `.rossystem` |
+| `RM085` | ERROR | Package indexed, but this node name isn't — suggests nearest match | `.rossystem` |
+| `RM086` | ERROR | Arrow/parameter target resolves to a catalogued node, but that interface name isn't among its real interfaces — suggests nearest match | `.rossystem` |
+| `RM087` | INFO | Consolidated: which vendored node file(s) this model needs | `.rossystem` |
+| `RM088` | WARNING | `from:` reference resolves against `node_index.json`, but its source line doesn't name the resolved file | `.rossystem` |
+| `RM089` | WARNING | `type:` reference resolves against `type_index.json`, but its source line doesn't name the resolved file | `.ros`, `.ros2` |
+
+`RM081`/`RM084` are WARNING, not ERROR, for the same reason `RM076` is: a genuinely
+project-local package/node is legitimate, and the linter cannot distinguish that from a typo of a
+standard one. `RM082`/`RM085`/`RM086` are ERROR because in those cases the package/node *is*
+known-complete in the catalogue, so a name that doesn't match it is a real defect, not a
+plausible gap — exactly the same reasoning `RM082`'s type-side counterpart already used.
+
+**Why this exists**: `examples/turtlebot2_navigation.rossystem` originally referenced
+`nav2_amcl.amcl`, `nav2_bt_navigator.bt_navigator`, `nav2_planner.planner_server` and
+`nav2_controller.controller_server` — all invented from general Nav2 knowledge with a plausible
+but wrong `nav2_`-style package prefix (the real ones have no prefix at all: `amcl.amcl`,
+`bt_navigator.bt_navigator`, etc.). Nothing before RM081-087 existed could have caught that
+short of a full oracle run with hand-assembled dependencies.
+
+**`RM088`/`RM089` (added 2026-07-23)** close a related but separate gap: RM081-087 make a
+reference *resolve correctly*, but say nothing about whether a reader of the file itself can tell
+it resolved, or to what. A user reviewing `turtlebot3_navigation.rossystem` asked exactly this —
+"you only generated two `.ros2` files, what's your approach for the other seven?" — because seven
+of the nine nodes point at pre-existing catalogue files with no in-file indication of that fact.
+RM088 (node `from:`) and RM089 (`type:` refs) fire a WARNING whenever a reference resolves against
+the catalogue but its own source line doesn't contain the resolved file's name, so the fix is
+mechanically checked rather than left to memory the next time a model is authored or edited.
+
+---
+
+## Companion scripts
+
+| Script | Purpose |
+|---|---|
+| `build_type_index.py` | Rebuilds `assets/type_index.json` and `references/type-catalogue.md` from `assets/roscommonobjects/`. Run after `sync_catalogue.sh` changes anything. |
+| `build_node_index.py` | Rebuilds `assets/node_index.json` and `references/node-catalogue.md` from `assets/rosmodelscatalog/`. Run after `sync_catalogue.sh` changes anything. |
+| `collect_deps.py <model>... <case-dir>` | Lints the given model(s) with the catalogue enabled and copies every file their RM083/RM087 findings named into `<case-dir>` — the automated replacement for hand-copying `tests/oracle/cases/_deps/` files. |
+| `sync_catalogue.sh` | Re-copies both vendored catalogues from the local `material/code` checkouts, diffs against the vendored copy, and reports what changed. Does **not** rebuild the indexes or update `PROVENANCE.md` itself — both are printed as next steps when it detects a change. |
+
+`assets/roscommonobjects/PROVENANCE.md` and `assets/rosmodelscatalog/PROVENANCE.md` record each
+catalogue's source, pinned commit (where readable), and sync date — read those before assuming
+either vendored copy is current.
+
 ---
 
 ## Deviations from the specs, and why
@@ -372,6 +430,13 @@ the script appears in this README and vice versa, with no orphans in either dire
 > firing 5× on `tests/regenerated/manufact/MT.rossystem`, `RM066` has **not** been exercised by a
 > fixture. The whole-corpus counts below also predate both rules and the `RM034` hint rewording —
 > they have not been re-run.
+
+> *Amended 2026-07-23.* The rule set is now **66** ids — `RM081`-`RM089` (catalogue checks) were
+> added and are similarly **not** covered by the whole-corpus counts below. All nine were verified
+> against hand-built fixtures (a resolvable ref, an unresolvable-but-plausible project-local ref,
+> a typo of a real catalogued package/node/type/interface for each of RM081/082, RM084/085, and
+> RM086, plus a resolvable ref with and without a disclosing comment for RM088/089) rather than a
+> corpus sweep — see the commit that introduced them for the exact cases.
 
 ### Whole-corpus run — 305 files, 0 crashes
 

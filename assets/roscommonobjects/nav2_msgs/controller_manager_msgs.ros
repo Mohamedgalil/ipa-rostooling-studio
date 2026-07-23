@@ -1,0 +1,92 @@
+controller_manager_msgs:
+  msgs:
+    ControllerState
+      message
+        string name
+        string state
+        string type
+        string[] claimed_interfaces
+        string[] required_command_interfaces
+        string[] required_state_interfaces
+        bool is_chainable
+        bool is_chained
+        string[] reference_interfaces
+        'controller_manager_msgs/msg/ChainConnection'[] chain_connections
+    ChainConnection
+      message
+        string name
+        string[] reference_interfaces
+    HardwareComponentState
+      message
+        string name
+        string type
+        string class_type
+        'lifecycle_msgs/msg/State'[] state
+        'controller_manager_msgs/msg/HardwareInterface'[] command_interfaces
+        'controller_manager_msgs/msg/HardwareInterface'[] state_interfaces
+    HardwareInterface
+      message
+        string name
+        bool is_available
+        bool is_claimed
+    
+  srvs:
+    ListControllerTypes
+      request
+      response
+        string[] types
+        string[] base_classes
+    SwitchController
+      request
+        string[] activate_controllers
+        string[] deactivate_controllers
+        string[] start_controllers
+        string[] stop_controllers
+        int32 strictness
+        bool start_asap
+        bool activate_asap
+        'builtin_interfaces/msg/Duration'[] timeout
+      response
+        bool ok
+    ListHardwareComponents
+      request
+      response
+        'controller_manager_msgs/msg/HardwareComponentState'[] component
+    SetHardwareComponentState
+      request
+        string name
+        'lifecycle_msgs/msg/State'[] target_state
+      response
+        bool ok
+        'lifecycle_msgs/msg/State'[] state
+    LoadController
+      request
+        string name
+      response
+        bool ok
+    UnloadController
+      request
+        string name
+      response
+        bool ok
+    ReloadControllerLibraries
+      request
+        bool force_kill
+      response
+        bool ok
+    ListControllers
+      request
+      response
+        'controller_manager_msgs/msg/ControllerState'[] controller
+    ListHardwareInterfaces
+      request
+      response
+        'controller_manager_msgs/msg/HardwareInterface'[] command_interfaces
+        'controller_manager_msgs/msg/HardwareInterface'[] state_interfaces
+    ConfigureController
+      request
+        string name
+      response
+        bool ok
+    
+  

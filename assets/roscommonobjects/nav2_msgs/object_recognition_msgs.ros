@@ -1,0 +1,51 @@
+object_recognition_msgs:
+  msgs:
+    ObjectInformation
+      message
+        string name
+        'shape_msgs/msg/Mesh'[] ground_truth_mesh
+        'sensor_msgs/msg/PointCloud2'[] ground_truth_point_cloud
+    Table
+      message
+        'std_msgs/msg/Header'[] header
+        'geometry_msgs/msg/Pose'[] pose
+        'geometry_msgs/msg/Point'[] convex_hull
+    RecognizedObject
+      message
+        'std_msgs/msg/Header'[] header
+        'object_recognition_msgs/msg/ObjectType'[] type
+        float32 confidence
+        'sensor_msgs/msg/PointCloud2'[] point_clouds
+        'shape_msgs/msg/Mesh'[] bounding_mesh
+        'geometry_msgs/msg/Point'[] bounding_contours
+        'geometry_msgs/msg/PoseWithCovarianceStamped'[] pose
+    TableArray
+      message
+        'std_msgs/msg/Header'[] header
+        'object_recognition_msgs/msg/Table'[] tables
+    RecognizedObjectArray
+      message
+        'std_msgs/msg/Header'[] header
+        'object_recognition_msgs/msg/RecognizedObject'[] objects
+        float32[] cooccurrence
+    ObjectType
+      message
+        string key
+        string db
+    
+  srvs:
+    GetObjectInformation
+      request
+        'object_recognition_msgs/msg/ObjectType'[] type
+      response
+        'object_recognition_msgs/msg/ObjectInformation'[] information
+    
+  actions:
+    ObjectRecognition
+      goal
+        bool use_roi
+        float32[] filter_limits
+      result
+        'object_recognition_msgs/msg/RecognizedObjectArray'[] recognized_objects
+      feedback
+    

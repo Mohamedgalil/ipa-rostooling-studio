@@ -34,6 +34,7 @@ Exit status: 1 if any ERROR-severity finding was produced, else 0.
 """
 
 import argparse
+import difflib
 import glob
 import io
 import json
@@ -60,6 +61,43 @@ WARNING = "WARNING"
 INFO = "INFO"
 
 SEVERITY_ORDER = {ERROR: 0, WARNING: 1, INFO: 2}
+
+
+# --------------------------------------------------------------------------------------
+# Catalogue indexes (assets/type_index.json, assets/node_index.json) -- built by
+# build_type_index.py / build_node_index.py from the vendored assets/roscommonobjects/
+# and assets/rosmodelscatalog/. Loaded lazily and cached at module level; missing files
+# degrade to "catalogue checks produce nothing" rather than an error, so a stripped-down
+# install without assets/ still runs every other rule normally.
+# --------------------------------------------------------------------------------------
+
+_ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "assets")
+_TYPE_INDEX_PATH = os.path.join(_ASSETS_DIR, "type_index.json")
+_NODE_INDEX_PATH = os.path.join(_ASSETS_DIR, "node_index.json")
+_type_index_cache = {"loaded": False, "value": None}
+_node_index_cache = {"loaded": False, "value": None}
+
+
+def load_type_index():
+    if not _type_index_cache["loaded"]:
+        _type_index_cache["loaded"] = True
+        try:
+            with open(_TYPE_INDEX_PATH, encoding="utf-8") as f:
+                _type_index_cache["value"] = json.load(f).get("types")
+        except (IOError, OSError, ValueError):
+            _type_index_cache["value"] = None
+    return _type_index_cache["value"]
+
+
+def load_node_index():
+    if not _node_index_cache["loaded"]:
+        _node_index_cache["loaded"] = True
+        try:
+            with open(_NODE_INDEX_PATH, encoding="utf-8") as f:
+                _node_index_cache["value"] = json.load(f).get("nodes")
+        except (IOError, OSError, ValueError):
+            _node_index_cache["value"] = None
+    return _node_index_cache["value"]
 
 
 class Finding(object):
@@ -386,7 +424,7 @@ def is_quoted(node):
 
 class Linter(object):
 
-    def __init__(self, path):
+    def __init__(self, path, use_catalogue=True):
         self.path = path
         self.findings = []
         self.kind = None          # "ros" | "ros2" | "rossystem"
@@ -395,6 +433,9 @@ class Linter(object):
         self.lines = []
         self.root = None
         self.had_leading_tabs = False
+        self.use_catalogue = use_catalogue
+        self.needed_type_files = set()
+        self.needed_node_files = set()
 
     # -- finding emission ---------------------------------------------------------------
 
@@ -440,6 +481,7 @@ class Linter(object):
         # field. It gets its own indentation parser and needs no PyYAML at all.
         if self.kind == "ros":
             self.check_ros()
+            self._emit_catalogue_summary()
             return self.findings
 
         if not HAVE_YAML:
@@ -457,7 +499,47 @@ class Linter(object):
         else:
             self.check_rossystem()
 
+        self._emit_catalogue_summary()
         return self.findings
+
+    def _emit_catalogue_summary(self):
+        """One consolidated INFO per catalogue, listing which vendored files this model's
+        resolved references need -- e.g. for collect_deps.py to stage into an oracle case
+        dir. Never fires when catalogue checks are off or nothing resolved."""
+        if not self.use_catalogue:
+            return
+        if self.needed_type_files:
+            self.info(0, "RM083",
+                      "%d catalogue type file(s) needed to fully resolve this model."
+                      % len(self.needed_type_files),
+                      "assets/roscommonobjects/%s -- copy into an oracle case dir with "
+                      "scripts/collect_deps.py, or resolve manually."
+                      % ", assets/roscommonobjects/".join(sorted(self.needed_type_files)))
+        if self.needed_node_files:
+            self.info(0, "RM087",
+                      "%d catalogue node file(s) needed to fully resolve this model."
+                      % len(self.needed_node_files),
+                      "assets/rosmodelscatalog/%s -- copy into an oracle case dir with "
+                      "scripts/collect_deps.py, or resolve manually."
+                      % ", assets/rosmodelscatalog/".join(sorted(self.needed_node_files)))
+
+    def _check_catalogue_disclosure(self, line, file_rel, kind, ref, rule_id):
+        """RM088/RM089: a reference resolved against a vendored catalogue, but the source
+        line doesn't name which file it resolved to. Reading the .rossystem/.ros2 shouldn't
+        require running the linter or searching assets/ to find out which real file backs a
+        given from:/type: reference -- the answer belongs inline, as a comment."""
+        if not (1 <= line <= len(self.lines)):
+            return
+        basename = file_rel.rsplit("/", 1)[-1]
+        src_line = self.lines[line - 1]
+        if basename in src_line or file_rel in src_line:
+            return
+        self.warn(line, rule_id,
+                  "%s reference '%s' resolves to a vendored catalogue file, but this line "
+                  "does not say which one." % (kind, ref),
+                  "Add a trailing comment naming the exact file this resolves to, e.g. "
+                  "'# %s', so a reader can see which real file backs this reference without "
+                  "running the linter or searching assets/ themselves." % file_rel)
 
     # -- byte and layout checks ---------------------------------------------------------
 
@@ -1157,6 +1239,8 @@ class Linter(object):
                           "WARNING here because linking is cross-file and this linter sees one "
                           "file at a time -- but the oracle reports the failure as an ERROR "
                           "('Couldn't resolve reference to TopicSpec'), so treat it as one.")
+            else:
+                self.check_type_catalogue(inner, line)
             return
 
         if RE_MESSAGE_ASIGMENT.match(tok):
@@ -1193,6 +1277,46 @@ class Linter(object):
                        "([A-Za-z_][A-Za-z_0-9]*); '.', '-' and '/' need quoting. If this was "
                        "meant as a constant, remove the spaces around '=' so it lexes as one "
                        "MESSAGE_ASIGMENT token.")
+
+    # ----------------------------------------------------------------------------------
+    # Type catalogue (assets/type_index.json) -- shared by .ros field types and .ros2
+    # interface/parameter type: refs. RM081-083.
+    # ----------------------------------------------------------------------------------
+
+    def check_type_catalogue(self, ref, line):
+        """ref is an already shape-valid, unquoted 'pkg/(msg|srv|action)/Type' string."""
+        if not self.use_catalogue:
+            return
+        index = load_type_index()
+        if index is None:
+            return
+
+        entry = index.get(ref)
+        if entry is not None:
+            self.needed_type_files.add(entry["file"])
+            self._check_catalogue_disclosure(
+                line, "assets/roscommonobjects/%s" % entry["file"], "Type", ref, "RM089")
+            return
+
+        pkg = ref.split("/", 1)[0]
+        pkg_types = [k for k in index if k.split("/", 1)[0] == pkg]
+        if not pkg_types:
+            self.warn(line, "RM081",
+                      "Type reference '%s' is not in the vendored type catalogue." % ref,
+                      "assets/type_index.json (built from assets/roscommonobjects/) has no "
+                      "package '%s' at all. A genuinely project-local message package is "
+                      "legitimate here -- emit a companion .ros defining it. If '%s' was meant "
+                      "to be a standard package, this is likely a typo or a package this "
+                      "catalogue does not cover." % (pkg, pkg))
+            return
+
+        suggestion = difflib.get_close_matches(ref, pkg_types, n=1)
+        hint = ("Package '%s' IS in the catalogue, but '%s' does not match any of its "
+                "indexed types -- the package is known-complete here, so this is a real "
+                "defect, not a plausibly-missing project-local type." % (pkg, ref))
+        if suggestion:
+            hint += " Did you mean '%s' (%s)?" % (suggestion[0], index[suggestion[0]]["file"])
+        self.error(line, "RM082", "Type reference '%s' does not exist." % ref, hint)
 
     # ----------------------------------------------------------------------------------
     # .ros2
@@ -1340,6 +1464,9 @@ class Linter(object):
                                "Message type reference '%s' is not quoted." % type_node.value,
                                "A type reference such as 'std_msgs/msg/String' contains '/', "
                                "which an Xtext ID cannot hold (emission-profile rule 13).")
+                elif re.match(r"^[A-Za-z_][A-Za-z_0-9]*/(msg|srv|action)/[A-Za-z_][A-Za-z_0-9]*$",
+                              type_node.value):
+                    self.check_type_catalogue(type_node.value, node_line(type_node))
 
         for extra in keys:
             if extra not in ("type", "ns", "qos"):
@@ -1755,13 +1882,14 @@ class Linter(object):
                            "A RosNode admits only: %s (RosSystem.xtext:60-75)."
                            % ", ".join(ROSSYSTEM_NODE_KEYS))
 
+        resolved = None
         if "from" not in keys:
             self.error(node_line(node_key), "RM038",
                        "Node '%s' is missing the mandatory 'from:'." % node_key.value,
                        "'from:' from=[ros::Node|EString] is not optional "
                        "(RosSystem.xtext:63).")
         else:
-            self.check_from_reference(mapping_get(node, "from"), node_key)
+            resolved = self.check_from_reference(mapping_get(node, "from"), node_key)
 
         if "namespace" in keys:
             self.warn(node_line(mapping_get_pair(node, "namespace")[0]), "RM044",
@@ -1776,15 +1904,19 @@ class Linter(object):
 
         iface_node = mapping_get(node, "interfaces")
         if iface_node is not None:
-            self.check_interfaces(iface_node, node_key, interfaces)
+            self.check_interfaces(iface_node, node_key, interfaces, resolved)
 
         param_node = mapping_get(node, "parameters")
         if param_node is not None:
             self.check_rossystem_parameters(param_node, node_key)
 
     def check_from_reference(self, node, node_key):
+        """Returns the resolved node-catalogue entry ({'file','artifact','interfaces'}) when
+        'from:' matches a real assets/node_index.json entry, else None. The return value lets
+        check_interfaces/parse_arrow validate arrow targets against THIS SPECIFIC node's real
+        interface set, not just any node in the catalogue."""
         if not is_scalar(node):
-            return
+            return None
         raw = node.value
         line = node_line(node)
 
@@ -1807,8 +1939,48 @@ class Linter(object):
                       "exactly one '.' breaks launch generation. The package part is resolved "
                       "through the target model's declared name, NEVER through the .ros2 "
                       "filename -- 76/253 files differ.")
+            return None
 
-    def check_interfaces(self, node, node_key, interfaces):
+        return self.check_node_catalogue(raw, line)
+
+    def check_node_catalogue(self, ref, line):
+        """ref is 'package.node'. RM084/085; returns the resolved catalogue entry or None."""
+        if not self.use_catalogue:
+            return None
+        index = load_node_index()
+        if index is None:
+            return None
+
+        entry = index.get(ref)
+        if entry is not None:
+            self.needed_node_files.add(entry["file"])
+            self._check_catalogue_disclosure(
+                line, "assets/rosmodelscatalog/%s" % entry["file"], "Node", ref, "RM088")
+            return entry
+
+        pkg = ref.split(".", 1)[0]
+        pkg_nodes = [k for k in index if k.split(".", 1)[0] == pkg]
+        if not pkg_nodes:
+            self.warn(line, "RM084",
+                      "'from:' reference '%s' is not in the vendored node catalogue." % ref,
+                      "assets/node_index.json (built from assets/rosmodelscatalog/) has no "
+                      "package '%s' at all. A genuinely project-local node is legitimate here. "
+                      "If '%s' was meant to be a standard package (e.g. a Nav2/TurtleBot3 "
+                      "node), this is likely a typo or a package this catalogue does not "
+                      "cover -- note TurtleBot 2/Kobuki is NOT in this catalogue at all, only "
+                      "TurtleBot 3." % (pkg, pkg))
+            return None
+
+        suggestion = difflib.get_close_matches(ref, pkg_nodes, n=1)
+        hint = ("Package '%s' IS in the catalogue, but '%s' does not match any of its "
+                "indexed nodes -- the package is known-complete here, so this is a real "
+                "defect, not a plausibly-missing project-local node." % (pkg, ref))
+        if suggestion:
+            hint += " Did you mean '%s' (%s)?" % (suggestion[0], index[suggestion[0]]["file"])
+        self.error(line, "RM085", "Node reference '%s' does not exist." % ref, hint)
+        return None
+
+    def check_interfaces(self, node, node_key, interfaces, resolved=None):
         if not is_sequence(node):
             self.error(node_line(node), "RM055",
                        "'interfaces:' is not a list.",
@@ -1840,7 +2012,7 @@ class Linter(object):
                 else:
                     local_seen[name] = line
 
-                kind, target = self.parse_arrow(val, name, line)
+                kind, target = self.parse_arrow(val, name, line, resolved)
                 if kind is None:
                     continue
                 kinds_in_order.append(kind)
@@ -1860,7 +2032,7 @@ class Linter(object):
                       "Group by kind %s, alphabetical within each kind "
                       "(emission-profile rule 27)." % " -> ".join(ARROW_KIND_ORDER))
 
-    def parse_arrow(self, val, name, line):
+    def parse_arrow(self, val, name, line, resolved=None):
         raw = val.value.strip()
 
         if "->" not in raw:
@@ -1902,6 +2074,22 @@ class Linter(object):
                       "skips any interface whose target lacks '::' when building remappings "
                       "(rossdl_cmake/__init__.py), so the interface is silently dropped from "
                       "launch generation.")
+        elif resolved is not None and self.use_catalogue:
+            art, _, iface = stripped.partition("::")
+            # Only check when the arrow's artifact matches the SAME node 'from:' resolved to --
+            # RosSystemScopeProvider is stock/unverified, so a target naming a different
+            # artifact might legitimately resolve elsewhere; skip rather than false-positive.
+            if art == resolved["artifact"] and iface not in resolved["interfaces"]:
+                candidates = list(resolved["interfaces"])
+                suggestion = difflib.get_close_matches(iface, candidates, n=1)
+                hint = ("'%s' resolved via 'from:' to %s, but '%s' is not among its indexed "
+                        "interfaces (%s)." % (resolved["artifact"], resolved["file"], iface,
+                                              ", ".join(sorted(candidates)) or "none"))
+                if suggestion:
+                    hint += " Did you mean '%s'?" % suggestion[0]
+                self.error(node_line(val), "RM086",
+                           "Arrow target '%s' of interface '%s' does not exist."
+                           % (stripped, name), hint)
 
         return prefix, stripped
 
@@ -2143,8 +2331,9 @@ def run_hook():
     if not path or os.path.splitext(path)[1] not in (".ros", ".ros2", ".rossystem"):
         return 0
 
+    use_catalogue = os.environ.get("ROSMODEL_NO_CATALOGUE", "").strip() not in ("1", "true")
     try:
-        findings = Linter(path).run()
+        findings = Linter(path, use_catalogue=use_catalogue).run()
     except Exception as exc:                                    # never break the turn
         print("rosmodel_lint: internal error on %s: %s" % (path, exc), file=sys.stderr)
         return 0
@@ -2186,6 +2375,11 @@ def main(argv=None):
     parser.add_argument("--max-per-rule", type=int, default=10, metavar="N",
                         help="In text output, show at most N findings per rule per file "
                              "(0 = unlimited, default 10). JSON output is never capped.")
+    parser.add_argument("--no-catalogue", action="store_true",
+                        help="Disable RM081-089 (assets/type_index.json + "
+                             "assets/node_index.json lookups). Use for workspaces whose "
+                             "message/node references are heavily project-local, where the "
+                             "catalogue-absence WARNINGs would be pure noise.")
     args = parser.parse_args(argv)
 
     if args.hook:
@@ -2206,7 +2400,7 @@ def main(argv=None):
     threshold = SEVERITY_ORDER[args.min_severity]
     all_findings = []
     for path in paths:
-        all_findings.extend(Linter(path).run())
+        all_findings.extend(Linter(path, use_catalogue=not args.no_catalogue).run())
 
     shown = [f for f in all_findings if SEVERITY_ORDER.get(f.severity, 9) <= threshold]
 

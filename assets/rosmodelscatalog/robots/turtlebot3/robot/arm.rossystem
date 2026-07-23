@@ -1,0 +1,9 @@
+arm_controller:
+  fromFile: "open_manipulator_x_controller/launch/open_manipulator_x_controller.launch.py"
+  nodes:
+    arm_controller:
+      from: "open_manipulator_x_controller.open_manipulator_x_controller"
+      interfaces:
+       - "arm_controller/joint_trajectory" : sub-> "open_manipulator_x_controller::~/joint_trajectory"
+       - "arm_controller/follow_joint_trajectory" : as-> "open_manipulator_x_controller::~/follow_joint_trajectory"
+       - "arm_controller/state": pub-> "open_manipulator_x_controller::~/state"

@@ -1,0 +1,27 @@
+pcl_msgs:
+  msgs:
+    ModelCoefficients
+      message
+        'std_msgs/msg/Header'[] header
+        float32[] values
+    PointIndices
+      message
+        'std_msgs/msg/Header'[] header
+        int32[] indices
+    Vertices
+      message
+        uint32[] vertices
+    PolygonMesh
+      message
+        'std_msgs/msg/Header'[] header
+        'sensor_msgs/msg/PointCloud2'[] cloud
+        'pcl_msgs/msg/Vertices'[] polygons
+    
+  srvs:
+    UpdateFilename
+      request
+        string filename
+      response
+        bool success
+    
+  

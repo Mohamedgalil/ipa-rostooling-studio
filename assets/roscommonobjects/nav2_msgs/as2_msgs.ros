@@ -1,0 +1,256 @@
+as2_msgs:
+  msgs:
+    ControlMode
+      message
+        'std_msgs/msg/Header'[] header
+        int8 yaw_mode
+        int8 control_mode
+        int8 reference_frame
+    YawMode
+      message
+        uint8 mode
+        float32 angle
+    PlatformStatus
+      message
+        int8 state
+    TrajectoryPoint
+      message
+        'std_msgs/msg/Header'[] header
+        'geometry_msgs/msg/Vector3'[] position
+        'geometry_msgs/msg/Vector3'[] twist
+        'geometry_msgs/msg/Vector3'[] acceleration
+        float32 yaw_angle
+    PlatformInfo
+      message
+        'std_msgs/msg/Header'[] header
+        bool connected
+        bool armed
+        bool offboard
+        'as2_msgs/msg/PlatformStatus'[] status
+        'as2_msgs/msg/ControlMode'[] current_control_mode
+    PlatformStateMachineEvent
+      message
+        int8 event
+    Thrust
+      message
+        'std_msgs/msg/Header'[] header
+        float32 thrust
+        float32 thrust_normalized
+    MissionUpdate
+      message
+        string drone_id
+        int32 mission_id
+        int32 item_id
+        uint8 action
+        string mission
+    ControllerInfo
+      message
+        'std_msgs/msg/Header'[] header
+        'as2_msgs/msg/ControlMode'[] input_control_mode
+        'as2_msgs/msg/ControlMode'[] output_control_mode
+    BehaviorStatus
+      message
+        uint8 status
+    Geofence
+      message
+        int8 id
+        int8 alert
+        string type
+        'geometry_msgs/msg/Polygon'[] polygon
+    NodeStatus
+      message
+        int8 status
+    TrajGenInfo
+      message
+        'std_msgs/msg/Header'[] header
+        'as2_msgs/msg/NodeStatus'[] node_status
+        uint8 active_status
+    PoseWithID
+      message
+        string id
+        'geometry_msgs/msg/Pose'[] pose
+    MissionEvent
+      message
+        'std_msgs/msg/Header'[] header
+        string data
+    PoseStampedWithID
+      message
+        string id
+        'geometry_msgs/msg/PoseStamped'[] pose
+    Speed
+      message
+        'std_msgs/msg/Header'[] header
+        float32 speed
+    FollowTargetInfo
+      message
+        'std_msgs/msg/Header'[] header
+        int8 follow_status
+        int8 follow_mode
+    AlertEvent
+      message
+        int8 alert
+        string description
+    
+  srvs:
+    SetGeofence
+      request
+      response
+        'as2_msgs/msg/Geofence'[] geofence
+        bool success
+    PackagePickUp
+      request
+      response
+        bool enable
+        'geometry_msgs/msg/Twist'[] speed_limit
+        bool success
+    DynamicFollower
+      request
+      response
+        bool enable
+        'geometry_msgs/msg/Twist'[] speed_limit
+        bool success
+    PathToGeopath
+      request
+      response
+        'nav_msgs/msg/Path'[] path
+        bool success
+        'geographic_msgs/msg/GeoPath'[] geo_path
+    SetOrigin
+      request
+      response
+        'geographic_msgs/msg/GeoPoint'[] origin
+        bool success
+    GeopathToPath
+      request
+      response
+        'geographic_msgs/msg/GeoPath'[] geo_path
+        bool success
+        'nav_msgs/msg/Path'[] path
+    GetGeofence
+      request
+      response
+        bool success
+        'as2_msgs/msg/Geofence'[] geofences
+    GetOrigin
+      request
+      response
+        bool success
+        'geographic_msgs/msg/GeoPoint'[] origin
+    SetControlMode
+      request
+      response
+        'as2_msgs/msg/ControlMode'[] control_mode
+        bool success
+    SetSpeed
+      request
+      response
+        'as2_msgs/msg/Speed'[] speed
+        bool success
+    PackageUnPick
+      request
+      response
+        bool enable
+        'geometry_msgs/msg/Twist'[] speed_limit
+        bool success
+    ListControlModes
+      request
+      response
+        string source
+        uint8[] control_modes
+    SetPlatformStateMachineEvent
+      request
+      response
+        'as2_msgs/msg/PlatformStateMachineEvent'[] event
+        bool success
+        'as2_msgs/msg/PlatformStatus'[] current_state
+    DynamicLand
+      request
+      response
+        bool enable
+        'geometry_msgs/msg/Twist'[] speed_limit
+        bool success
+    
+  actions:
+    GoToWaypoint
+      goal
+        'as2_msgs/msg/YawMode'[] yaw
+        'geometry_msgs/msg/PointStamped'[] target_pose
+        float32 max_speed
+      result
+        bool go_to_success
+      feedback
+        float32 actual_speed
+        float32 actual_distance_to_goal
+    SetArmingState
+      goal
+        bool 'request'
+      result
+        bool success
+      feedback
+    FollowPath
+      goal
+        'std_msgs/msg/Header'[] header
+        'as2_msgs/msg/YawMode'[] yaw
+        'as2_msgs/msg/PoseWithID'[] path
+        float32 max_speed
+      result
+        bool follow_path_success
+      feedback
+        float32 actual_speed
+        float32 actual_distance_to_next_waypoint
+        uint16 remaining_waypoints
+        string next_waypoint_id
+    GeneratePolynomialTrajectory
+      goal
+        'std_msgs/msg/Header'[] header
+        'as2_msgs/msg/YawMode'[] yaw
+        'as2_msgs/msg/PoseWithID'[] path
+        float32 max_speed
+      result
+        bool trajectory_generator_success
+      feedback
+        string next_waypoint_id
+        uint16 remaining_waypoints
+    FollowReference
+      goal
+        'as2_msgs/msg/YawMode'[] yaw
+        'geometry_msgs/msg/PointStamped'[] target_pose
+        float32 max_speed_x
+        float32 max_speed_y
+        float32 max_speed_z
+      result
+        bool follow_reference_success
+      feedback
+        float32 actual_speed
+        float32 actual_distance_to_goal
+    SetOffboardMode
+      goal
+        bool 'request'
+      result
+        bool success
+      feedback
+    TakeOff
+      goal
+        float32 takeoff_height
+        float32 takeoff_speed
+      result
+        bool takeoff_success
+      feedback
+        float32 actual_takeoff_speed
+        float32 actual_takeoff_height
+    DetectArucoMarkers
+      goal
+        uint16[] target_ids
+      result
+        bool success
+      feedback
+        bool sucess
+    Land
+      goal
+        float32 land_speed
+      result
+        bool land_success
+      feedback
+        float32 actual_land_speed
+        float32 actual_land_height
+    

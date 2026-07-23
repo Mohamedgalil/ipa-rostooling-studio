@@ -1,0 +1,67 @@
+cartographer_node:
+  artifacts:
+    cartographer_node: # change to exector name
+      node: cartographer_node
+      subscribers:
+        "odom":
+          type: "nav_msgs/msg/Odometry"
+        "scan":
+          type: "sensor_msgs/msg/LaserScan"
+      publishers:
+        "constraint_list":
+          type: "visualization_msgs/msg/MarkerArray"
+        "landmark_poses_list":
+          type: "visualization_msgs/msg/MarkerArray"
+        "scan_matched_points2":
+          type: "sensor_msgs/msg/PointCloud2"
+        "submap_list":
+          type: "cartographer_ros_msgs/msg/SubmapList"
+        "tf":
+          type: "tf2_msgs/msg/TFMessage"
+        "trajectory_node_list":
+          type: "visualization_msgs/msg/MarkerArray"
+      serviceservers:
+        "finish_trajectory":
+          type: "cartographer_ros_msgs/srv/FinishTrajectory"
+        "get_trajectory_states":
+          type: "cartographer_ros_msgs/srv/GetTrajectoryStates"
+        "read_metrics":
+          type: "cartographer_ros_msgs/srv/ReadMetrics"
+        "start_trajectory":
+          type: "cartographer_ros_msgs/srv/StartTrajectory"
+        "submap_query":
+          type: "cartographer_ros_msgs/srv/SubmapQuery"
+        "tf2_frames":
+          type: "tf2_msgs/srv/FrameGraph"
+        "trajectory_query":
+          type: "cartographer_ros_msgs/srv/TrajectoryQuery"
+        "write_state":
+          type: "cartographer_ros_msgs/srv/WriteState"
+      parameters:
+        "qos_overrides./parameter_events.publisher.depth":
+          type: Integer
+          value: 1000
+        "qos_overrides./parameter_events.publisher.durability":
+          type: String
+          value: "volatile"
+        "qos_overrides./parameter_events.publisher.history":
+          type: String
+          value: "keep_last"
+        "qos_overrides./parameter_events.publisher.reliability":
+          type: String
+          value: "reliable"
+        "qos_overrides./tf.publisher.depth":
+          type: Integer
+          value: 100
+        "qos_overrides./tf.publisher.durability":
+          type: String
+          value: "volatile"
+        "qos_overrides./tf.publisher.history":
+          type: String
+          value: "keep_last"
+        "qos_overrides./tf.publisher.reliability":
+          type: String
+          value: "reliable"
+        "use_sim_time":
+          type: Boolean
+          value: False

@@ -1,0 +1,14 @@
+cascade_lifecycle_msgs:
+  msgs:
+    State
+      message
+        uint8 state
+        string node_name
+    Activation
+      message
+        uint8 operation_type
+        string activator
+        string activation
+    
+  
+  

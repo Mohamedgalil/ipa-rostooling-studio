@@ -1,0 +1,7 @@
+turtlebot3_imu:
+  artifacts:
+    turtlebot3_imu: # change to exector name
+      node: turtlebot3_imu
+      publishers:
+        "imu":
+          type: "sensor_msgs/msg/Imu"

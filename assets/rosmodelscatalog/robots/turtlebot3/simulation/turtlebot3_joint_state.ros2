@@ -1,0 +1,7 @@
+turtlebot3_joint_state:
+  artifacts:
+    turtlebot3_joint_state: # change to exector name
+      node: turtlebot3_joint_state
+      publishers:
+        "joint_states":
+          type: "sensor_msgs/msg/JointState"

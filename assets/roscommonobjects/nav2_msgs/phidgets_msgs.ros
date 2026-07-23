@@ -1,0 +1,22 @@
+phidgets_msgs:
+  msgs:
+    EncoderDecimatedSpeed
+      message
+        'std_msgs/msg/Header'[] header
+        float64 avr_speed
+    
+  srvs:
+    SetDigitalOutput
+      request
+        uint16 index
+        bool state
+      response
+        bool success
+    SetAnalogOutput
+      request
+        uint16 index
+        float64 voltage
+      response
+        bool success
+    
+  

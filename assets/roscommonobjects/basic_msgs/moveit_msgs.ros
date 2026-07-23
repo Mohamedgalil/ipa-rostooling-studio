@@ -1,0 +1,575 @@
+moveit_msgs:
+  msgs:
+    RobotState
+      message
+        'sensor_msgs/msg/JointState'[] joint_state
+        'sensor_msgs/msg/MultiDOFJointState'[] multi_dof_joint_state
+        'moveit_msgs/msg/AttachedCollisionObject'[] attached_collision_objects
+        bool is_diff
+    RobotTrajectory
+      message
+        'trajectory_msgs/msg/JointTrajectory'[] joint_trajectory
+        'trajectory_msgs/msg/MultiDOFJointTrajectory'[] multi_dof_joint_trajectory
+    KinematicSolverInfo
+      message
+        string[] joint_names
+        'moveit_msgs/msg/JointLimits'[] limits
+        string[] link_names
+    MotionPlanRequest
+      message
+        'moveit_msgs/msg/WorkspaceParameters'[] workspace_parameters
+        'moveit_msgs/msg/RobotState'[] start_state
+        'moveit_msgs/msg/Constraints'[] goal_constraints
+        'moveit_msgs/msg/Constraints'[] path_constraints
+        'moveit_msgs/msg/TrajectoryConstraints'[] trajectory_constraints
+        'moveit_msgs/msg/GenericTrajectory'[] reference_trajectories
+        string pipeline_id
+        string planner_id
+        string group_name
+        int32 num_planning_attempts
+        float64 allowed_planning_time
+        float64 max_velocity_scaling_factor
+        float64 max_acceleration_scaling_factor
+        string cartesian_speed_end_effector_link
+        float64 max_cartesian_speed
+    PlannerParams
+      message
+        string[] keys
+        string[] values
+        string[] descriptions
+    PositionIKRequest
+      message
+        string group_name
+        'moveit_msgs/msg/RobotState'[] robot_state
+        'moveit_msgs/msg/Constraints'[] constraints
+        bool avoid_collisions
+        string ik_link_name
+        'geometry_msgs/msg/PoseStamped'[] pose_stamped
+        string[] ik_link_names
+        'geometry_msgs/msg/PoseStamped'[] pose_stamped_vector
+        'builtin_interfaces/msg/Duration'[] timeout
+    JointLimits
+      message
+        string joint_name
+        bool has_position_limits
+        float64 min_position
+        float64 max_position
+        bool has_velocity_limits
+        float64 max_velocity
+        bool has_acceleration_limits
+        float64 max_acceleration
+        bool has_jerk_limits
+        float64 max_jerk
+    AllowedCollisionMatrix
+      message
+        string[] entry_names
+        'moveit_msgs/msg/AllowedCollisionEntry'[] entry_values
+        string[] default_entry_names
+        bool[] default_entry_values
+    Constraints
+      message
+        string name
+        'moveit_msgs/msg/JointConstraint'[] joint_constraints
+        'moveit_msgs/msg/PositionConstraint'[] position_constraints
+        'moveit_msgs/msg/OrientationConstraint'[] orientation_constraints
+        'moveit_msgs/msg/VisibilityConstraint'[] visibility_constraints
+    PositionConstraint
+      message
+        'std_msgs/msg/Header'[] header
+        string link_name
+        'geometry_msgs/msg/Vector3'[] target_point_offset
+        'moveit_msgs/msg/BoundingVolume'[] constraint_region
+        float64 weight
+    LinkPadding
+      message
+        string link_name
+        float64 padding
+    MotionPlanDetailedResponse
+      message
+        'moveit_msgs/msg/RobotState'[] trajectory_start
+        string group_name
+        'moveit_msgs/msg/RobotTrajectory'[] trajectory
+        string[] description
+        float64[] processing_time
+        'moveit_msgs/msg/MoveItErrorCodes'[] error_code
+    ContactInformation
+      message
+        'std_msgs/msg/Header'[] header
+        'geometry_msgs/msg/Point'[] position
+        'geometry_msgs/msg/Vector3'[] normal
+        float64 depth
+        string contact_body_1
+        uint32 body_type_1
+        string contact_body_2
+        uint32 body_type_2
+    PlaceLocation
+      message
+        string id
+        'trajectory_msgs/msg/JointTrajectory'[] post_place_posture
+        'geometry_msgs/msg/PoseStamped'[] place_pose
+        float64 quality
+        'moveit_msgs/msg/GripperTranslation'[] pre_place_approach
+        'moveit_msgs/msg/GripperTranslation'[] post_place_retreat
+        string[] allowed_touch_objects
+    TrajectoryConstraints
+      message
+        'moveit_msgs/msg/Constraints'[] constraints
+    PlanningOptions
+      message
+        'moveit_msgs/msg/PlanningScene'[] planning_scene_diff
+        bool plan_only
+        bool look_around
+        int32 look_around_attempts
+        float64 max_safe_execution_cost
+        bool replan
+        int32 replan_attempts
+        float64 replan_delay
+    ObjectColor
+      message
+        string id
+        'std_msgs/msg/ColorRGBA'[] color
+    CartesianPoint
+      message
+        'geometry_msgs/msg/Pose'[] pose
+        'geometry_msgs/msg/Twist'[] velocity
+        'geometry_msgs/msg/Accel'[] acceleration
+    DisplayRobotState
+      message
+        'moveit_msgs/msg/RobotState'[] state
+        'moveit_msgs/msg/ObjectColor'[] highlight_links
+        bool hide
+    PlanningScene
+      message
+        string name
+        'moveit_msgs/msg/RobotState'[] robot_state
+        string robot_model_name
+        'geometry_msgs/msg/TransformStamped'[] fixed_frame_transforms
+        'moveit_msgs/msg/AllowedCollisionMatrix'[] allowed_collision_matrix
+        'moveit_msgs/msg/LinkPadding'[] link_padding
+        'moveit_msgs/msg/LinkScale'[] link_scale
+        'moveit_msgs/msg/ObjectColor'[] object_colors
+        'moveit_msgs/msg/PlanningSceneWorld'[] world
+        bool is_diff
+    ConstraintEvalResult
+      message
+        bool result
+        float64 distance
+    JointConstraint
+      message
+        string joint_name
+        float64 position
+        float64 tolerance_above
+        float64 tolerance_below
+        float64 weight
+    BoundingVolume
+      message
+        'shape_msgs/msg/SolidPrimitive'[] primitives
+        'geometry_msgs/msg/Pose'[] primitive_poses
+        'shape_msgs/msg/Mesh'[] meshes
+        'geometry_msgs/msg/Pose'[] mesh_poses
+    LinkScale
+      message
+        string link_name
+        float64 scale
+    CartesianTrajectory
+      message
+        'std_msgs/msg/Header'[] header
+        string tracked_frame
+        'moveit_msgs/msg/CartesianTrajectoryPoint'[] points
+    MotionSequenceRequest
+      message
+        'moveit_msgs/msg/MotionSequenceItem'[] items
+    VisibilityConstraint
+      message
+        float64 target_radius
+        'geometry_msgs/msg/PoseStamped'[] target_pose
+        int32 cone_sides
+        'geometry_msgs/msg/PoseStamped'[] sensor_pose
+        float64 max_view_angle
+        float64 max_range_angle
+        uint8 sensor_view_direction
+        float64 weight
+    WorkspaceParameters
+      message
+        'std_msgs/msg/Header'[] header
+        'geometry_msgs/msg/Vector3'[] min_corner
+        'geometry_msgs/msg/Vector3'[] max_corner
+    MotionSequenceResponse
+      message
+        'moveit_msgs/msg/MoveItErrorCodes'[] error_code
+        'moveit_msgs/msg/RobotState'[] sequence_start
+        'moveit_msgs/msg/RobotTrajectory'[] planned_trajectories
+        float64 planning_time
+    CostSource
+      message
+        float64 cost_density
+        'geometry_msgs/msg/Vector3'[] aabb_min
+        'geometry_msgs/msg/Vector3'[] aabb_max
+    PlannerInterfaceDescription
+      message
+        string name
+        string pipeline_id
+        string[] planner_ids
+    AttachedCollisionObject
+      message
+        string link_name
+        'moveit_msgs/msg/CollisionObject'[] object
+        string[] touch_links
+        'trajectory_msgs/msg/JointTrajectory'[] detach_posture
+        float64 weight
+    OrientedBoundingBox
+      message
+        'geometry_msgs/msg/Pose'[] pose
+        'geometry_msgs/msg/Point32'[] extents
+    Grasp
+      message
+        string id
+        'trajectory_msgs/msg/JointTrajectory'[] pre_grasp_posture
+        'trajectory_msgs/msg/JointTrajectory'[] grasp_posture
+        'geometry_msgs/msg/PoseStamped'[] grasp_pose
+        float64 grasp_quality
+        'moveit_msgs/msg/GripperTranslation'[] pre_grasp_approach
+        'moveit_msgs/msg/GripperTranslation'[] post_grasp_retreat
+        'moveit_msgs/msg/GripperTranslation'[] post_place_retreat
+        float32 max_contact_force
+        string[] allowed_touch_objects
+    PlanningSceneWorld
+      message
+        'moveit_msgs/msg/CollisionObject'[] collision_objects
+        'octomap_msgs/msg/OctomapWithPose'[] octomap
+    MoveItErrorCodes
+      message
+        int32 val
+    AllowedCollisionEntry
+      message
+        bool[] enabled
+    OrientationConstraint
+      message
+        'std_msgs/msg/Header'[] header
+        'geometry_msgs/msg/Quaternion'[] orientation
+        string link_name
+        float64 absolute_x_axis_tolerance
+        float64 absolute_y_axis_tolerance
+        float64 absolute_z_axis_tolerance
+        uint8 parameterization
+        float64 weight
+    CollisionObject
+      message
+        'std_msgs/msg/Header'[] header
+        'geometry_msgs/msg/Pose'[] pose
+        string id
+        'object_recognition_msgs/msg/ObjectType'[] type
+        'shape_msgs/msg/SolidPrimitive'[] primitives
+        'geometry_msgs/msg/Pose'[] primitive_poses
+        'shape_msgs/msg/Mesh'[] meshes
+        'geometry_msgs/msg/Pose'[] mesh_poses
+        'shape_msgs/msg/Plane'[] planes
+        'geometry_msgs/msg/Pose'[] plane_poses
+        string[] subframe_names
+        'geometry_msgs/msg/Pose'[] subframe_poses
+        byte operation
+    GripperTranslation
+      message
+        'geometry_msgs/msg/Vector3Stamped'[] direction
+        float32 desired_distance
+        float32 min_distance
+    MotionPlanResponse
+      message
+        'moveit_msgs/msg/RobotState'[] trajectory_start
+        string group_name
+        'moveit_msgs/msg/RobotTrajectory'[] trajectory
+        float64 planning_time
+        'moveit_msgs/msg/MoveItErrorCodes'[] error_code
+    CartesianTrajectoryPoint
+      message
+        'moveit_msgs/msg/CartesianPoint'[] point
+        'builtin_interfaces/msg/Duration'[] time_from_start
+    DisplayTrajectory
+      message
+        string model_id
+        'moveit_msgs/msg/RobotTrajectory'[] trajectory
+        'moveit_msgs/msg/RobotState'[] trajectory_start
+    GenericTrajectory
+      message
+        'std_msgs/msg/Header'[] header
+        'trajectory_msgs/msg/JointTrajectory'[] joint_trajectory
+        'moveit_msgs/msg/CartesianTrajectory'[] cartesian_trajectory
+    PlanningSceneComponents
+      message
+        uint32 components
+    MotionSequenceItem
+      message
+        'moveit_msgs/msg/MotionPlanRequest'[] req
+        float64 blend_radius
+
+  srvs:
+    SaveMap
+      request
+        string filename
+      response
+        bool success
+    GraspPlanning
+      request
+        string group_name
+        'moveit_msgs/msg/CollisionObject'[] target
+        string[] support_surfaces
+        'moveit_msgs/msg/Grasp'[] candidate_grasps
+        'moveit_msgs/msg/CollisionObject'[] movable_obstacles
+      response
+        'moveit_msgs/msg/Grasp'[] grasps
+        'moveit_msgs/msg/MoveItErrorCodes'[] error_code
+    GetStateValidity
+      request
+        'moveit_msgs/msg/RobotState'[] robot_state
+        string group_name
+        'moveit_msgs/msg/Constraints'[] constraints
+      response
+        bool valid
+        'moveit_msgs/msg/ContactInformation'[] contacts
+        'moveit_msgs/msg/CostSource'[] cost_sources
+        'moveit_msgs/msg/ConstraintEvalResult'[] constraint_result
+    GetRobotStateFromWarehouse
+      request
+        string name
+        string robot
+      response
+        'moveit_msgs/msg/RobotState'[] state
+    UpdatePointcloudOctomap
+      request
+        'sensor_msgs/msg/PointCloud2'[] cloud
+      response
+        bool success
+    GetMotionSequence
+      request
+        'moveit_msgs/msg/MotionSequenceRequest'[] "request"
+      response
+        'moveit_msgs/msg/MotionSequenceResponse'[] "response"
+    ExecuteKnownTrajectory
+      request
+        'moveit_msgs/msg/RobotTrajectory'[] trajectory
+        bool wait_for_execution
+      response
+        'moveit_msgs/msg/MoveItErrorCodes'[] error_code
+    ApplyPlanningScene
+      request
+        'moveit_msgs/msg/PlanningScene'[] scene
+      response
+        bool success
+    GetPositionIK
+      request
+        'moveit_msgs/msg/PositionIKRequest'[] ik_request
+      response
+        'moveit_msgs/msg/RobotState'[] solution
+        'moveit_msgs/msg/MoveItErrorCodes'[] error_code
+    GetPlanningScene
+      request
+        'moveit_msgs/msg/PlanningSceneComponents'[] components
+      response
+        'moveit_msgs/msg/PlanningScene'[] scene
+    ListRobotStatesInWarehouse
+      request
+        string regex
+        string robot
+      response
+        string[] states
+    LoadMap
+      request
+        string filename
+      response
+        bool success
+    ChangeControlDimensions
+      request
+        bool control_x_translation
+        bool control_y_translation
+        bool control_z_translation
+        bool control_x_rotation
+        bool control_y_rotation
+        bool control_z_rotation
+      response
+        bool success
+    GetPlannerParams
+      request
+        string pipeline_id
+        string planner_config
+        string group
+      response
+        'moveit_msgs/msg/PlannerParams'[] params
+    RenameRobotStateInWarehouse
+      request
+        string old_name
+        string new_name
+        string robot
+      response
+    QueryPlannerInterfaces
+      request
+      response
+        'moveit_msgs/msg/PlannerInterfaceDescription'[] planner_interfaces
+    GetPositionFK
+      request
+        'std_msgs/msg/Header'[] header
+        string[] fk_link_names
+        'moveit_msgs/msg/RobotState'[] robot_state
+      response
+        'geometry_msgs/msg/PoseStamped'[] pose_stamped
+        string[] fk_link_names
+        'moveit_msgs/msg/MoveItErrorCodes'[] error_code
+    DeleteRobotStateFromWarehouse
+      request
+        string name
+        string robot
+      response
+    SetPlannerParams
+      request
+        string pipeline_id
+        string planner_config
+        string group
+        'moveit_msgs/msg/PlannerParams'[] params
+        bool replace
+      response
+    GetMotionPlan
+      request
+        'moveit_msgs/msg/MotionPlanRequest'[] motion_plan_request
+      response
+        'moveit_msgs/msg/MotionPlanResponse'[] motion_plan_response
+    CheckIfRobotStateExistsInWarehouse
+      request
+        string name
+        string robot
+      response
+        bool exists
+    GetCartesianPath
+      request
+        'std_msgs/msg/Header'[] header
+        'moveit_msgs/msg/RobotState'[] start_state
+        string group_name
+        string link_name
+        'geometry_msgs/msg/Pose'[] waypoints
+        float64 max_step
+        float64 jump_threshold
+        float64 prismatic_jump_threshold
+        float64 revolute_jump_threshold
+        bool avoid_collisions
+        'moveit_msgs/msg/Constraints'[] path_constraints
+      response
+        'moveit_msgs/msg/RobotState'[] start_state
+        'moveit_msgs/msg/RobotTrajectory'[] solution
+        float64 fraction
+        'moveit_msgs/msg/MoveItErrorCodes'[] error_code
+    ChangeDriftDimensions
+      request
+        bool drift_x_translation
+        bool drift_y_translation
+        bool drift_z_translation
+        bool drift_x_rotation
+        bool drift_y_rotation
+        bool drift_z_rotation
+        'geometry_msgs/msg/Transform'[] transform_jog_frame_to_drift_frame
+      response
+        bool success
+    SaveRobotStateToWarehouse
+      request
+        string name
+        string robot
+        'moveit_msgs/msg/RobotState'[] state
+      response
+        bool success
+
+  actions:
+    Place
+      goal
+        string group_name
+        string attached_object_name
+        'moveit_msgs/msg/PlaceLocation'[] place_locations
+        bool place_eef
+        string support_surface_name
+        bool allow_gripper_support_collision
+        'moveit_msgs/msg/Constraints'[] path_constraints
+        string planner_id
+        string[] allowed_touch_objects
+        float64 allowed_planning_time
+        'moveit_msgs/msg/PlanningOptions'[] planning_options
+      result
+        'moveit_msgs/msg/MoveItErrorCodes'[] error_code
+        'moveit_msgs/msg/RobotState'[] trajectory_start
+        'moveit_msgs/msg/RobotTrajectory'[] trajectory_stages
+        string[] trajectory_descriptions
+        'moveit_msgs/msg/PlaceLocation'[] place_location
+        float64 planning_time
+      feedback
+        string state
+    MoveGroupSequence
+      goal
+        'moveit_msgs/msg/MotionSequenceRequest'[] "request"
+        'moveit_msgs/msg/PlanningOptions'[] planning_options
+      result
+        'moveit_msgs/msg/MotionSequenceResponse'[] "response"
+      feedback
+        string state
+    HybridPlanner
+      goal
+        string planning_group
+        'moveit_msgs/msg/MotionSequenceRequest'[] motion_sequence
+      result
+        'moveit_msgs/msg/MoveItErrorCodes'[] error_code
+        string error_message
+      feedback
+        string feedback
+    ExecuteTrajectory
+      goal
+        'moveit_msgs/msg/RobotTrajectory'[] trajectory
+      result
+        'moveit_msgs/msg/MoveItErrorCodes'[] error_code
+      feedback
+        string state
+    MoveGroup
+      goal
+        'moveit_msgs/msg/MotionPlanRequest'[] "request"
+        'moveit_msgs/msg/PlanningOptions'[] planning_options
+      result
+        'moveit_msgs/msg/MoveItErrorCodes'[] error_code
+        'moveit_msgs/msg/RobotState'[] trajectory_start
+        'moveit_msgs/msg/RobotTrajectory'[] planned_trajectory
+        'moveit_msgs/msg/RobotTrajectory'[] executed_trajectory
+        float64 planning_time
+      feedback
+        string state
+    Pickup
+      goal
+        string target_name
+        string group_name
+        string end_effector
+        'moveit_msgs/msg/Grasp'[] possible_grasps
+        string support_surface_name
+        bool allow_gripper_support_collision
+        string[] attached_object_touch_links
+        bool minimize_object_distance
+        'moveit_msgs/msg/Constraints'[] path_constraints
+        string planner_id
+        string[] allowed_touch_objects
+        float64 allowed_planning_time
+        'moveit_msgs/msg/PlanningOptions'[] planning_options
+      result
+        'moveit_msgs/msg/MoveItErrorCodes'[] error_code
+        'moveit_msgs/msg/RobotState'[] trajectory_start
+        'moveit_msgs/msg/RobotTrajectory'[] trajectory_stages
+        string[] trajectory_descriptions
+        'moveit_msgs/msg/Grasp'[] grasp
+        float64 planning_time
+      feedback
+        string state
+    GlobalPlanner
+      goal
+        string planning_group
+        'moveit_msgs/msg/MotionSequenceRequest'[] motion_sequence
+      result
+        'moveit_msgs/msg/MotionPlanResponse'[] "response"
+      feedback
+        string feedback
+    LocalPlanner
+      goal
+        'moveit_msgs/msg/Constraints'[] local_constraints
+      result
+        'moveit_msgs/msg/MoveItErrorCodes'[] error_code
+        string error_message
+      feedback
+        string feedback

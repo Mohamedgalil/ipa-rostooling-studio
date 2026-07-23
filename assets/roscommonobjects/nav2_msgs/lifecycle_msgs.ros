@@ -1,0 +1,42 @@
+lifecycle_msgs:
+  msgs:
+    TransitionDescription
+      message
+        'lifecycle_msgs/msg/Transition'[] transition
+        'lifecycle_msgs/msg/State'[] start_state
+        'lifecycle_msgs/msg/State'[] goal_state
+    Transition
+      message
+        uint8 id
+        string label
+    TransitionEvent
+      message
+        uint64 timestamp
+        'lifecycle_msgs/msg/Transition'[] transition
+        'lifecycle_msgs/msg/State'[] start_state
+        'lifecycle_msgs/msg/State'[] goal_state
+    State
+      message
+        uint8 id
+        string label
+    
+  srvs:
+    ChangeState
+      request
+        'lifecycle_msgs/msg/Transition'[] transition
+      response
+        bool success
+    GetState
+      request
+      response
+        'lifecycle_msgs/msg/State'[] current_state
+    GetAvailableTransitions
+      request
+      response
+        'lifecycle_msgs/msg/TransitionDescription'[] available_transitions
+    GetAvailableStates
+      request
+      response
+        'lifecycle_msgs/msg/State'[] available_states
+    
+  

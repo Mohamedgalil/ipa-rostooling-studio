@@ -1,0 +1,22 @@
+# Mission & HMI node: accepts an operator's goal, drives it through Nav2's
+# NavigateToPose action (served by bt_navigator, see turtlebot3_navigation.rossystem),
+# and reports status for turtlebot3_voice_announcer to speak.
+# Not in RosModelsCatalog -- project-local package, authored here so that the
+# "from:" reference in the .rossystem has a real backing file (see feedback_v2.md
+# point 2: every from:/node mentioned in a .rossystem must have a companion .ros2).
+turtlebot3_mission_manager:
+  artifacts:
+    mission_manager:
+      node: mission_manager
+      publishers:
+        # spoken-status trigger, consumed by turtlebot3_voice_announcer
+        'nav_status':
+          type: 'std_msgs/msg/String'
+      subscribers:
+        # the operator's requested target -- external input, e.g. RViz "2D Nav Goal"
+        'goal_pose':
+          type: 'geometry_msgs/msg/PoseStamped'
+      actionclients:
+        # calls bt_navigator, which owns the actual navigation behavior tree
+        'navigate_to_pose':
+          type: 'nav2_msgs/action/NavigateToPose'

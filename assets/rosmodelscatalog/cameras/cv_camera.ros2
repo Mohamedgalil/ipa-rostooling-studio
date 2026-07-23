@@ -1,0 +1,39 @@
+cv_camera:
+  fromGitRepo: "https://github.com/Kapernikov/cv_camera/"
+  artifacts:
+    cv_camera_node: # change to exector name
+      node: cv_camera_node
+      publishers:
+        camera_info:
+          type: "sensor_msgs/msg/CameraInfo"
+        image_raw:
+          type: "sensor_msgs/msg/Image"
+      serviceservers:
+        set_camera_info:
+          type: "sensor_msgs/srv/SetCameraInfo"
+      parameters:
+        rate:
+          type: Double
+          default: 30.0
+        device_id:
+          type: Integer
+          default: 0
+        device_path:
+          type: String
+          default: ""
+        frame_id:
+          type: String
+          default: camera
+        image_width:
+          type: Integer
+        image_height:
+          type: Integer
+        camera_info_url:
+          type: String
+        file:
+          type: String
+        capture_delay:
+          type: Double
+        rescale_camera_info:
+          type: Boolean
+          default: false

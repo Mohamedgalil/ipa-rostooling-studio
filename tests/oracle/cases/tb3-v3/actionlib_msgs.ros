@@ -1,0 +1,18 @@
+actionlib_msgs:
+  msgs:
+    GoalID
+      message
+        'builtin_interfaces/msg/Time'[] stamp
+        string id
+    GoalStatusArray
+      message
+        'std_msgs/msg/Header'[] header
+        'actionlib_msgs/msg/GoalStatus'[] status_list
+    GoalStatus
+      message
+        'actionlib_msgs/msg/GoalID'[] goal_id
+        uint8 status
+        string text
+    
+  
+  

@@ -1,0 +1,217 @@
+gazebo_msgs:
+  msgs:
+     WheelSlip
+       message
+         # This is a message that holds data to describe the wheel slip for a set of wheels. # # The wheel slip is defined by # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros the lateral slip of the wheel, as an angle from the direction of travel (radians), and # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros the longitudinal slip of the wheel, as a percentage of the current wheel's speed # # Each wheel is uniquely identified by its name. # # This message consists of multiple arrays. # All arrays in this message should be the same size. # This is the only way to uniquely associate the wheel name with the correct slip values. string[] name float64[] lateral_slip float64[] longitudinal_slip
+     EntityState
+       message
+         # Holds an entity's pose and twist string name # Entity's scoped name. # An entity can be a model, link, collision, light, etc. # Be sure to use gazebo scoped naming notation (e.g. []) "geometry_msgs.Pose" pose # Pose in reference frame. "geometry_msgs.Twist" twist # Twist in reference frame. string reference_frame # "Pose.twist" are expressed relative to the frame of this entity. # Leaving empty or "world" defaults to inertial world frame.
+     ModelStates
+       message
+         # broadcast all model states in world frame string[] name # model names "geometry_msgs.Pose"[] pose # desired pose in world frame "geometry_msgs.Twist"[] twist # desired twist in world frame
+     ODEPhysics
+       message
+         bool auto_disable_bodies # enable auto disabling of bodies, default false uint32 sor_pgs_precon_iters # preconditioning inner iterations when uisng projected Gauss Seidel uint32 sor_pgs_iters # inner iterations when uisng projected Gauss Seidel float64 sor_pgs_w # relaxation parameter when using projected Gauss Seidel, 1=no relaxation float64 sor_pgs_rms_error_tol # rms error tolerance before stopping inner iterations float64 contact_surface_layer # contact "dead-band" width float64 contact_max_correcting_vel # contact maximum correction velocity float64 cfm # global constraint force mixing float64 erp # global error reduction parameter uint32 max_contacts # maximum contact joints between two geoms
+     SensorPerformanceMetric
+       message
+         string name float64 sim_update_rate float64 real_update_rate float64 fps
+     WorldState
+       message
+         # This is a message that holds data necessary to reconstruct a snapshot of the world # #=Approach to Message Passing=# The state of the world is defined by either # 1. Inertial Model pose, twist # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros kinematic data - connectivity graph from Model to each Link # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros joint angles # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros joint velocities # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros Applied forces - Body wrench # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros relative transform from Body to each collision Geom # Or # 2. Inertial (absolute) Body pose, twist, wrench # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros relative transform from Body to each collision Geom - constant, so not sent over wire # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros back compute from canonical body info to get Model pose and twist. # # Chooing (2.) because it matches most physics engines out there # and is simpler. # #=Future=# Consider impacts on using reduced coordinates "." graph "(parent.child" links) approach # constraint and physics solvers. # #=Application=# This message is used to do the following: # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros reconstruct the world and objects for sensor generation # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros stop "." start simulation - need pose, twist, wrench of each body # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros collision detection - need pose of each collision geometry. "velocity.acceleration" if # #=Assumptions=# Assuming that each (physics) processor node locally already has # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros collision information - Trimesh for Geoms, etc # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros relative transforms from Body to Geom - this is assumed to be fixed, do not send oved wire # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros inertial information - does not vary in time # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros visual information - does not vary in time # "std_msgs.Header" header string[] name "geometry_msgs.Pose"[] pose "geometry_msgs.Twist"[] twist "geometry_msgs.Wrench"[] wrench
+     LinkStates
+       message
+         # broadcast all link states in world frame string[] name # link names "geometry_msgs.Pose"[] pose # desired pose in world frame "geometry_msgs.Twist"[] twist # desired twist in world frame
+     PerformanceMetrics
+       message
+         "std_msgs/msg/Header" header float64 real_time_factor "gazebo_msgs/msg/SensorPerformanceMetric"[] sensors
+     ContactState
+       message
+         string info # text info on this contact string collision1_name # name of contact collision1 string collision2_name # name of contact collision2 "geometry_msgs.Wrench"[] wrenches # list of "forces.torques""geometry_msgs.Wrench" total_wrench # sum of "forces.torques" in every DOF "geometry_msgs.Vector3"[] contact_positions # list of contact position "geometry_msgs.Vector3"[] contact_normals # list of contact normals float64[] depths # list of penetration depths
+     LinkState
+       message
+         # Deprecated, kept for ROS 1 bridge. # Use EntityState # @todo: FIXME: sets pose and twist of a link. All children link "poses.twists" of the URDF tree are not updated accordingly, but should be. string link_name # link name, link_names are in gazebo scoped name notation, [] "geometry_msgs.Pose" pose # desired pose in reference frame "geometry_msgs.Twist" twist # desired twist in reference frame string reference_frame # set "pose.twist" relative to the frame of this "link.body" # leave empty or "world" or "map" defaults to world-frame
+     ModelState
+       message
+         # Deprecated, kept for ROS 1 bridge. # Use EntityState # Set Gazebo Model pose and twist string model_name # model to set state (pose and twist) "geometry_msgs.Pose" pose # desired pose in reference frame "geometry_msgs.Twist" twist # desired twist in reference frame string reference_frame # set "pose.twist" relative to the frame of this entity "(Body.Model)" # leave empty or "world" or "map" defaults to world-frame
+     ODEJointProperties
+       message
+         # access to low level joint properties, change these at your own risk float64[] damping # joint damping float64[] hi_stop # joint limit float64[] lo_stop # joint limit float64[] erp # set joint erp float64[] cfm # set joint cfm float64[] stop_erp # set joint erp for joint limit "contact" joint float64[] stop_cfm # set joint cfm for joint limit "contact" joint float64[] fudge_factor # joint fudge_factor applied at limits, see ODE manual for info. float64[] fmax # ode joint param fmax float64[] vel # ode joint param vel
+     ContactsState
+       message
+         "std_msgs/msg/Header" header # stamp "gazebo_msgs.ContactState"[] states # array of geom pairs in contact
+
+  srvs:
+     SetLinkProperties
+       request
+         string link_name # name of link # link names are prefixed by model name, e.g. pr2::base_link "geometry_msgs.Pose" com # center of mass location in link frame # and orientation of the moment of inertias # relative to the link frame bool gravity_mode # set gravity mode "on.off" float64 mass # linear mass of link float64 ixx # moment of inertia float64 ixy # moment of inertia float64 ixz # moment of inertia float64 iyy # moment of inertia float64 iyz # moment of inertia float64 izz # moment of inertia
+
+       response
+         bool success # return true if get info is successful string status_message # comments if available
+     SetJointTrajectory
+       request
+         # Deprecated, kept for ROS 1 bridge. string model_name "trajectory_msgs.JointTrajectory" joint_trajectory "geometry_msgs.Pose" model_pose bool set_model_pose bool disable_physics_updates # defaults to false
+
+       response
+         bool success # return true if set wrench successful string status_message # comments if available
+     GetModelList
+       request
+
+       response
+         "std_msgs/msg/Header" header # Standard metadata for higher-level stamped data types. # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros header.stamp Simulation time when data was collected. string[] model_names # list of models in the world bool success # return true if get successful
+     GetModelProperties
+       request
+         string model_name # name of Gazebo Model
+
+       response
+         string parent_model_name # parent model string canonical_body_name # name of canonical link, link names are prefixed by model name, e.g. pr2::base_link string[] body_names # list of links, link names are prefixed by model name, e.g. pr2::base_link string[] geom_names # list of collisions string[] joint_names # list of joints attached to the model string[] child_model_names # list of child models bool is_static # returns true if model is static bool success # return true if get successful string status_message # comments if available
+     JointRequest
+       request
+         string joint_name # name of the joint requested
+
+       response
+     GetModelState
+       request
+         # Deprecated, kept for ROS 1 bridge. # Use GetEntityState string model_name # name of Gazebo Model string relative_entity_name # return pose and twist relative to this entity # an entity can be a model, body, or geom # be sure to use gazebo scoped naming notation (e.g. []) # leave empty or "world" will use inertial world frame
+
+       response
+         "std_msgs/msg/Header" header # Standard metadata for higher-level stamped data types. # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros header.seq holds the number of requests since the plugin started # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros header.stamp timestamp related to the pose # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros header.frame_id not used but currently filled with the relative_entity_name "geometry_msgs.Pose" pose # pose of model in relative entity frame "geometry_msgs.Twist" twist # twist of model in relative entity frame bool success # return true if get successful string status_message # comments if available
+     SetLightProperties
+       request
+         string light_name # name of Gazebo Light "std_msgs.ColorRGBA" diffuse # diffuse color as red, green, blue, alpha float64 attenuation_constant float64 attenuation_linear float64 attenuation_quadratic
+
+       response
+         bool success # return true if get successful string status_message # comments if available
+     SpawnEntity
+       request
+         string name # Name of the entity to be spawned (optional). string xml # Entity XML description as a string, either URDF or SDF. string robot_namespace # Spawn robot and all ROS interfaces under this namespace "geometry_msgs.Pose" initial_pose # Initial entity pose. string reference_frame # initial_pose is defined relative to the frame of this entity. # If left empty or "world" or "map", then gazebo world frame is # used. # If non-existent entity is specified, an error is returned # and the entity is not spawned.
+
+       response
+         bool success # Return true if spawned successfully. string status_message # Comments if available.
+     SetJointProperties
+       request
+         string joint_name # name of joint "gazebo_msgs.ODEJointProperties" ode_joint_config # access to ODE joint dynamics properties
+
+       response
+         bool success # return true if get successful string status_message # comments if available
+     ApplyJointEffort
+       request
+         # set urdf joint effort string joint_name # joint to apply wrench (linear force and torque) float64 effort # effort to apply "builtin_interfaces.Time" start_time # optional wrench application start time (seconds) # if start_time < current time, start as soon as possible "builtin_interfaces.Duration" duration # optional duration of wrench application time (seconds) # if duration < 0, apply wrench continuously without end # if duration=0, do nothing # if duration < step size, assume step size and # display warning in status_message
+
+       response
+         bool success # return true if effort application is successful string status_message # comments if available
+     GetWorldProperties
+       request
+         # Deprecated, kept for ROS 1 bridge. # Use GetModelList
+
+       response
+         float64 sim_time # current sim time string[] model_names # list of models in the world bool rendering_enabled # if X is used bool success # return true if get successful string status_message # comments if available
+     DeleteLight
+       request
+         # Deprecated, kept for ROS 1 bridge. # Use DeleteEntity string light_name # name of the light to be deleted
+
+       response
+         bool success # return true if deletion is successful string status_message # comments if available
+     DeleteModel
+       request
+         # Deprecated, kept for ROS 1 bridge. # Use DeleteEntity string model_name # name of the Gazebo Model to be deleted
+
+       response
+         bool success # return true if deletion is successful string status_message # comments if available
+     SpawnModel
+       request
+         # Deprecated, kept for ROS 1 bridge. # Use SpawnEntity string model_name # name of the model to be spawn string model_xml # this should be an urdf or gazebo xml string robot_namespace # spawn robot and all ROS interfaces under this namespace "geometry_msgs.Pose" initial_pose # only applied to canonical body string reference_frame # initial_pose is defined relative to the frame of this "model.body" # if left empty or "world", then gazebo world frame is used # if non-existent "model.body" is specified, an error is returned # and the model is not spawned
+
+       response
+         bool success # return true if spawn successful string status_message # comments if available
+     GetLinkState
+       request
+         # Deprecated, kept for ROS 1 bridge. # Use GetEntityState string link_name # name of link # link names are prefixed by model name, e.g. pr2::base_link string reference_frame # reference frame of returned information, must be a valid link # if empty, use inertial (gazebo world) frame # reference_frame names are prefixed by model name, e.g. pr2::base_link
+
+       response
+         "gazebo_msgs/msg/LinkState" link_state bool success # return true if get info is successful string status_message # comments if available
+     GetEntityState
+       request
+         string name # Entity's scoped name. # An entity can be a model, link, collision, light, etc. # Be sure to use gazebo scoped naming notation (e.g. []) string reference_frame # Return pose and twist relative to this entity. # Leaving empty or "world" will use inertial world frame.
+
+       response
+         "std_msgs/msg/Header" header # Standard metadata for higher-level stamped data types. # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros header.stamp Timestamp related to the pose. # builtin_interfaces.ros common_msgs.ros controller_manager_msgs.ros control_msgs.ros gazebo_msgs.ros generate_messages_model_helper_ros1.sh generate_messages_model_helper.sh lifecycle_msgs.ros map_msgs.ros nav_msgs.ros ros_core.ros turtlesim.ros header.frame_id Filled with the relative_frame. "gazebo_msgs.EntityState" state # Contains pose and twist. bool success # Return true if get was successful. If false, the state contains garbage.
+     SetLinkState
+       request
+         # Deprecated, kept for ROS 1 bridge. # Use SetEntityState "gazebo_msgs.LinkState" link_state
+
+       response
+         bool success # return true if set wrench successful string status_message # comments if available
+     SetPhysicsProperties
+       request
+         # sets pose and twist of a link. All children link "poses.twists" of the URDF tree will be updated accordingly float64 time_step # dt in seconds float64 max_update_rate # throttle maximum physics update rate "geometry_msgs.Vector3" gravity # gravity vector (e.g. earth ~[]) "gazebo_msgs.ODEPhysics" ode_config # configurations for ODE
+
+       response
+         bool success # return true if set wrench successful string status_message # comments if available
+     SetModelState
+       request
+         # Deprecated, kept for ROS 1 bridge. # Use SetEntityState "gazebo_msgs.ModelState" model_state
+
+       response
+         bool success # return true if setting state successful string status_message # comments if available
+     SetModelConfiguration
+       request
+         # Set joint positions for a model string model_name # model to set state string urdf_param_name # UNUSED string[] joint_names # list of joints to set positions. if joint is not listed here, preserve current position. float64[] joint_positions # set to this position.
+
+       response
+         bool success # return true if setting state successful string status_message # comments if available
+     GetLightProperties
+       request
+         string light_name # name of Gazebo Light
+
+       response
+         "std_msgs/msg/ColorRGBA" diffuse # diffuse color as red, green, blue, alpha float64 attenuation_constant float64 attenuation_linear float64 attenuation_quadratic bool success # return true if get successful string status_message # comments if available
+     BodyRequest
+       request
+         # Deprecated, kept for ROS 1 bridge. # Use LinkRequest string body_name # name of the body requested. body names are prefixed by model name, e.g. pr2::base_link
+
+       response
+     ApplyBodyWrench
+       request
+         # Deprecated, kept for ROS 1 bridge. # Use ApplyLinkWrench # Apply Wrench to Gazebo Body. # via the callback mechanism # all Gazebo operations are made in world frame string body_name # Gazebo body to apply wrench (linear force and torque) # wrench is applied in the gazebo world by default # body names are prefixed by model name, e.g. pr2::base_link string reference_frame # wrench is defined in the reference frame of this entity # use inertial frame if left empty # frame names are bodies prefixed by model name, e.g. pr2::base_link "geometry_msgs.Point" reference_point # wrench is defined at this location in the reference frame "geometry_msgs.Wrench" wrench # wrench applied to the origin of the body "builtin_interfaces.Time" start_time # (optional) wrench application start time (seconds) # if start_time is not specified, or # start_time < current time, start as soon as possible "builtin_interfaces.Duration" duration # optional duration of wrench application time (seconds) # if duration < 0, apply wrench continuously without end # if duration=0, do nothing # if duration < step size, apply wrench # for one step size
+
+       response
+         bool success # return true if set wrench successful string status_message # comments if available
+     GetPhysicsProperties
+       request
+
+       response
+         # sets pose and twist of a link. All children link "poses.twists" of the URDF tree will be updated accordingly float64 time_step # dt in seconds bool pause # true if physics engine is paused float64 max_update_rate # throttle maximum physics update rate "geometry_msgs.Vector3" gravity # gravity vector (e.g. earth ~[]) "gazebo_msgs.ODEPhysics" ode_config # contains physics configurations pertaining to ODE bool success # return true if set wrench successful string status_message # comments if available
+     LinkRequest
+       request
+         string link_name # name of the link requested. link names are prefixed by model name, e.g. pr2::base_link
+
+       response
+     DeleteEntity
+       request
+         string name # Name of the Gazebo entity to be deleted. This can be either # a model or a light.
+
+       response
+         bool success # Return true if deletion is successful. string status_message # Comments if available.
+     GetJointProperties
+       request
+         string joint_name # Scoped name of joint
+
+       response
+         # joint type uint8 type uint8 REVOLUTE=0 # single DOF uint8 CONTINUOUS=1 # single DOF (revolute "w.o" limits) uint8 PRISMATIC=2 # single DOF uint8 FIXED=3 # 0 DOF uint8 BALL=4 # 3 DOF movement, 0 DOF control uint8 UNIVERSAL=5 # 2 DOF # dynamics properties float64[] damping # joint state float64[] position float64[] rate # TODO(chapulina) Rename to velocity # service return status bool success # return true if get successful string status_message # comments if available
+     SetEntityState
+       request
+         "gazebo_msgs/msg/EntityState" state # Entity state to set to. # Be sure to fill all fields, values of zero have meaning.
+
+       response
+         bool success # Return true if setting state was successful.
+     ApplyLinkWrench
+       request
+         # Apply Wrench to Gazebo Link. # via the callback mechanism # all Gazebo operations are made in world frame string link_name # Gazebo link to apply wrench (linear force and torque) # wrench is applied in the gazebo world by default # link names are prefixed by model name, e.g. pr2::base_link string reference_frame # wrench is defined in the reference frame of this entity # use inertial frame if left empty # frame names are links prefixed by model name, e.g. pr2::base_link "geometry_msgs.Point" reference_point # wrench is defined at this location in the reference frame "geometry_msgs.Wrench" wrench # wrench applied to the origin of the link "builtin_interfaces.Time" start_time # (optional) wrench application start time (seconds) # if start_time is not specified, or # start_time < current time, start as soon as possible "builtin_interfaces.Duration" duration # optional duration of wrench application time (seconds) # if duration < 0, apply wrench continuously without end # if duration=0, do nothing # if duration < step size, apply wrench # for one step size
+
+       response
+         bool success # return true if set wrench successful string status_message # comments if available
+     GetLinkProperties
+       request
+         string link_name # name of link # link names are prefixed by model name, e.g. pr2::base_link
+       response
+         "geometry_msgs/msg/Pose" com # center of mass location in link frame # and orientation of the moment of inertias # relative to the link frame bool gravity_mode # set gravity mode "on.off" float64 mass # linear mass of link float64 ixx # moment of inertia float64 ixy # moment of inertia float64 ixz # moment of inertia float64 iyy # moment of inertia float64 iyz # moment of inertia float64 izz # moment of inertia bool success # return true if get info is successful string status_message # comments if available

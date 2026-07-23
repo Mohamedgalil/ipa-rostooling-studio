@@ -1,0 +1,7 @@
+turtlebot3_laserscan:
+  artifacts:
+    turtlebot3_laserscan: # change to exector name
+      node: turtlebot3_laserscan
+      publishers:
+        "scan":
+          type: "sensor_msgs/msg/LaserScan"

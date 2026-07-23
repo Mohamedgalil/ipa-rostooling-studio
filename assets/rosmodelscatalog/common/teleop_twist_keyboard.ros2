@@ -1,0 +1,7 @@
+teleop_twist_keyboard:
+  artifacts:
+    teleop_twist_keyboard:
+      node: teleop_twist_keyboard
+      publishers:
+        "cmd_vel":
+          type: "geometry_msgs/msg/Twist"

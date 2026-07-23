@@ -1,0 +1,16 @@
+color_pose_estimation_skill:
+  
+  
+  actions:
+    ColorPoseEstimation
+      goal
+        string color
+        string sub_topic_name
+        int16 timeout
+        string element
+      result
+        uint16 error_code_id
+        'geometry_msgs/msg/PoseStamped'[] color_pose_cube_holder
+        'geometry_msgs/msg/PoseStamped'[] color_pose_cube
+      feedback
+    

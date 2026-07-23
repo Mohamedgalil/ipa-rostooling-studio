@@ -1,0 +1,57 @@
+nav_msgs:
+  msgs:
+    Path
+      message
+        'std_msgs/msg/Header'[] header
+        'geometry_msgs/msg/PoseStamped'[] poses
+    OccupancyGrid
+      message
+        'std_msgs/msg/Header'[] header
+        'nav_msgs/msg/MapMetaData'[] info
+        int8[] data
+    Odometry
+      message
+        'std_msgs/msg/Header'[] header
+        string child_frame_id
+        'geometry_msgs/msg/PoseWithCovariance'[] pose
+        'geometry_msgs/msg/TwistWithCovariance'[] twist
+    GridCells
+      message
+        'std_msgs/msg/Header'[] header
+        float32 cell_width
+        float32 cell_height
+        'geometry_msgs/msg/Point'[] cells
+    MapMetaData
+      message
+        'builtin_interfaces/msg/Time'[] map_load_time
+        float32 resolution
+        uint32 width
+        uint32 height
+        'geometry_msgs/msg/Pose'[] origin
+    
+  srvs:
+    SetMap
+      request
+        'nav_msgs/msg/OccupancyGrid'[] map
+        'geometry_msgs/msg/PoseWithCovarianceStamped'[] initial_pose
+      response
+        bool success
+    LoadMap
+      request
+        string map_url
+      response
+        'nav_msgs/msg/OccupancyGrid'[] map
+        uint8 result
+    GetPlan
+      request
+        'geometry_msgs/msg/PoseStamped'[] start
+        'geometry_msgs/msg/PoseStamped'[] goal
+        float32 tolerance
+      response
+        'nav_msgs/msg/Path'[] plan
+    GetMap
+      request
+      response
+        'nav_msgs/msg/OccupancyGrid'[] map
+    
+  

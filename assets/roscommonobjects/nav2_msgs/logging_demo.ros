@@ -1,0 +1,11 @@
+logging_demo:
+  
+  srvs:
+    ConfigLogger
+      request
+        string logger_name
+        string level
+      response
+        bool success
+    
+  

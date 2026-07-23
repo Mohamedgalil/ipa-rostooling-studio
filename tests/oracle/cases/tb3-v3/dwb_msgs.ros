@@ -1,0 +1,63 @@
+dwb_msgs:
+  msgs:
+    CriticScore
+      message
+        string name
+        float32 raw_score
+        float32 scale
+    LocalPlanEvaluation
+      message
+        'std_msgs/msg/Header'[] header
+        'dwb_msgs/msg/TrajectoryScore'[] twists
+        uint16 best_index
+        uint16 worst_index
+    TrajectoryScore
+      message
+        'dwb_msgs/msg/Trajectory2D'[] traj
+        'dwb_msgs/msg/CriticScore'[] scores
+        float32 total
+    Trajectory2D
+      message
+        'nav_2d_msgs/msg/Twist2D'[] velocity
+        'builtin_interfaces/msg/Duration'[] time_offsets
+        'geometry_msgs/msg/Pose2D'[] poses
+    
+  srvs:
+    DebugLocalPlan
+      request
+        'nav_2d_msgs/msg/Pose2DStamped'[] pose
+        'nav_2d_msgs/msg/Twist2D'[] velocity
+        'nav_2d_msgs/msg/Path2D'[] global_plan
+      response
+        'dwb_msgs/msg/LocalPlanEvaluation'[] results
+    GenerateTwists
+      request
+        'nav_2d_msgs/msg/Twist2D'[] current_vel
+      response
+        'nav_2d_msgs/msg/Twist2D'[] twists
+    GetCriticScore
+      request
+        'nav_2d_msgs/msg/Pose2DStamped'[] pose
+        'nav_2d_msgs/msg/Twist2D'[] velocity
+        'nav_2d_msgs/msg/Path2D'[] global_plan
+        'dwb_msgs/msg/Trajectory2D'[] traj
+        string critic_name
+      response
+        'dwb_msgs/msg/CriticScore'[] score
+    ScoreTrajectory
+      request
+        'nav_2d_msgs/msg/Pose2DStamped'[] pose
+        'nav_2d_msgs/msg/Twist2D'[] velocity
+        'nav_2d_msgs/msg/Path2D'[] global_plan
+        'dwb_msgs/msg/Trajectory2D'[] traj
+      response
+        'dwb_msgs/msg/TrajectoryScore'[] score
+    GenerateTrajectory
+      request
+        'geometry_msgs/msg/Pose2D'[] start_pose
+        'nav_2d_msgs/msg/Twist2D'[] start_vel
+        'nav_2d_msgs/msg/Twist2D'[] cmd_vel
+      response
+        'dwb_msgs/msg/Trajectory2D'[] traj
+    
+  

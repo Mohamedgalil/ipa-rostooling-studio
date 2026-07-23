@@ -58,36 +58,55 @@ One limit that no JDK lifts:
 
 ## Installing
 
+The plugin is self-hosting: its repo is also a Claude Code marketplace
+(`.claude-plugin/marketplace.json`), so `/plugin install` works directly.
+
+**Persistent install** (survives across sessions):
+
+```bash
+# add this repo as a marketplace (local path, git URL, or GitHub owner/repo all work)
+claude plugin marketplace add C:/Users/mae/Downloads/adm-mae/CoreSense/rostooling-plugin
+claude plugin install rostooling-modeler@rostooling-modeler-marketplace
+```
+
+**Single-session dev load** (no marketplace, no install):
+
 ```bash
 claude --plugin-dir C:/Users/mae/Downloads/adm-mae/CoreSense/rostooling-plugin
 ```
 
-Then validate the manifest:
+Validate the manifest at any time:
 
 ```bash
-claude plugin validate C:/Users/mae/Downloads/adm-mae/CoreSense/rostooling-plugin --strict
+claude plugin validate C:/Users/mae/Downloads/adm-mae/CoreSense/rostooling-plugin
 ```
 
-`--strict` promotes unrecognised-field warnings to errors, which is what you want in CI.
+### Two environment variables you must set
 
-### Two things you must edit after cloning
+The plugin bundles its own language-server JAR (`build/ros2-ls/target/…-ls.jar`, referenced via
+`${CLAUDE_PLUGIN_ROOT}` so it travels with the plugin) but it cannot bundle a JDK or a Python
+interpreter. Both `.lsp.json` and `hooks/hooks.json` read an env var with a POSIX default, so on a
+machine where the default resolves correctly you need to set nothing. On **this** machine both
+defaults are wrong, so set both:
 
-1. **`.lsp.json` hardcodes absolute JAR paths.** `${CLAUDE_PLUGIN_ROOT}` is documented for hook
-   commands and MCP configs but not for `.lsp.json`, and it would not help anyway — the JARs live
-   under `material/code/vscode-RosTooling/resources/`, outside the plugin root and inside a
-   read-only reference clone. Point both entries at your own copies. `command` is `"java"`, so a
-   **JDK 19+ must be first on `PATH`** or the servers start under Java 8 and fail.
+1. **`ROSMODEL_JAVA`** — the LSP command is `"${ROSMODEL_JAVA:-java}"`. Bare `java` on `PATH` here is
+   1.8 and the JARs need JDK 19+, so the server would start under Java 8 and die. Point it at
+   Temurin 21:
 
-2. **On Windows, set `ROSMODEL_PYTHON`.** The hook command is
-   `"${ROSMODEL_PYTHON:-python3}" ".../rosmodel_lint.py" --hook`. Bare `python`/`python3` on this
-   machine is the Microsoft Store stub, which prints a German "not found" notice and exits
-   non-zero — the hook would then silently never lint anything. Set it to the real interpreter:
+   ```
+   ROSMODEL_JAVA=C:\Users\mae\AppData\Local\Programs\Eclipse Adoptium\jdk-21.0.11.10-hotspot\bin\java.exe
+   ```
+
+2. **`ROSMODEL_PYTHON`** — the hook command is `"${ROSMODEL_PYTHON:-python3}" .../rosmodel_lint.py`.
+   Bare `python`/`python3` here is the Microsoft Store stub, which prints a "not found" notice and
+   exits non-zero — the hook would then silently never lint. Point it at the real interpreter:
 
    ```
    ROSMODEL_PYTHON=C:\Users\mae\AppData\Local\Programs\Python\Python312\python.exe
    ```
 
-   On Linux/macOS the default `python3` is fine.
+On Linux/macOS the defaults (`java`, `python3`) are usually correct, provided `java -version`
+reports 19+.
 
 ---
 
@@ -97,6 +116,8 @@ claude plugin validate C:/Users/mae/Downloads/adm-mae/CoreSense/rostooling-plugi
 .claude-plugin/plugin.json      manifest
 .lsp.json                       ros2 + ros language servers (auto-discovered at plugin root)
 hooks/hooks.json                PostToolUse linter for .ros2 and .rossystem (auto-discovered)
+commands/update-ros-catalog.md  slash command: refresh popular-ROS-packages reference (cheap agent)
+commands/ros-plot.md            slash command: render .rossystem models as one interactive HTML file
 agents/ros-modeler.md           subagent, preloads the ros-model skill
 skills/ros-model/
   SKILL.md                      entry point: decision tree, hard rules, self-check
@@ -104,6 +125,7 @@ skills/ros-model/
   references/rossystem-syntax.md .rossystem grammar + RosSystemValidator behaviour
   references/worked-examples.md  3 full transformations, failure catalogue, source-defect policy
 scripts/rosmodel_lint.py        static linter, 68 rules (.ros / .ros2 / .rossystem)
+scripts/ros_plot.py             /ros-plot backend: .rossystem -> self-contained interactive HTML
 scripts/README.md               rule reference + deviations + test evidence
 tests/roundtrip.py              semantic round-trip harness
 tests/fixtures/manifest.md      fixture inventory

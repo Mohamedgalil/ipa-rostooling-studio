@@ -1,0 +1,32 @@
+nav_2d_msgs:
+  msgs:
+    Path2D
+      message
+        'std_msgs/msg/Header'[] header
+        'geometry_msgs/msg/Pose2D'[] poses
+    Twist2D
+      message
+        float64 x
+        float64 y
+        float64 theta
+    Pose2D32
+      message
+        float32 x
+        float32 y
+        float32 theta
+    Pose2DStamped
+      message
+        'std_msgs/msg/Header'[] header
+        'geometry_msgs/msg/Pose2D'[] pose
+    Twist2D32
+      message
+        float32 x
+        float32 y
+        float32 theta
+    Twist2DStamped
+      message
+        'std_msgs/msg/Header'[] header
+        'nav_2d_msgs/msg/Twist2D'[] velocity
+    
+  
+  

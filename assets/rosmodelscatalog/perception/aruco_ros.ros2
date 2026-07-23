@@ -1,0 +1,31 @@
+aruco_ros:
+  artifacts:
+    marker_publisher:
+      node: marker_publisher
+      subscribers:
+        "image_raw":
+          type: "sensor_msgs/msg/Image"
+      publishers:
+        "debug":
+          type: "sensor_msgs/msg/Image"
+        "markers":
+          type: "aruco_msgs/msg/MarkerArray"
+        "markers_list":
+          type: "std_msgs/msg/UInt32MultiArray"
+        "result":
+          type: "sensor_msgs/msg/Image"
+      parameters:
+        "camera_frame":
+          type: String
+        "image_is_rectified":
+          type: Boolean
+        "marker_size":
+          type: Double
+        "reference_frame":
+          type: String
+        "raw_image_topic":
+          type: String
+        "use_camera_info":
+          type: Boolean
+        "use_sim_time":
+          type: Boolean

@@ -1,0 +1,103 @@
+usb_cam:
+  fromGitRepo: "https://github.com/ros-drivers/usb_cam:ros2"
+  artifacts:
+    usb_cam: # change to exector name
+      node: usb_cam
+      publishers:
+        "camera_info":
+          type: "sensor_msgs/msg/CameraInfo"
+        "image_raw":
+          type: "sensor_msgs/msg/Image"
+        "image_raw/compressed":
+          type: "sensor_msgs/msg/CompressedImage"
+        "image_raw/compressedDepth":
+          type: "sensor_msgs/msg/CompressedImage"
+        "image_raw/theora":
+          type: "theora_image_transport/msg/Packet"
+      serviceservers:
+        "set_camera_info":
+          type: "sensor_msgs/srv/SetCameraInfo"
+        "set_capture":
+          type: "std_srvs/srv/SetBool"
+      parameters:
+        "auto_white_balance":
+          type: Boolean
+          value: True
+        "autoexposure":
+          type: Boolean
+          value: True
+        "autofocus":
+          type: Boolean
+          value: False
+        "brightness":
+          type: Integer
+          value: 50
+        "camera_info_url":
+          type: String
+          value: ""
+        "camera_name":
+          type: String
+          value: "default_cam"
+        "contrast":
+          type: Integer
+          value: -1
+        "exposure":
+          type: Integer
+          value: 100
+        "focus":
+          type: Integer
+          value: -1
+        "frame_id":
+          type: String
+          value: "default_cam"
+        "framerate":
+          type: Double
+          value: 30.0
+        "gain":
+          type: Integer
+          value: -1
+        "image_height":
+          type: Integer
+          value: 480
+        "image_raw.format":
+          type: String
+          value: "jpeg"
+        "image_raw.jpeg_quality":
+          type: Integer
+          value: 95
+        "image_raw.png_level":
+          type: Integer
+          value: 3
+        "image_raw.tiff.res_unit":
+          type: String
+          value: "inch"
+        "image_raw.tiff.xdpi":
+          type: Integer
+          value: -1
+        "image_raw.tiff.ydpi":
+          type: Integer
+          value: -1
+        "image_width":
+          type: Integer
+          value: 640
+        "io_method":
+          type: String
+          value: "mmap"
+        "pixel_format":
+          type: String
+          value: "yuyv"
+        "saturation":
+          type: Integer
+          value: -1
+        "sharpness":
+          type: Integer
+          value: -1
+        "use_sim_time":
+          type: Boolean
+          value: False
+        "video_device":
+          type: String
+          value: "/dev/video0"
+        "white_balance":
+          type: Integer
+          value: 4000
