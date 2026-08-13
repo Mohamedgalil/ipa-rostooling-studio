@@ -1,0 +1,11 @@
+fixture:
+  fromFile: "fixture_pkg/launch/fixture.launch.py"
+  subSystems:
+    "turtlebot"
+  nodes:
+    "tf_sink":
+      from: "tf_sink.tf_sink"
+      interfaces:
+        - "tf_in": sub-> "tf_sink::tf_in"
+  connections:
+    - [tf, tf_in]

@@ -11,12 +11,12 @@ turtlebot3_mission_manager:
       publishers:
         # spoken-status trigger, consumed by turtlebot3_voice_announcer
         'nav_status':
-          type: 'std_msgs/msg/String'
+          type: 'std_msgs/msg/String' # assets/roscommonobjects/basic_msgs/ros_core.ros
       subscribers:
         # the operator's requested target -- external input, e.g. RViz "2D Nav Goal"
         'goal_pose':
-          type: 'geometry_msgs/msg/PoseStamped'
+          type: 'geometry_msgs/msg/PoseStamped' # assets/roscommonobjects/basic_msgs/common_msgs.ros
       actionclients:
         # calls bt_navigator, which owns the actual navigation behavior tree
         'navigate_to_pose':
-          type: 'nav2_msgs/action/NavigateToPose'
+          type: 'nav2_msgs/action/NavigateToPose' # assets/roscommonobjects/nav2_msgs/nav2_msgs.ros

@@ -1,0 +1,7 @@
+hlds_laser_publisher:
+  artifacts:
+    hlds_laser_publisher: # change to exector name
+      node: hlds_laser_publisher
+      publishers:
+        "scan":
+          type: "sensor_msgs/msg/LaserScan"

@@ -1,0 +1,63 @@
+turtlebot3_guided_navigation:
+  fromFile: "TODO_PACKAGE/launch/TODO.launch.py" # SYNTHESISED - no launch file known (fromFile ladder rung 3, rossystem-syntax.md #2)
+  subSystems:
+    "turtlebot" # assets/rosmodelscatalog/robots/turtlebot3/robot/turtlebot.rossystem - declares real interfaces:, reused whole per SKILL.md 8d
+  nodes:
+    # Nav2 stack: assets/rosmodelscatalog/robots/turtlebot3/turtlebot3_navigation2.rossystem composes
+    # exactly these 14 nodes but declares an EMPTY interfaces: block on every one of them (checked
+    # against assets/node_index.json's _systems["turtlebot3_navigation2"] entry before authoring).
+    # A subSystems: reference to it would resolve but expose zero connectable ports (SKILL.md 8d /
+    # RM091), so each node is declared explicitly here instead, from: pointing at the same
+    # catalogued .ros2 files that system composes. Only "bt_navigator" needs a connection endpoint
+    # for this scenario (the NavigateToPose action the mission manager drives), so only it carries
+    # an interfaces: block here; the others keep the catalogued system's own zero-interface shape.
+    "amcl":
+      from: "amcl.amcl" # assets/rosmodelscatalog/navigation/amcl.ros2
+    "behavior_server":
+      from: "behavior_server.behavior_server" # assets/rosmodelscatalog/navigation/behavior_server.ros2
+    "bt_navigator":
+      from: "bt_navigator.bt_navigator" # assets/rosmodelscatalog/navigation/bt_navigator.ros2
+      interfaces:
+        - "navigate_to_pose_as": as-> "bt_navigator::navigate_to_pose"
+      parameters:
+        - "use_sim_time": "bt_navigator::use_sim_time"
+          value: false
+    "controller_server":
+      from: "controller_server.controller_server" # assets/rosmodelscatalog/navigation/controller_server.ros2
+    "global_costmap":
+      from: "global_costmap.global_costmap" # assets/rosmodelscatalog/navigation/global_costmap.ros2
+    "lifecycle_manager_localization":
+      from: "lifecycle_manager_localization.lifecycle_manager_localization" # assets/rosmodelscatalog/navigation/lifecycle_manager_localization.ros2
+    "lifecycle_manager_navigation":
+      from: "lifecycle_manager_navigation.lifecycle_manager_navigation" # assets/rosmodelscatalog/navigation/lifecycle_manager_navigation.ros2
+    "local_costmap":
+      from: "local_costmap.local_costmap" # assets/rosmodelscatalog/navigation/local_costmap.ros2
+    "map_server":
+      from: "map_server.map_server" # assets/rosmodelscatalog/navigation/map_server.ros2
+    "planner_server":
+      from: "planner_server.planner_server" # assets/rosmodelscatalog/navigation/planner_server.ros2
+    "rviz":
+      from: "rviz2.rviz2" # assets/rosmodelscatalog/navigation/rviz2.ros2
+    "smoother_server":
+      from: "smoother_server.smoother_server" # assets/rosmodelscatalog/navigation/smoother_server.ros2
+    "velocity_smoother":
+      from: "velocity_smoother.velocity_smoother" # assets/rosmodelscatalog/navigation/velocity_smoother.ros2
+    "waypoint_follower":
+      from: "waypoint_follower.waypoint_follower" # assets/rosmodelscatalog/navigation/waypoint_follower.ros2
+    # Project-local mission logic - no catalogue coverage for either node.
+    "mission_manager":
+      from: "tb3_mission_manager.mission_manager" # project-local, see rosnodes/tb3_mission_manager.ros2
+      interfaces:
+        - "arrival_announcement": pub-> "mission_manager::arrival_announcement"
+        - "goal_pose": sub-> "mission_manager::goal_pose"
+        - "navigate_to_pose_ac": ac-> "mission_manager::navigate_to_pose"
+      parameters:
+        - "goal_frame_id": "mission_manager::goal_frame_id"
+          value: "map"
+    "voice_announcer":
+      from: "tb3_voice_announcer.voice_announcer" # project-local, see rosnodes/tb3_voice_announcer.ros2
+      interfaces:
+        - "speech_request": sub-> "voice_announcer::speech_request"
+  connections:
+    - [navigate_to_pose_as, navigate_to_pose_ac]
+    - [arrival_announcement, speech_request]

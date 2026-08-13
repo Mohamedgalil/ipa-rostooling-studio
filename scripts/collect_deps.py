@@ -18,7 +18,12 @@ Usage:
         copied catalogue file (e.g. lifecycle_msgs.ros) can itself reference further
         catalogue types in its own field bodies (e.g. builtin_interfaces/msg/Time) that
         none of the given model files ever named directly -- those get pulled in too,
-        recursively, until nothing new is found.
+        recursively, until nothing new is found. A .rossystem model's resolved
+        subSystems: entries are staged and re-linted the same way: the referenced
+        .rossystem file is copied in and its own from:/type:/subSystems: references are
+        followed recursively, so reusing e.g. turtlebot.rossystem also pulls in
+        turtlebot3_node.ros2, hlds_laser_publisher.ros2, robot_state_publisher.ros2 and
+        their .ros type deps without the caller naming any of them.
 """
 
 import os
@@ -64,25 +69,36 @@ def collect(model_paths, case_dir):
 
     os.makedirs(case_dir, exist_ok=True)
     copied = []
+    claimed = {}  # basename -> (root, rel) that already claimed it, for collision detection
+
+    def stage(root, rel, kind):
+        basename = os.path.basename(rel)
+        prior = claimed.get(basename)
+        if prior is not None and prior != (root, rel):
+            # ask_oracle.py's MODEL_GLOBS is a flat, non-recursive glob of case_dir, so two
+            # catalogue files from different subdirectories that happen to share a basename
+            # (real cases exist: robot_state_publisher.ros2, turtlebot3_laserscan.ros2, ... --
+            # see `find assets/rosmodelscatalog -name '*.ros2' -o -name '*.rossystem' | xargs
+            # -n1 basename | sort | uniq -d`) cannot both be staged. Silently letting the
+            # second overwrite the first would stage the WRONG file under a name the model's
+            # own reference resolution already committed to via node_index.json -- refuse
+            # instead of guessing which one the caller actually needs.
+            print("WARNING: basename collision -- '%s' is claimed by both %s and %s; "
+                  "skipping the second (rename or stage into separate case dirs)."
+                  % (basename, prior[1], rel), file=sys.stderr)
+            return
+        claimed[basename] = (root, rel)
+        src = os.path.join(root, rel)
+        dst = os.path.join(case_dir, basename)
+        shutil.copyfile(src, dst)
+        copied.append((kind, rel, dst))
 
     for rel in sorted(type_files):
-        src = os.path.join(TYPE_CATALOG_ROOT, rel)
-        dst = os.path.join(case_dir, os.path.basename(rel))
-        shutil.copyfile(src, dst)
-        copied.append(("type", rel, dst))
+        stage(TYPE_CATALOG_ROOT, rel, "type")
 
     for rel in sorted(node_files):
-        src = os.path.join(NODE_CATALOG_ROOT, rel)
-        dst = os.path.join(case_dir, os.path.basename(rel))
-        if os.path.exists(dst) and os.path.basename(rel) in {os.path.basename(t) for t in type_files}:
-            # A .ros2 catalogue file and a .ros type file happening to share a basename
-            # is not possible (different extensions), but guard anyway rather than silently
-            # overwrite.
-            print("WARNING: basename collision copying %s -> %s, skipped" % (rel, dst),
-                  file=sys.stderr)
-            continue
-        shutil.copyfile(src, dst)
-        copied.append(("node", rel, dst))
+        kind = "system" if rel.endswith(".rossystem") else "node"
+        stage(NODE_CATALOG_ROOT, rel, kind)
 
     return copied
 

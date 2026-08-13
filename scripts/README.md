@@ -274,6 +274,10 @@ in `--hook` mode) for a workspace whose references are heavily project-local. Se
 | `RM087` | INFO | Consolidated: which vendored node file(s) this model needs | `.rossystem` |
 | `RM088` | WARNING | `from:` reference resolves against `node_index.json`, but its source line doesn't name the resolved file | `.rossystem` |
 | `RM089` | WARNING | `type:` reference resolves against `type_index.json`, but its source line doesn't name the resolved file | `.ros`, `.ros2` |
+| `RM090` | ERROR | A node label is declared directly under `nodes:` **and** is also reachable through a `subSystems:` entry | `.rossystem` |
+| `RM091` | WARNING | A `subSystems:` entry doesn't resolve, itself declares another `subSystems:` (nesting risk), or resolves but exposes zero `interfaces:` on any node | `.rossystem` |
+| `RM092` | WARNING | A local node and a node reachable via `subSystems:` resolve the same `from:` under different labels — likely the same real node modelled twice | `.rossystem` |
+| `RM093` | ERROR / WARNING | `subSystems:` written as a bracket list `[...]` (ERROR — not valid syntax) or as a multi-entry `- item` block sequence (WARNING — parses, but unverified against the real oracle for N>1) | `.rossystem` |
 
 `RM081`/`RM084` are WARNING, not ERROR, for the same reason `RM076` is: a genuinely
 project-local package/node is legitimate, and the linter cannot distinguish that from a typo of a
@@ -296,6 +300,21 @@ of the nine nodes point at pre-existing catalogue files with no in-file indicati
 RM088 (node `from:`) and RM089 (`type:` refs) fire a WARNING whenever a reference resolves against
 the catalogue but its own source line doesn't contain the resolved file's name, so the fix is
 mechanically checked rather than left to memory the next time a model is authored or edited.
+
+**`RM090`/`RM091`/`RM092` (added 2026-08-13)** close the gap a maintainer review of
+`turtlebot3_navigation.rossystem` found: `from:` reuses a *node*, but reusing a whole pre-built
+*system* (e.g. the base-platform bundle in `robots/turtlebot3/robot/turtlebot.rossystem`) is what
+`subSystems:` is for — re-declaring nodes under `nodes:` that a `subSystems:` entry already
+provides is exactly the "duplicate model definitions confusing the validator" the review flagged.
+`build_node_index.py` now indexes each catalogued `.rossystem`'s nodes and their declared
+`interfaces:` (never derived from the target `.ros2` — `checkIfInterfaceInSystem` doesn't either),
+so `rosmodel_lint.py` can resolve a `subSystems:` reference the same way the real validator does,
+one level deep. RM090 is the hard case: the same node label reachable two ways in one file. RM091
+covers three ways a `subSystems:` entry itself is a problem, the most important of which is real
+and common — the target resolves but declares **zero** `interfaces:` on any node (true of every
+node in the vendored `turtlebot3_navigation2.rossystem`), which makes the reference grammatically
+valid but useless, since nothing in it can ever be a `connections:` endpoint. RM092 is the soft
+case — same `from:`, different label, possibly two genuine instances rather than a duplicate.
 
 ---
 
@@ -437,6 +456,16 @@ the script appears in this README and vice versa, with no orphans in either dire
 > a typo of a real catalogued package/node/type/interface for each of RM081/082, RM084/085, and
 > RM086, plus a resolvable ref with and without a disclosing comment for RM088/089) rather than a
 > corpus sweep — see the commit that introduced them for the exact cases.
+>
+> *Amended 2026-08-13.* The rule set is now **70** ids — `RM090`-`RM093` (`subSystems:` reuse
+> checks) were added, also not covered by the whole-corpus counts below. Verified against six
+> hand-built fixtures (a genuine label collision — including the harder case where the colliding
+> subsystem node itself exposes zero interfaces, caught by an independent review after the first
+> pass missed it — a same-`from:`/different-label pair, an unresolved `subSystems:` name, a
+> resolved-but-zero-interfaces target, and the bracket-list/dash-block `subSystems:` forms) plus a
+> full re-lint of every catalogued `.rossystem`, `tests/regenerated/mani-ur/system.rossystem`, and
+> `examples/turtlebot3_navigation.rossystem` — 0 new errors, 0 crashes, `--no-catalogue` confirmed
+> to suppress RM090-RM092 (RM093 is a pure grammar check and fires regardless).
 
 ### Whole-corpus run — 305 files, 0 crashes
 

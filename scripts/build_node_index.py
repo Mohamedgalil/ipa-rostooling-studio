@@ -2,8 +2,13 @@
 """
 build_node_index.py -- index every pkg.node declared in assets/rosmodelscatalog/'s
 .ros2 files into assets/node_index.json, plus a human-browsable
-references/node-catalogue.md. Also records every .rossystem composition found there
-as a retrieval reference (e.g. the real turtlebot3_navigation2.rossystem).
+references/node-catalogue.md. Also indexes every .rossystem composition found there --
+its system name plus, per node, its 'from:' and exactly the interfaces it declares --
+so a 'subSystems:' reference can be resolved without re-parsing the target file, and so
+rosmodel_lint.py can tell whether a given subsystem actually exposes anything to wire
+into (some, like turtlebot3_navigation2.rossystem, declare zero interfaces on every
+node and are consequently NOT usable via subSystems: no matter how correct the
+reference is -- see snappy-dreaming-harbor.md point 3).
 
 WHY THIS EXISTS: the node-side counterpart to build_type_index.py. An agent authoring
 a .rossystem has no way to check that a `from: "pkg.node"` or an arrow/parameter target
@@ -29,7 +34,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rosmodel_lint import (  # noqa: E402
-    HAVE_YAML, is_mapping, is_scalar, mapping_items, mapping_keys, mapping_get, yaml,
+    ARROW_ALL, HAVE_YAML, is_mapping, is_scalar, is_sequence, mapping_items, mapping_keys,
+    mapping_get, yaml,
 )
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -96,6 +102,63 @@ def extract_ros2_nodes(root):
         yield pkg_name, artifact_name, node_name, interfaces
 
 
+def extract_rossystem_system(root):
+    """Return (system_name, {node_label: {"from": str|None, "interfaces": {name: kind}}},
+    has_own_subsystems) for one parsed .rossystem file, or (None, None, False) if it
+    doesn't look like one.
+
+    Mirrors RosSystemValidator.xtend's checkIfInterfaceInSystem: a node's connectable
+    interfaces are exactly what its own 'interfaces:' block declares -- NEVER derived
+    from the .ros2 'from:' points at. A node with no 'interfaces:' block (e.g. every
+    node in the vendored turtlebot3_navigation2.rossystem) legitimately has zero here;
+    that is not a parsing gap, it is why that particular subsystem exposes nothing to
+    a 'subSystems:' referencer (see snappy-dreaming-harbor.md point 3).
+
+    has_own_subsystems flags a system that itself declares 'subSystems:' -- referencing
+    ONE of these from a third file would be two levels of nesting, and
+    checkIfInterfaceInSystem casts unconditionally to RosNode one level down, so the
+    real validator throws ClassCastException on it (RM061). rosmodel_lint.py's RM091
+    surfaces this before a caller finds out from an oracle stack trace.
+    """
+    if not is_mapping(root):
+        return None, None, False
+    items = mapping_items(root)
+    if not items:
+        return None, None, False
+    sys_key, sys_val = items[0]
+    if not is_scalar(sys_key) or not is_mapping(sys_val):
+        return None, None, False
+
+    has_own_subsystems = mapping_get(sys_val, "subSystems") is not None
+    nodes_val = mapping_get(sys_val, "nodes")
+    if not is_mapping(nodes_val):
+        return sys_key.value, {}, has_own_subsystems
+
+    nodes = {}
+    for node_key, node_val in mapping_items(nodes_val):
+        if not is_scalar(node_key) or not is_mapping(node_val):
+            continue
+        from_val = mapping_get(node_val, "from")
+        from_str = from_val.value if is_scalar(from_val) else None
+
+        interfaces = {}
+        iface_seq = mapping_get(node_val, "interfaces")
+        if is_sequence(iface_seq):
+            for item in iface_seq.value:
+                if not is_mapping(item):
+                    continue
+                for label_key, arrow_val in mapping_items(item):
+                    if not is_scalar(label_key) or not is_scalar(arrow_val):
+                        continue
+                    kind = arrow_val.value.strip().split("->", 1)[0].strip()
+                    if kind in ARROW_ALL:
+                        interfaces[label_key.value] = kind
+
+        nodes[node_key.value] = {"from": from_str, "interfaces": interfaces}
+
+    return sys_key.value, nodes, has_own_subsystems
+
+
 def main():
     nodes = {}       # "pkg.node" -> {"file", "artifact", "interfaces"}
     systems = []      # [{"file": ...}] -- .rossystem retrieval references
@@ -106,7 +169,18 @@ def main():
             rel = os.path.relpath(fpath, CATALOG_ROOT).replace(os.sep, "/")
 
             if fname.endswith(".rossystem"):
-                systems.append({"file": rel})
+                if not HAVE_YAML:
+                    systems.append({"file": rel})
+                    continue
+                root = compose_yaml(fpath)
+                sys_name, sys_nodes, has_own_sub = (
+                    (None, None, False) if root is None else extract_rossystem_system(root))
+                entry = {"file": rel}
+                if sys_name is not None:
+                    entry["system"] = sys_name
+                    entry["nodes"] = sys_nodes
+                    entry["hasOwnSubsystems"] = has_own_sub
+                systems.append(entry)
                 continue
             if not fname.endswith(".ros2"):
                 continue
@@ -158,11 +232,37 @@ def main():
 
     lines += [
         "",
-        "## System compositions (`.rossystem`, retrieval references only)",
+        "## System compositions (`subSystems: \"<system>\"` targets)",
         "",
+        "Reusable via `subSystems:` only for the nodes whose Interfaces column is non-empty --",
+        "a node with no `interfaces:` declared in the source `.rossystem` exposes nothing to a",
+        "referencer, even though `from:` still resolves (see `references/node-catalogue.md`'s",
+        "generator, `build_node_index.py`, and `snappy-dreaming-harbor.md` point 3 for why).",
+        "",
+        "| system | Source file | Node | from: | Interfaces (kind: name) |",
+        "|---|---|---|---|---|",
     ]
     for sysinfo in sorted(systems, key=lambda s: s["file"]):
-        lines.append("- `%s`" % sysinfo["file"])
+        # "nodes" absent means extract_rossystem_system genuinely couldn't parse this file
+        # (not a mapping, no items, etc.) -- NOT the same as "parsed fine, zero nodes:",
+        # which is a real, valid, if unusual, .rossystem. `not sysinfo.get("nodes")` was
+        # truthy-false on both an empty dict and a missing key, mislabelling the latter
+        # case as "unparsed" (review-caught bug).
+        if "nodes" not in sysinfo:
+            lines.append("| - | `%s` | *(unparsed)* | - | - |" % sysinfo["file"])
+            continue
+        sys_nodes = sysinfo["nodes"]
+        if not sys_nodes:
+            lines.append("| `%s` | `%s` | *(no nodes: block)* | - | - |"
+                          % (sysinfo.get("system", "?"), sysinfo["file"]))
+            continue
+        for node_label in sorted(sys_nodes):
+            node_entry = sys_nodes[node_label]
+            ifaces = ", ".join(
+                "%s: %s" % (k, n) for n, k in sorted(node_entry["interfaces"].items()))
+            lines.append("| `%s` | `%s` | `%s` | `%s` | %s |" % (
+                sysinfo.get("system", "?"), sysinfo["file"], node_label,
+                node_entry["from"] or "-", ifaces or "-"))
 
     os.makedirs(os.path.dirname(CATALOGUE_MD_PATH), exist_ok=True)
     with open(CATALOGUE_MD_PATH, "w", encoding="utf-8", newline="\n") as f:

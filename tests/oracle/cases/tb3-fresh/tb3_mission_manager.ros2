@@ -1,0 +1,17 @@
+tb3_mission_manager:
+  artifacts:
+    mission_manager:
+      node: mission_manager
+      publishers:
+        'arrival_announcement':
+          type: 'std_msgs/msg/String' # assets/roscommonobjects/basic_msgs/ros_core.ros
+      subscribers:
+        'goal_pose':
+          type: 'geometry_msgs/msg/PoseStamped' # assets/roscommonobjects/basic_msgs/common_msgs.ros
+      actionclients:
+        'navigate_to_pose':
+          type: 'nav2_msgs/action/NavigateToPose' # assets/roscommonobjects/nav2_msgs/nav2_msgs.ros
+      parameters:
+        'goal_frame_id':
+          type: String
+          value: "map"

@@ -1,0 +1,19 @@
+shape_msgs:
+  msgs:
+    Mesh
+      message
+        'shape_msgs/msg/MeshTriangle'[] triangles
+        'geometry_msgs/msg/Point'[] vertices
+    MeshTriangle
+      message
+        uint32[] vertex_indices
+    SolidPrimitive
+      message
+        uint8 type
+        'geometry_msgs/msg/Polygon'[] polygon
+    Plane
+      message
+        float64[] coef
+    
+  
+  

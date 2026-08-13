@@ -1,0 +1,7 @@
+tf_sink:
+  artifacts:
+    tf_sink:
+      node: tf_sink
+      subscribers:
+        'tf_in':
+          type: 'tf2_msgs/msg/TFMessage'

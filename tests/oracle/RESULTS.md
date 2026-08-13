@@ -219,6 +219,63 @@ they were resolved to zero:
 
 The four hand-written specs are themselves validated: the `_deps` directory lints ACCEPTED 0E/0W.
 
+## Run 4 — 2026-08-13, `subSystems:` reuse verified against the real oracle
+
+Maintainer review of `turtlebot3_navigation.rossystem` pointed out that `from:` reuses one node's
+implementation — reusing a whole pre-built `.rossystem` composition is what `subSystems:` is for.
+Reading `RosSystemValidator.xtend`'s `checkIfInterfaceInSystem` directly showed this only works
+when the referenced system's nodes declare their own `interfaces:` — never derived from the
+`.ros2` a node's `from:` points at. Two new probe cases settled the open questions empirically
+rather than by source-reading alone.
+
+| Case | What it tests | Verdict |
+|---|---|---|
+| `15-subsystems-fixture` | `subSystems: "turtlebot"` + a connection into a subsystem-owned interface (`odom` → a local sink of the same type), no local re-declaration | **ACCEPTED** 0E/0W |
+| `16-subsystems-tf-ambiguity` | a connection naming `tf`, a label `turtlebot.rossystem` declares on BOTH `turtlebot_node` and `robot_state_publisher` | **ACCEPTED** 0E/0W — resolves silently to one of the two, unspecified which |
+
+### Settled: `subSystems:` syntax and connection scope
+
+`components+=SubSystem*` is a repetition, not a bracket list — `subSystems: ["turtlebot"]` is a
+parse error (`mismatched input '-' expecting RULE_END` when written with a leading `-`, too). The
+corpus form is one bare, quoted-if-you-like name per indented line:
+
+```
+subSystems:
+  "turtlebot"
+```
+
+A `connections:` endpoint **does** resolve one level into a referenced subsystem's own interface
+labels, using the subsystem's exact spelling (`odom`, not a re-suffixed `odom_pub`) — confirmed by
+case 15 going from `REJECTED` (`odom`/`cmd_vel` deliberately type-mismatched, to isolate the
+scoping question) to **ACCEPTED** once paired with a type-matched local sink.
+
+### Settled, and a real trap: ambiguous labels resolve silently, not with an error
+
+`turtlebot.rossystem` declares the bare label `"tf"` on both `turtlebot_node` and
+`robot_state_publisher`. A connection naming `tf` **does not error** — Xtext's default scoping
+picks one of the two candidates silently. Which one is unspecified and not something a model
+author controls through this mechanism. `rosmodel_lint.py`'s `RM065` (pre-existing rule, now also
+firing on subsystem-merged interfaces) is the only signal a model has this problem; the oracle
+gives no hint. `turtlebot3_navigation.rossystem` v4 keeps its one `tf` connection (real data, from
+whichever of the two resolves) but does not attempt a second connection to the other tf source,
+since there is no way to address it once both are exposed under the same shared label.
+
+### `turtlebot3_navigation2.rossystem` — grammatically valid, functionally inert
+
+Confirmed by reading the file directly, and by indexing it with the extended
+`build_node_index.py`: all 14 nodes (amcl, bt_navigator, planner_server, controller_server, and
+10 more) declare `from:` only, zero `interfaces:`. `subSystems: "turtlebot3_navigation2"` resolves
+without error but exposes nothing a `connections:` block could reference — not tested against the
+oracle directly (no connection could be constructed to test), but the conclusion follows
+deterministically from `checkIfInterfaceInSystem`'s source: it reads `rosinterfaces` off each
+subsystem node, which is populated only from that file's own declarations.
+
+`turtlebot3_navigation.rossystem` was rewritten to `subSystems: "turtlebot"` for the base-platform
+nodes (the reusable case) and kept its four Nav2-stack nodes as explicit `nodes:` (the inert case)
+— re-verified end-to-end: `collect_deps.py` (now `subSystems:`-aware, staging the referenced
+`.rossystem` and its transitive `.ros2`/`.ros` deps automatically) into `cases/tb3-v4/`, oracle
+**ACCEPTED, 0E/0W**.
+
 ## Still not covered
 
 - ~~**`.rossystem` — entirely.**~~ **Closed 2026-07-21** by the locally built
@@ -229,5 +286,9 @@ The four hand-written specs are themselves validated: the `_deps` directory lint
 - **The `.rossystem` oracle is locally built, not shipped.** Cases 07-09 ran against
   `build/rossystem-ls/`, compiled from RosTooling source in a parallel workstream — not against a
   released artefact. The results are real, but reproducing them requires that build.
-- **Corpus-scale `.rossystem` validation.** Only the three synthetic cases above have been run
+- **Corpus-scale `.rossystem` validation.** Only the synthetic cases above have been run
   through the `.rossystem` server. The 52 corpus systems have not.
+- **Nested `subSystems:` (two levels deep).** `RM091` flags it from source-reading
+  (`checkIfInterfaceInSystem` casts unconditionally one level down, so a second level throws
+  `ClassCastException`) but this has not been reproduced against the real oracle — no corpus or
+  vendored file currently nests, so no fixture exists to run it against.

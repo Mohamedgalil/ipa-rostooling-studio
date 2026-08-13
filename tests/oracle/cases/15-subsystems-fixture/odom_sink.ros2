@@ -1,0 +1,7 @@
+odom_sink:
+  artifacts:
+    odom_sink:
+      node: odom_sink
+      subscribers:
+        'odom_in':
+          type: 'nav_msgs/msg/Odometry'

@@ -1,6 +1,6 @@
 [
   {
-    "case": "generated",
+    "case": "tb3-v4",
     "jar": "de.fraunhofer.ipa.rostooling.ls-3.1.0-SNAPSHOT-ls.jar",
     "files": [
       "actionlib_msgs.ros",
@@ -28,12 +28,19 @@
       "turtlebot3_mission_manager.ros2",
       "turtlebot3_node.ros2",
       "turtlebot3_voice_announcer.ros2",
+      "turtlebot.rossystem",
       "turtlebot3_navigation.rossystem"
     ],
     "diagnostics": [
       {
-        "file": "turtlebot3_navigation.rossystem",
+        "file": "turtlebot.rossystem",
         "line": 1,
+        "severity": "INFO",
+        "message": "The format for the FromFile attribute is: \"NameOfThePackage/Path/to/ExecutableLaunchFile.launch.py\""
+      },
+      {
+        "file": "turtlebot3_navigation.rossystem",
+        "line": 54,
         "severity": "INFO",
         "message": "The format for the FromFile attribute is: \"NameOfThePackage/Path/to/ExecutableLaunchFile.launch.py\""
       }

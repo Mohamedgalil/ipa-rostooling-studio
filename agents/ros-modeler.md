@@ -64,14 +64,28 @@ These cause hard errors or silent semantic corruption. Never violate them.
     project-local one gets a comment saying so and pointing at its companion `.ros`/`.ros2`.
     Never leave a reader to guess which lines are real catalogue nodes and which are files this
     session wrote. `rosmodel_lint.py`'s RM088/RM089 check this mechanically.
+12. `from:` reuses one node's implementation; `subSystems:` reuses a whole pre-built
+    `.rossystem` composition — do not fake the latter by re-declaring, one by one, nodes that
+    a catalogued system already composes. But check first: a subsystem's connectable interfaces
+    are exactly what its own `nodes:` block declares under `interfaces:`, never derived from the
+    `.ros2` its `from:` points at. `assets/node_index.json`'s `_systems` entries record this per
+    node — a system where every node's `"interfaces"` is empty (e.g. the vendored
+    `turtlebot3_navigation2.rossystem`) exposes nothing through `subSystems:`, and its nodes stay
+    explicit `nodes:` declarations, with a comment saying why. Never let one node be reachable
+    both directly under `nodes:` and through a `subSystems:` entry in the same file.
+    `rosmodel_lint.py`'s RM090 (ERROR: label collision)/RM091 (unresolved, nested, or
+    zero-interface target)/RM092 (same `from:`, different label) check this mechanically.
 
 ## Things to route around
 
 Emit only scalar parameter values (Integer, Boolean, Double, String). List, Array and Struct
 values reach a recursive type-checker that uses instance fields as loop counters and produces
 non-deterministic diagnostics. Avoid `dependencies:`, `namespace:`, `ns:`, `processes:` and
-nested subsystems — all have zero or near-zero corpus support and cannot be tested. Use only
-the `RosSystemConnection` form `- [from_iface , to_iface]`; the `RosConnection` branch throws
+**nested** subsystems (a `subSystems:` entry that itself resolves to a system which has its own
+`subSystems:` block) — `checkIfInterfaceInSystem` casts unconditionally to `RosNode` one level
+down, so two levels of nesting throws `ClassCastException` in the real validator (RM091 catches
+it). A single, flat `subSystems:` entry is fine and tested — see rule 12. Use only the
+`RosSystemConnection` form `- [from_iface , to_iface]`; the `RosConnection` branch throws
 `ClassCastException` in three separate checks. Do not emit comments by default.
 
 ## Verification posture

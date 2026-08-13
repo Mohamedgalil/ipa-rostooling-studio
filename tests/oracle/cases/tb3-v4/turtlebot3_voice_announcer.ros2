@@ -10,4 +10,4 @@ turtlebot3_voice_announcer:
       subscribers:
         # published by turtlebot3_mission_manager's mission_manager node
         'nav_status':
-          type: 'std_msgs/msg/String'
+          type: 'std_msgs/msg/String' # assets/roscommonobjects/basic_msgs/ros_core.ros

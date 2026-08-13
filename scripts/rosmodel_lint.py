@@ -100,6 +100,46 @@ def load_node_index():
     return _node_index_cache["value"]
 
 
+_system_index_cache = {"loaded": False, "value": None}
+
+
+def load_system_index():
+    """{"<system name or file basename>": {"file", "nodes": {label: {"from", "interfaces"}},
+    "hasOwnSubsystems"}}, built lazily from node_index.json's "_systems" list
+    (scripts/build_node_index.py). A system entry whose source file didn't parse as a
+    mapping (or predates the richer index) has no "system" key and is skipped -- callers
+    see it as simply unresolved, same as a system name that was never catalogued at all.
+
+    Keyed by both the system's declared name AND its file's basename (without extension),
+    matching how corpus 'subSystems:' references are sometimes written -- ros_plot.py's
+    link_subsystems() does the same dual lookup for its own (unrelated) purpose. The
+    declared name always wins a collision: it is registered first and basename aliases
+    use setdefault, so a basename never shadows a real system name."""
+    if not _system_index_cache["loaded"]:
+        _system_index_cache["loaded"] = True
+        try:
+            with open(_NODE_INDEX_PATH, encoding="utf-8") as f:
+                raw_systems = json.load(f).get("_systems") or []
+            by_name = {}
+            for entry in raw_systems:
+                name = entry.get("system")
+                if not name:
+                    continue
+                record = {
+                    "file": entry.get("file"),
+                    "nodes": entry.get("nodes") or {},
+                    "hasOwnSubsystems": bool(entry.get("hasOwnSubsystems")),
+                }
+                by_name.setdefault(name, record)  # first file wins, same policy as nodes
+                base = os.path.splitext(os.path.basename(entry.get("file") or ""))[0]
+                if base:
+                    by_name.setdefault(base, record)
+            _system_index_cache["value"] = by_name
+        except (IOError, OSError, ValueError):
+            _system_index_cache["value"] = None
+    return _system_index_cache["value"]
+
+
 class Finding(object):
     __slots__ = ("file", "line", "severity", "rule", "message", "hint")
 
@@ -517,7 +557,7 @@ class Linter(object):
                       % ", assets/roscommonobjects/".join(sorted(self.needed_type_files)))
         if self.needed_node_files:
             self.info(0, "RM087",
-                      "%d catalogue node file(s) needed to fully resolve this model."
+                      "%d catalogue node/system file(s) needed to fully resolve this model."
                       % len(self.needed_node_files),
                       "assets/rosmodelscatalog/%s -- copy into an oracle case dir with "
                       "scripts/collect_deps.py, or resolve manually."
@@ -1741,8 +1781,10 @@ class Linter(object):
         self.check_duplicate_keys(sys_val, "system '%s'" % sys_key.value)
 
         present = []
-        interfaces = {}       # local name -> {"kind","line","node","target"}
+        interfaces = {}       # local name -> [{"kind","line","node","target"}, ...]
         node_names = []
+        local_from = {}
+        subsystems_val = None
 
         for key, val in mapping_items(sys_val):
             if not is_scalar(key):
@@ -1753,8 +1795,9 @@ class Linter(object):
             if name == "fromFile":
                 self.check_from_file(val)
             elif name == "nodes":
-                node_names = self.check_rossystem_nodes(val, interfaces)
+                node_names, local_from = self.check_rossystem_nodes(val, interfaces)
             elif name == "subSystems":
+                subsystems_val = val
                 self.warn(line, "RM061",
                           "'subSystems:' is supported but every corpus example is low-quality.",
                           "19 files use it; the sampled one indents its reference with a tab and "
@@ -1784,6 +1827,9 @@ class Linter(object):
                       "null (SystemImpl.java:70). Always emit a quoted fromFile containing '/' "
                       "(validator-rules.md sec 2.2).")
 
+        if subsystems_val is not None:
+            self.check_subsystems(subsystems_val, interfaces, node_names, local_from)
+
         # processes: must reference declared nodes (S1)
         proc_node = mapping_get(sys_val, "processes")
         if is_mapping(proc_node):
@@ -1799,6 +1845,142 @@ class Linter(object):
                             "RosSystem.xtext:13-45 is an alternation, so convention decides. "
                             "Observed corpus order is %s (emission-profile rule 25)."
                             % " -> ".join(ROSSYSTEM_TOP_KEYS))
+
+    def check_subsystems(self, node, interfaces, local_node_names, local_from):
+        """Resolve each subSystems: entry against assets/node_index.json's system table and
+        merge its nodes' interfaces into this file's connection-membership table, mirroring
+        checkIfInterfaceInSystem's one-level walk into SubSystem.system.components. Also
+        flags the two ways a subsystem reference goes wrong for THIS project's purposes:
+        RM090 (a node reachable both directly and through a subSystems: entry -- a genuine
+        label collision, not just redundant modelling) and RM091 (the reference itself is
+        unresolved, nests another subSystems: block, or resolves but exposes zero
+        interfaces -- see build_node_index.py's extract_rossystem_system and
+        snappy-dreaming-harbor.md point 3 for why the last case is real and common).
+
+        'components+=SubSystem*' is a repeated rule, not a bracket list -- the corpus form is
+        one bare (optionally quoted) EString per indented line, which a single-entry file
+        composes as a plain scalar, not a sequence. Tolerate scalar/sequence/mapping shapes
+        the same way ros_plot.py's model reader does, since nothing here depends on which
+        shape produced the reference."""
+        refs = []  # (name_string, line)
+        if is_scalar(node) and node.value.strip():
+            refs.append((node.value.strip(), node_line(node)))
+        elif is_sequence(node):
+            if getattr(node, "flow_style", False):
+                self.error(node_line(node), "RM093",
+                           "'subSystems:' uses the bracket-list form '[...]'.",
+                           "'components+=SubSystem*' (RosSystem.xtext) is a repetition, not a "
+                           "list production -- unlike 'nodes: [...]' inside a process, there is "
+                           "no bracket form here. Emit one bare (optionally quoted) name per "
+                           "indented line instead, e.g.:\n  subSystems:\n    \"turtlebot\"")
+            elif len(node.value) > 1:
+                self.warn(node_line(node), "RM093",
+                          "'subSystems:' has %d entries, written as a '- item' block sequence."
+                          % len(node.value),
+                          "Only the single-entry bare-scalar form (no leading '-') has been "
+                          "verified against the real oracle (tests/oracle/cases/"
+                          "15-subsystems-fixture). This dash form parses as valid YAML here, but "
+                          "whether it matches 'components+=SubSystem*'s actual concrete syntax "
+                          "for N>1 entries is unconfirmed -- the grammar has no bracket/list "
+                          "wrapper for this production at all, so the real multi-entry form may "
+                          "be N separate bare lines instead. Prefer a single subSystems: entry "
+                          "per file when possible (RM061 already flags nesting/tab risk); if you "
+                          "need more than one, verify against tests/oracle/ask_oracle.py before "
+                          "relying on it.")
+            for item in node.value:
+                if is_scalar(item) and item.value.strip():
+                    refs.append((item.value.strip(), node_line(item)))
+        elif is_mapping(node):
+            for k, _v in mapping_items(node):
+                if is_scalar(k):
+                    refs.append((k.value.strip(), node_line(k)))
+
+        if not refs or not self.use_catalogue:
+            return
+        index = load_system_index()
+        if index is None:
+            return
+
+        for ref, line in refs:
+            entry = index.get(ref)
+            if entry is None:
+                self.warn(line, "RM091",
+                          "subSystems: '%s' does not resolve against assets/node_index.json's "
+                          "indexed systems." % ref,
+                          "Either it is a genuine project-local system (fine, but then this "
+                          "plugin cannot verify what it exposes) or the name is wrong -- check "
+                          "the target file's own top-level key, not its filename.")
+                continue
+
+            # Same root as needed_node_files (assets/rosmodelscatalog/) -- a resolved
+            # subSystems: target is itself a vendored file collect_deps.py needs to stage,
+            # same as a resolved from:'s .ros2. Recorded even when the two branches below
+            # flag the reference as risky or useless: staging it is still correct, and a
+            # future catalogue sync could add the interfaces this version lacks.
+            self.needed_node_files.add(entry["file"])
+
+            if entry["hasOwnSubsystems"]:
+                self.warn(line, "RM091",
+                          "subSystems: '%s' itself declares a subSystems: block." % ref,
+                          "checkIfInterfaceInSystem casts every subsystem component "
+                          "unconditionally to RosNode one level down (validator-rules.md "
+                          "sec 3.5) -- referencing a system that is itself built from "
+                          "subSystems: is two levels of nesting and throws "
+                          "ClassCastException in the real validator. Keep nesting flat.")
+                continue
+
+            if not any(info["interfaces"] for info in entry["nodes"].values()):
+                self.warn(line, "RM091",
+                          "subSystems: '%s' resolves (%s) but declares zero 'interfaces:' on "
+                          "any of its %d node(s)." % (ref, entry["file"], len(entry["nodes"])),
+                          "A subsystem's connectable interfaces are exactly what its OWN "
+                          "'interfaces:' block declares -- never derived from the .ros2 'from:' "
+                          "it points at (checkIfInterfaceInSystem, "
+                          "RosSystemValidator.xtend:87-109). This subSystems: reference is "
+                          "grammatically valid but functionally inert here: nothing in it can be "
+                          "a connections: endpoint. If you need to wire one of its nodes, "
+                          "declare that node directly under this file's own nodes: instead.")
+                # Still fall through to the collision checks below -- an interface-less
+                # subsystem node can still collide on LABEL or from: with a local
+                # declaration, which is a real defect independent of whether the
+                # subsystem exposes anything to connect to.
+
+            # Iterate every node, not just interface-exposing ones: RM090/RM092 are
+            # name/from: collisions, not connectivity checks, so a subsystem node with
+            # no interfaces: still needs to be checked -- it can still collide with a
+            # local nodes: entry (bug found in review: this used to iterate only
+            # interface-exposing nodes and silently missed that exact case for
+            # catalogued systems like turtlebot_gazebo/cartographer that mix exposed
+            # and interface-less nodes).
+            for node_label, node_info in entry["nodes"].items():
+                owner = "%s (via subSystems: '%s')" % (node_label, ref)
+
+                if node_label in local_node_names:
+                    self.error(line, "RM090",
+                               "Node label '%s' is declared directly under this file's nodes: "
+                               "AND is reachable through subSystems: '%s'." % (node_label, ref),
+                               "Two distinct RosNode objects then answer to the same name in "
+                               "this file's scope -- this is the concrete shape of 'duplicate "
+                               "model definitions confusing the validator': declare it once. "
+                               "Drop the local nodes: entry and let the subsystem provide it, "
+                               "or drop the subSystems: reference if the local declaration needs "
+                               "to differ from the catalogued one.")
+                elif node_info["from"] and node_info["from"] in local_from.values():
+                    local_label = next(k for k, v in local_from.items()
+                                        if v == node_info["from"])
+                    self.warn(line, "RM092",
+                              "This file's node '%s' and node '%s' reachable via subSystems: "
+                              "'%s' both resolve 'from:' to '%s'."
+                              % (local_label, node_label, ref, node_info["from"]),
+                              "Different labels pointing at the same real node is sometimes "
+                              "legitimate (e.g. distinguishing roles), but if this is the same "
+                              "logical node modelled twice rather than a genuine second "
+                              "instance, keep only one -- prefer the subsystem's declaration "
+                              "over re-declaring it locally.")
+
+                for iface_name, kind in node_info["interfaces"].items():
+                    interfaces.setdefault(iface_name, []).append(
+                        {"kind": kind, "line": line, "node": owner, "target": None})
 
     def check_from_file(self, node):
         if not is_scalar(node):
@@ -1837,17 +2019,22 @@ class Linter(object):
 
     def check_rossystem_nodes(self, node, interfaces):
         if not is_mapping(node):
-            return []
+            return [], {}
         self.check_duplicate_keys(node, "nodes block")
         # No RM040 here on purpose: emission-profile rule 26's evidence base is .ros2 interface
         # and parameter blocks. Corpus B's own MT.rossystem does not sort its nodes: block, and
         # Corpus B is the weighted-decisive authority, so sorting it is not a house rule.
 
         names = []
+        local_from = {}   # node label -> raw 'from:' string (for RM090/RM092 vs subSystems:)
         for key, val in mapping_items(node):
             if not is_scalar(key):
                 continue
             names.append(key.value)
+            if is_mapping(val):
+                from_val = mapping_get(val, "from")
+                if is_scalar(from_val):
+                    local_from[key.value] = from_val.value
             self.check_estring_quoting(key, "Node", require_quotes=True)
             # RM067, not RM012: this is a rossystem::RosNode LABEL, a different metaclass from the
             # ros::Node that checkNameConventionsNode targets. RosSystemValidator.xtend has no
@@ -1869,7 +2056,7 @@ class Linter(object):
 
             if is_mapping(val):
                 self.check_rossystem_node_body(key, val, interfaces)
-        return names
+        return names, local_from
 
     def check_rossystem_node_body(self, node_key, node, interfaces):
         self.check_duplicate_keys(node, "node '%s'" % node_key.value)
@@ -2376,7 +2563,7 @@ def main(argv=None):
                         help="In text output, show at most N findings per rule per file "
                              "(0 = unlimited, default 10). JSON output is never capped.")
     parser.add_argument("--no-catalogue", action="store_true",
-                        help="Disable RM081-089 (assets/type_index.json + "
+                        help="Disable RM081-092 (assets/type_index.json + "
                              "assets/node_index.json lookups). Use for workspaces whose "
                              "message/node references are heavily project-local, where the "
                              "catalogue-absence WARNINGs would be pure noise.")

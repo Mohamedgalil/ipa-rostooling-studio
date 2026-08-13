@@ -7,22 +7,221 @@
   },
   "_systems": [
     {
-      "file": "arms/UR/ur_robot.rossystem"
+      "file": "arms/UR/ur_robot.rossystem",
+      "hasOwnSubsystems": false,
+      "nodes": {
+        "controller_manager": {
+          "from": "controller_manager.controller_manager",
+          "interfaces": {}
+        },
+        "controller_stopper": {
+          "from": "ur_robot_driver.controller_stopper_node",
+          "interfaces": {}
+        },
+        "dashboard_client": {
+          "from": "ur_robot_driver.dashboard_client",
+          "interfaces": {}
+        },
+        "initial_joint_controller": {
+          "from": "controller_manager.controller_manager",
+          "interfaces": {}
+        },
+        "initial_joint_controller_spawner_stopped": {
+          "from": "controller_manager.controller_manager",
+          "interfaces": {}
+        },
+        "robot_state_publisher_node": {
+          "from": "robot_state_publisher.robot_state_publisher",
+          "interfaces": {}
+        },
+        "ur_ros2_control_node": {
+          "from": "ur_robot_driver.ur_ros2_control_node",
+          "interfaces": {}
+        },
+        "urscript_interface": {
+          "from": "ur_robot_driver.urscript_interface",
+          "interfaces": {}
+        }
+      },
+      "system": "ur_robot"
     },
     {
-      "file": "robots/turtlebot3/cartographer.rossystem"
+      "file": "robots/turtlebot3/cartographer.rossystem",
+      "hasOwnSubsystems": false,
+      "nodes": {
+        "cartographer_node": {
+          "from": "cartographer_node.cartographer_node",
+          "interfaces": {
+            "odom_cart": "sub",
+            "scan_cart": "sub"
+          }
+        },
+        "cartographer_occupancy_grid_node": {
+          "from": "cartographer_occupancy_grid_node.cartographer_occupancy_grid_node",
+          "interfaces": {}
+        }
+      },
+      "system": "cartographer"
     },
     {
-      "file": "robots/turtlebot3/robot/arm.rossystem"
+      "file": "robots/turtlebot3/robot/arm.rossystem",
+      "hasOwnSubsystems": false,
+      "nodes": {
+        "arm_controller": {
+          "from": "open_manipulator_x_controller.open_manipulator_x_controller",
+          "interfaces": {
+            "arm_controller/follow_joint_trajectory": "as",
+            "arm_controller/joint_trajectory": "sub",
+            "arm_controller/state": "pub"
+          }
+        }
+      },
+      "system": "arm_controller"
     },
     {
-      "file": "robots/turtlebot3/robot/turtlebot.rossystem"
+      "file": "robots/turtlebot3/robot/turtlebot.rossystem",
+      "hasOwnSubsystems": false,
+      "nodes": {
+        "robot_state_publisher": {
+          "from": "robot_state_publisher.robot_state_publisher",
+          "interfaces": {
+            "joint_states": "sub",
+            "tf": "pub",
+            "tf_static": "pub"
+          }
+        },
+        "turtlebot3_laserscan": {
+          "from": "hlds_laser_publisher.hlds_laser_publisher",
+          "interfaces": {
+            "scan": "pub"
+          }
+        },
+        "turtlebot_node": {
+          "from": "turtlebot3_node.turtlebot3_node",
+          "interfaces": {
+            "cmd_vel": "sub",
+            "odom": "pub",
+            "tf": "pub"
+          }
+        }
+      },
+      "system": "turtlebot"
     },
     {
-      "file": "robots/turtlebot3/simulation/turtlebot_gazebo.rossystem"
+      "file": "robots/turtlebot3/simulation/turtlebot_gazebo.rossystem",
+      "hasOwnSubsystems": false,
+      "nodes": {
+        "camera_driver": {
+          "from": "camera_driver.camera_driver",
+          "interfaces": {
+            "camera_info": "pub",
+            "image_raw": "pub",
+            "set_camera_info": "ss"
+          }
+        },
+        "gazebo": {
+          "from": "gazebo.gazebo",
+          "interfaces": {}
+        },
+        "robot_state_publisher": {
+          "from": "robot_state_publisher.robot_state_publisher",
+          "interfaces": {
+            "joint_states": "sub",
+            "tf": "pub",
+            "tf_static": "pub"
+          }
+        },
+        "turtlebot3_diff_drive": {
+          "from": "turtlebot3_diff_drive.turtlebot3_diff_drive",
+          "interfaces": {
+            "cmd_vel_diff": "sub",
+            "odom_diff": "pub",
+            "tf": "pub"
+          }
+        },
+        "turtlebot3_imu": {
+          "from": "turtlebot3_imu.turtlebot3_imu",
+          "interfaces": {
+            "imu": "pub"
+          }
+        },
+        "turtlebot3_joint_state": {
+          "from": "turtlebot3_joint_state.turtlebot3_joint_state",
+          "interfaces": {
+            "joint_states": "pub"
+          }
+        },
+        "turtlebot3_laserscan": {
+          "from": "turtlebot3_laserscan.turtlebot3_laserscan",
+          "interfaces": {
+            "scan_turtlebot": "pub"
+          }
+        }
+      },
+      "system": "turtlebot_gazebo"
     },
     {
-      "file": "robots/turtlebot3/turtlebot3_navigation2.rossystem"
+      "file": "robots/turtlebot3/turtlebot3_navigation2.rossystem",
+      "hasOwnSubsystems": false,
+      "nodes": {
+        "amcl": {
+          "from": "amcl.amcl",
+          "interfaces": {}
+        },
+        "behavior_server": {
+          "from": "behavior_server.behavior_server",
+          "interfaces": {}
+        },
+        "bt_navigator": {
+          "from": "bt_navigator.bt_navigator",
+          "interfaces": {}
+        },
+        "controller_server": {
+          "from": "controller_server.controller_server",
+          "interfaces": {}
+        },
+        "global_costmap": {
+          "from": "global_costmap.global_costmap",
+          "interfaces": {}
+        },
+        "lifecycle_manager_localization": {
+          "from": "lifecycle_manager_localization.lifecycle_manager_localization",
+          "interfaces": {}
+        },
+        "lifecycle_manager_navigation": {
+          "from": "lifecycle_manager_navigation.lifecycle_manager_navigation",
+          "interfaces": {}
+        },
+        "local_costmap": {
+          "from": "local_costmap.local_costmap",
+          "interfaces": {}
+        },
+        "map_server": {
+          "from": "map_server.map_server",
+          "interfaces": {}
+        },
+        "planner_server": {
+          "from": "planner_server.planner_server",
+          "interfaces": {}
+        },
+        "rviz": {
+          "from": "rviz2.rviz2",
+          "interfaces": {}
+        },
+        "smoother_server": {
+          "from": "smoother_server.smoother_server",
+          "interfaces": {}
+        },
+        "velocity_smoother": {
+          "from": "velocity_smoother.velocity_smoother",
+          "interfaces": {}
+        },
+        "waypoint_follower": {
+          "from": "waypoint_follower.waypoint_follower",
+          "interfaces": {}
+        }
+      },
+      "system": "turtlebot3_navigation2"
     }
   ],
   "nodes": {

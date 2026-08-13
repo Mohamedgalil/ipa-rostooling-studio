@@ -1,0 +1,12 @@
+turtlebot3_node:
+  artifacts:
+    turtlebot3_node:
+      node: turtlebot3_node
+      subscribers:
+        cmd_vel:
+          type: "geometry_msgs/msg/Twist"
+      publishers:
+        odom:
+          type: "nav_msgs/msg/Odometry"
+        tf:
+          type: "tf2_msgs/msg/TFMessage"

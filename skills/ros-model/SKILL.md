@@ -116,6 +116,27 @@ gazebo_sensor_b1_controller:
       node: gazebo_sensor_B1_controller
 ```
 
+### 2a. Package, artifact and node are three distinct names — all three matter for launch generation
+
+Confirmed directly by the plugin maintainer (review of `examples/turtlebot3_navigation.rossystem`,
+2026-08-13), matching the same three-tier shape already established by rule 4b/`RosQNP.xtend`:
+
+```yaml
+planner_server:            # the ROS 2 package name
+  artifacts:
+    planner_server:         # the executable to run
+      node: planner_server  # the name given to the node, visible to rosgraph
+```
+
+These are frequently the same string (as above), but they answer different questions and are
+**not interchangeable placeholders for each other** — never collapse them because they happen to
+match in a given package. Getting the wrong one into the wrong DSL position is exactly what rules
+4b, 6, and the RM014/RM056/RM062 lint checks exist to catch: `rossdl_cmake` (the actual launch-file
+generator this composition feeds) derives the node's runtime class from `from:`'s **node** segment
+and keys its remapping table on the **artifact**'s bare name, so confusing package ↔ artifact ↔
+node produces a `.rossystem` that lints and validates clean but generates a broken launch file —
+a defect this plugin cannot detect on its own, since it never runs `rossdl_cmake` itself.
+
 ### 3. Indentation
 
 Spaces only, **exactly 2 per level**, LF endings, one trailing newline, no tabs, no trailing
@@ -341,6 +362,53 @@ whether it points at a real vendored file (and which one) or a companion file th
 fire a WARNING when a reference resolves against the catalogue but the source line's text doesn't
 contain the resolved file's name.
 
+### 8d. Reuse a whole catalogued system via `subSystems:` — but only when it actually exposes ports
+
+`from:` names *one node's* real implementation. To reuse a whole pre-built `.rossystem`
+composition — not re-derive it node by node — use the system-level `subSystems:` block instead:
+
+```
+subSystems:
+  "turtlebot"
+```
+
+**Not a bracket list.** The grammar production is `components+=SubSystem*`, a repetition, not
+`Process.nodes`'s `[...]` form — one bare (quote it anyway, per §8) system name per indented line,
+no leading `-`. `subSystems: ["turtlebot"]` is a parse error.
+
+**Before adding a `subSystems:` entry, check what it actually exposes.** A subsystem's
+connectable ports are *exactly* what its own `nodes:` block declares under `interfaces:` — **never**
+derived from the `.ros2` file its `from:` points at (confirmed directly against
+`RosSystemValidator.xtend`'s `checkIfInterfaceInSystem`, which walks one level into a referenced
+system's components and reads `rosnode.rosinterfaces` — populated only from that file's own
+`interfaces:` blocks). Two real catalogued examples show both outcomes:
+
+- `assets/rosmodelscatalog/robots/turtlebot3/robot/turtlebot.rossystem` declares real
+  `interfaces:` on all three of its nodes (`cmd_vel`, `tf`, `odom`, `scan`, `joint_states`,
+  `tf_static`) — genuinely reusable. Referencing it exposes those bare labels directly as
+  `connections:` endpoints (confirmed against the real oracle — no re-suffixing, no artifact
+  prefix, just the subsystem's own label text).
+- `assets/rosmodelscatalog/robots/turtlebot3/turtlebot3_navigation2.rossystem` (the Nav2 stack)
+  declares **zero** `interfaces:` on any of its 14 nodes. Referencing it via `subSystems:` is
+  grammatically valid and resolves, but exposes nothing — none of its nodes can be a
+  `connections:` endpoint through it. If a node from a subsystem like this needs external
+  wiring, **keep it as an explicit `nodes:` declaration in this file instead**, and say why in a
+  comment so a future pass doesn't "simplify" it into a broken `subSystems:` reference. This is
+  not a failure to reuse — the reference genuinely offers nothing to reuse.
+
+`assets/node_index.json`'s `_systems` entries (built by `build_node_index.py`) record each
+catalogued system's nodes and their declared interfaces, so this is checkable before authoring
+anything: an entry with every node's `"interfaces": {}` is the zero-exposure case above.
+
+**Never let one real node be reachable two ways in the same file** — directly under this file's
+own `nodes:` **and** through a `subSystems:` entry that also provides it. Two distinct `RosNode`
+objects then answer to the same label, which is the concrete shape of "duplicate model
+definitions confusing the validator." `rosmodel_lint.py`'s RM090 (ERROR) catches the exact-label
+collision; RM092 (WARNING) catches the softer case of the same `from:` reachable under two
+different labels. RM091 (WARNING) covers a `subSystems:` entry that doesn't resolve at all, nests
+another `subSystems:` block (two levels deep throws `ClassCastException` in the real validator —
+keep nesting flat), or resolves but exposes zero interfaces, as above.
+
 ### 9. Ordering (grammar-fixed — violating is a parse error)
 
 | Rule | Mandatory order |
@@ -457,6 +525,11 @@ Run every line against the emitted file:
 14. Every resolved `type:`/`from:` reference names its exact vendored source file in a trailing
     comment on the same line (`# assets/rosmodelscatalog/navigation/amcl.ros2`), and every
     project-local one says so and points at its companion file instead. See §8c.
+15. Every `subSystems:` entry is the bare-per-line form, never `[...]`. Before emitting one,
+    confirmed via `assets/node_index.json`'s `_systems` entries that the target actually declares
+    `interfaces:` on the node(s) you need — if it declares none, an explicit `nodes:` entry is the
+    correct choice, not a broken `subSystems:` reference. No node is reachable both directly under
+    this file's `nodes:` and through a `subSystems:` entry. See §8d.
 
 ## Validation
 
@@ -477,16 +550,23 @@ Run every line against the emitted file:
   from the input.** It warns against *inventing* those fields, not against transcribing them.
   Never drop a concrete value that was present in the source in order to get a clean linter run.
 
-  **RM081-089 are the catalogue checks** (§8c) — RM081/084 (WARNING: reference not indexed at
-  all, a project-local package/node is legitimate) and RM082/085/086 (ERROR: the package/node
+  **RM081-092 are the catalogue checks** (§8c, §8d) — RM081/084 (WARNING: reference not indexed
+  at all, a project-local package/node is legitimate) and RM082/085/086 (ERROR: the package/node
   *is* indexed but this specific type/node/interface name isn't — a real typo, with a
   suggested nearest match) run automatically whenever `assets/type_index.json` /
   `assets/node_index.json` exist. Pass `--no-catalogue` to suppress them in a workspace whose
   references are heavily project-local. RM083/RM087 name exactly which vendored file a
   resolved reference needs — feed the model straight to `scripts/collect_deps.py <file>...
-  <case-dir>` instead of hand-copying `_deps/` files. RM088/RM089 (WARNING) fire when a
-  reference resolves against the catalogue but its source line doesn't name the resolved file —
-  add the trailing comment they suggest.
+  <case-dir>` instead of hand-copying `_deps/` files (this also stages any resolved
+  `subSystems:` target and follows its own references transitively). RM088/RM089 (WARNING) fire
+  when a reference resolves against the catalogue but its source line doesn't name the resolved
+  file — add the trailing comment they suggest. RM090 (ERROR)/RM091/RM092 (WARNING) are the
+  `subSystems:` reuse checks from §8d: a node reachable both directly and through a subsystem, an
+  unresolved/nested/zero-interface subsystem reference, and a same-`from:`-different-label pair.
+  RM093 is a separate, non-catalogue grammar check (`--no-catalogue` does not suppress it): ERROR
+  on the bracket-list form `subSystems: [...]`, which is never valid (`components+=SubSystem*` is
+  a repetition, not a list production — see §8d); WARNING on a multi-entry `- item` block sequence,
+  which parses but has not been verified against the real oracle for more than one entry.
 
 - **Round-trip harness**: `tests/roundtrip.py`, which compares two models semantically rather than
   byte-wise (corpus formatting is far too inconsistent for byte-diffing to mean anything).

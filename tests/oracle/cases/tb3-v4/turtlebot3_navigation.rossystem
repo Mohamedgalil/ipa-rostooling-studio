@@ -1,0 +1,140 @@
+# TurtleBot 3 -- guided navigation with voice confirmation on arrival.
+# Operator supplies a goal pose; Nav2 drives the base to it over a closed
+# cmd_vel loop; on arrival the system speaks a confirmation back.
+#
+# v4 (2026-08-13), responding to maintainer review feedback on v3: the base-platform
+# nodes (turtlebot_node, turtlebot3_laserscan, robot_state_publisher) are no longer
+# re-declared here -- they are reused wholesale via subSystems: from the catalogued
+# assets/rosmodelscatalog/robots/turtlebot3/robot/turtlebot.rossystem, which already
+# composes them WITH real interfaces: declared. That is the correct fix for "why
+# re-declare a node the catalogue already models" -- from: reuses one node's
+# implementation, subSystems: reuses a whole pre-built composition.
+#
+# The Nav2-stack nodes (amcl, bt_navigator, planner_server, controller_server) stay
+# explicit nodes: declarations below, and that is NOT an oversight: the catalogued
+# assets/rosmodelscatalog/robots/turtlebot3/turtlebot3_navigation2.rossystem declares
+# ZERO interfaces: on any of its 14 nodes (verified against assets/node_index.json and
+# the real RosSystemValidator.xtend source -- checkIfInterfaceInSystem reads a
+# subsystem node's interfaces from what that file's OWN nodes: block declares, never
+# from the .ros2 its from: points at). Referencing that file via subSystems: would
+# resolve but expose nothing connectable, so the four nodes this system actually needs
+# to wire up stay declared directly, same as v3.
+#
+# Every from:/subSystems: line below carries a trailing comment naming exactly which
+# file it resolves to -- either a real path under assets/rosmodelscatalog/ (a
+# pre-existing file this session did NOT write), or an explicit "project-local" note
+# pointing at the companion file under rosnodes/ that this session DID write.
+#
+# Interface-label convention (project style, not a DSL requirement): every LOCALLY
+# declared label below is suffixed by port kind -- "_pub"/"_sub" for topics, "_action"
+# for both action servers and action clients. Labels that come from subSystems:
+# "turtlebot" (scan, odom, cmd_vel, tf, tf_static) use that file's own bare names
+# unchanged, since subSystems: exposes the referenced file's labels verbatim -- there
+# is no re-suffixing step.
+#
+# tf: turtlebot_node, robot_state_publisher and amcl each publish part of the tf tree;
+# bt_navigator is the only consumer modeled here. amcl's tf and robot_state_publisher's
+# tf_static both fan in cleanly. turtlebot_node's tf does NOT, and this is disclosed
+# rather than silently dropped: turtlebot.rossystem declares the identical bare label
+# "tf" on BOTH turtlebot_node and robot_state_publisher. A connections: endpoint
+# resolves by name only -- there is no artifact-qualified form for a connection
+# endpoint (only for a node's OWN interfaces: arrow target) -- so once both are exposed
+# through subSystems:, "tf" is genuinely ambiguous: rosmodel_lint.py's RM065 fires on
+# it (expected, not a bug), and it was verified directly against the real oracle --
+# tests/oracle/cases/16-subsystems-tf-ambiguity, ACCEPTED with 0 errors/0 warnings,
+# reproducible via `py tests/oracle/ask_oracle.py tests/oracle/cases/16-subsystems-tf-ambiguity`
+# (see tests/oracle/RESULTS.md, "Run 4") -- that Xtext resolves the ambiguity silently
+# rather than rejecting it. The connection below is kept anyway (real tf data, from whichever of
+# the two the real validator's default scoping resolves to), but a second connection
+# explicitly pairing robot_state_publisher's tf to the same subscriber -- which v3 had,
+# via a locally-declared distinct label -- cannot be expressed once both are reached
+# through the subsystem's own shared label, and is not emitted rather than silently
+# duplicated. tf_static has no such collision (only robot_state_publisher declares it)
+# and connects unambiguously.
+turtlebot3_navigation:
+  fromFile: "turtlebot3_bringup/launch/robot.launch.py"
+  subSystems:
+    "turtlebot" # assets/rosmodelscatalog/robots/turtlebot3/robot/turtlebot.rossystem -- composes turtlebot_node (turtlebot3_node.turtlebot3_node), turtlebot3_laserscan (hlds_laser_publisher.hlds_laser_publisher), robot_state_publisher (robot_state_publisher.robot_state_publisher), each with real interfaces: declared
+  nodes:
+    # Localization: particle-filter localizer. Catalogued interfaces also include
+    # initialpose/map subscribers and a particle_cloud/~_pose publisher set --
+    # omitted here as out of scope (no map_server/rviz modeled in this composition).
+    "amcl":
+      from: "amcl.amcl" # assets/rosmodelscatalog/navigation/amcl.ros2
+      interfaces:
+        - "tf_amcl_pub": pub-> "amcl::tf" # tf2_msgs/msg/TFMessage, part of the tf fan-in to bt_navigator
+        - "scan_sub": sub-> "amcl::scan" # sensor_msgs/msg/LaserScan, from turtlebot3_laserscan (subSystems: "turtlebot")
+    # Planning & control (Nav2): global path planner. Its compute_path_to_pose action
+    # server is real and catalogued, but nothing in this composition can legitimately
+    # client it -- that call happens inside Nav2's behavior-tree XML, internal to the
+    # bt_navigator process, not expressible as a top-level connection at this
+    # modeling granularity. Declared for documentation; left out of connections:.
+    # Also catalogued but omitted here: a "plan" publisher (nav_msgs/msg/Path, the
+    # computed path -- no consumer modeled in this composition) and a
+    # compute_path_through_poses action server (nav2_msgs/action/ComputePathThroughPoses,
+    # unused by this single-goal mission). Lifecycle boilerplate (~/change_state etc.,
+    # identical across all four Nav2-stack nodes here) is left unmentioned as generic
+    # infrastructure, not a disclosure gap.
+    "planner_server":
+      from: "planner_server.planner_server" # assets/rosmodelscatalog/navigation/planner_server.ros2
+      interfaces:
+        - "compute_path_to_pose_action": as-> "planner_server::compute_path_to_pose"
+    # Planning & control (Nav2): local trajectory follower, turns the planned path
+    # into velocity commands. follow_path is real and catalogued but left
+    # unconnected for the same reason as planner_server's compute_path_to_pose, above.
+    # Also catalogued but omitted here: a "speed_limit" subscriber
+    # (nav2_msgs/msg/SpeedLimit -- no speed-limit publisher modeled in this
+    # composition) and several debug-only publishers (cost_cloud, evaluation,
+    # local_plan, marker, received_global_plan, transformed_global_plan -- diagnostic
+    # output for a running system, not part of this composition's control-loop
+    # topology). Lifecycle boilerplate omitted for the same reason as planner_server's.
+    "controller_server":
+      from: "controller_server.controller_server" # assets/rosmodelscatalog/navigation/controller_server.ros2
+      interfaces:
+        - "cmd_vel_pub": pub-> "controller_server::cmd_vel_nav" # geometry_msgs/msg/Twist, out to turtlebot_node (subSystems: "turtlebot") -- closes the control loop
+        - "odom_ctrl_sub": sub-> "controller_server::odom" # nav_msgs/msg/Odometry, from turtlebot_node (subSystems: "turtlebot")
+        - "follow_path_action": as-> "controller_server::follow_path"
+    # Planning & control (Nav2): behavior-tree orchestrator, the single entry point
+    # for "go here". Catalogued interfaces also include a navigate_through_poses
+    # action server (unused by this mission), a navigate_to_pose actionclient slot
+    # of its own (an internal Nav2 quirk -- nothing in this simplified composition
+    # offers a matching server for it, so it stays undeclared here), and a
+    # goal_pose topic subscriber (an alternate, non-action goal-entry path that
+    # this system doesn't use since mission_manager drives navigate_to_pose
+    # directly) -- all three omitted, not just the two mentioned above.
+    #
+    # use_sim_time is emitted here as a real, catalogued node-level parameter (Boolean,
+    # default False in bt_navigator.ros2) -- a worked example of node-level parameters:,
+    # which no prior revision of this file demonstrated.
+    "bt_navigator":
+      from: "bt_navigator.bt_navigator" # assets/rosmodelscatalog/navigation/bt_navigator.ros2
+      interfaces:
+        - "odom_sub": sub-> "bt_navigator::odom" # nav_msgs/msg/Odometry, from turtlebot_node (subSystems: "turtlebot")
+        - "tf_btnav_sub": sub-> "bt_navigator::tf" # tf2_msgs/msg/TFMessage, fan-in from amcl and (ambiguously -- see header comment) turtlebot_node/robot_state_publisher (subSystems: "turtlebot")
+        - "tf_static_btnav_sub": sub-> "bt_navigator::tf_static" # tf2_msgs/msg/TFMessage, from robot_state_publisher (subSystems: "turtlebot")
+        - "navigate_to_pose_action": as-> "bt_navigator::navigate_to_pose" # exposed to mission_manager -- the goal comes in here
+      parameters:
+        - "use_sim_time": "bt_navigator::use_sim_time" # assets/rosmodelscatalog/navigation/bt_navigator.ros2 -- catalogued Boolean parameter, default False
+          value: false
+    # Mission & HMI: accepts the operator's goal, drives the NavigateToPose action, reports status
+    "mission_manager":
+      from: "turtlebot3_mission_manager.mission_manager" # project-local, not catalogued -- see rosnodes/turtlebot3_mission_manager.ros2
+      interfaces:
+        - "nav_status_pub": pub-> "mission_manager::nav_status" # std_msgs/msg/String, out to voice_announcer
+        - "goal_pose_sub": sub-> "mission_manager::goal_pose" # geometry_msgs/msg/PoseStamped -- from the operator, no in-system publisher
+        - "navigate_to_pose_client_action": ac-> "mission_manager::navigate_to_pose"
+    # Mission & HMI: speaks nav_status back to the operator (audio synthesis happens outside this graph)
+    "voice_announcer":
+      from: "turtlebot3_voice_announcer.voice_announcer" # project-local, not catalogued -- see rosnodes/turtlebot3_voice_announcer.ros2
+      interfaces:
+        - "nav_status_sub": sub-> "voice_announcer::nav_status"
+  connections:
+    - [scan, scan_sub] # turtlebot3_laserscan (subSystems: "turtlebot") -> amcl : sensor_msgs/msg/LaserScan
+    - [odom, odom_sub] # turtlebot_node (subSystems: "turtlebot") -> bt_navigator : nav_msgs/msg/Odometry
+    - [odom, odom_ctrl_sub] # turtlebot_node (subSystems: "turtlebot") -> controller_server : nav_msgs/msg/Odometry (same publisher, two subscribers)
+    - [tf, tf_btnav_sub] # turtlebot_node OR robot_state_publisher (subSystems: "turtlebot", ambiguous label -- see header comment) -> bt_navigator : tf2_msgs/msg/TFMessage
+    - [tf_amcl_pub, tf_btnav_sub] # amcl -> bt_navigator : tf2_msgs/msg/TFMessage
+    - [tf_static, tf_static_btnav_sub] # robot_state_publisher (subSystems: "turtlebot") -> bt_navigator : tf2_msgs/msg/TFMessage
+    - [cmd_vel_pub, cmd_vel] # controller_server -> turtlebot_node (subSystems: "turtlebot") : geometry_msgs/msg/Twist -- closes the loop
+    - [navigate_to_pose_action, navigate_to_pose_client_action] # bt_navigator <- mission_manager : nav2_msgs/action/NavigateToPose
+    - [nav_status_pub, nav_status_sub] # mission_manager -> voice_announcer : std_msgs/msg/String
