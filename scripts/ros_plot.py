@@ -40,20 +40,17 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 import rosmodel_lint as L  # noqa: E402
+import _studio_common as C  # noqa: E402
 
 
 # Malformed-connections fallback: `-[a,b]` / `- [a, b]`, possibly with no space after '-'.
 _CONN_SCALAR_RE = re.compile(r"-\s*\[\s*([^,\]]+?)\s*,\s*([^,\]]+?)\s*\]")
 
 # The seven interaction kinds we band/colour by. `param` is a pseudo-kind for the parameters
-# band; the six arrow kinds come straight from the grammar (RosSystem.xtext).
-KIND_ORDER = ["pub", "sub", "ss", "sc", "as", "ac", "param"]
-KIND_LABELS = {
-    "pub": "Publisher", "sub": "Subscriber",
-    "ss": "Service server", "sc": "Service client",
-    "as": "Action server", "ac": "Action client",
-    "param": "Parameter",
-}
+# band; the six arrow kinds come straight from the grammar (RosSystem.xtext). Shared with
+# ros_studio via _studio_common so the viewer and the editor never drift.
+KIND_ORDER = C.KIND_ORDER
+KIND_LABELS = C.KIND_LABELS
 
 
 # ----------------------------------------------------------------------------------------
@@ -453,8 +450,11 @@ def render_html(models, title="RosTooling system plot"):
     payload = json.dumps(
         {"title": title, "tabs": models, "kindOrder": KIND_ORDER, "kindLabels": KIND_LABELS},
         ensure_ascii=False)
-    return _HTML_TEMPLATE.replace("__TITLE__", _html_escape(title)).replace(
-        "/*__DATA__*/null", payload)
+    return (_HTML_TEMPLATE
+            .replace("/*__PALETTE_CSS__*/", C.PALETTE_CSS)
+            .replace("/*__JS_PRIMITIVES__*/", C.JS_PRIMITIVES)
+            .replace("__TITLE__", _html_escape(title))
+            .replace("/*__DATA__*/null", payload))
 
 
 def _html_escape(text):
@@ -471,69 +471,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__TITLE__</title>
 <style>
-  :root{
-    --paper:#F2F5F4; --surface:#FBFCFC; --surface-2:#E8EDEB; --rule:#D2DAD7; --rule-soft:#E1E7E5;
-    --ink:#101917; --ink-2:#3B4744; --ink-3:#66756F;
-    --accent:#12806A; --accent-2:#0C5F4E; --accent-wash:#DCEDE7;
-    --warn:#B4841F; --warn-wash:#F7EAD0; --dead:#A63A46; --dead-wash:#F5DEE0;
-    --edge:#7E8F89; --edge-hot:#12806A;
-    /* interaction-kind palette (light) */
-    --k-pub:#12806A; --k-pub-bg:#DCEDE7;
-    --k-sub:#37588C; --k-sub-bg:#D9E2F2;
-    --k-ss:#B4841F;  --k-ss-bg:#F7EAD0;
-    --k-sc:#8C5A2B;  --k-sc-bg:#F0E1D2;
-    --k-as:#6E4BB0;  --k-as-bg:#E5DCF3;
-    --k-ac:#A63A46;  --k-ac-bg:#F5DEE0;
-    --k-param:#5E8069; --k-param-bg:#DDE8E0;
-    --shadow:0 1px 2px rgba(16,25,23,.05),0 8px 24px -12px rgba(16,25,23,.18);
-    --shadow-lift:0 2px 6px rgba(16,25,23,.10),0 14px 32px -14px rgba(16,25,23,.32);
-    --display:"Palatino Linotype","Book Antiqua",Palatino,"Iowan Old Style",Georgia,serif;
-    --body:"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
-    --mono:Consolas,"Cascadia Mono",ui-monospace,"SF Mono",Menlo,monospace;
-    color-scheme: light dark;
-  }
-  @media (prefers-color-scheme: dark){ :root{
-    --paper:#0E1414; --surface:#141C1B; --surface-2:#1B2523; --rule:#2A3835; --rule-soft:#212D2B;
-    --ink:#E8EFEC; --ink-2:#B0BFBA; --ink-3:#7E8F89;
-    --accent:#4FBFA1; --accent-2:#7FD6BE; --accent-wash:#15302A;
-    --warn:#D9A94A; --warn-wash:#33290F; --dead:#D9707C; --dead-wash:#35181C;
-    --edge:#6C7B76; --edge-hot:#4FBFA1;
-    --k-pub:#4FBFA1; --k-pub-bg:#0A2A24;
-    --k-sub:#7C9BD1; --k-sub-bg:#16233A;
-    --k-ss:#D9A94A;  --k-ss-bg:#33290F;
-    --k-sc:#C79362;  --k-sc-bg:#2E2214;
-    --k-as:#A78BE0;  --k-as-bg:#241B39;
-    --k-ac:#D9707C;  --k-ac-bg:#35181C;
-    --k-param:#8FB39B; --k-param-bg:#17251D;
-    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.7);
-    --shadow-lift:0 2px 8px rgba(0,0,0,.5),0 16px 34px -14px rgba(0,0,0,.85);
-  }}
-  :root[data-theme="dark"]{
-    --paper:#0E1414; --surface:#141C1B; --surface-2:#1B2523; --rule:#2A3835; --rule-soft:#212D2B;
-    --ink:#E8EFEC; --ink-2:#B0BFBA; --ink-3:#7E8F89;
-    --accent:#4FBFA1; --accent-2:#7FD6BE; --accent-wash:#15302A;
-    --warn:#D9A94A; --warn-wash:#33290F; --dead:#D9707C; --dead-wash:#35181C;
-    --edge:#6C7B76; --edge-hot:#4FBFA1;
-    --k-pub:#4FBFA1; --k-pub-bg:#0A2A24; --k-sub:#7C9BD1; --k-sub-bg:#16233A;
-    --k-ss:#D9A94A; --k-ss-bg:#33290F; --k-sc:#C79362; --k-sc-bg:#2E2214;
-    --k-as:#A78BE0; --k-as-bg:#241B39; --k-ac:#D9707C; --k-ac-bg:#35181C;
-    --k-param:#8FB39B; --k-param-bg:#17251D;
-    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.7);
-    --shadow-lift:0 2px 8px rgba(0,0,0,.5),0 16px 34px -14px rgba(0,0,0,.85);
-  }
-  :root[data-theme="light"]{
-    --paper:#F2F5F4; --surface:#FBFCFC; --surface-2:#E8EDEB; --rule:#D2DAD7; --rule-soft:#E1E7E5;
-    --ink:#101917; --ink-2:#3B4744; --ink-3:#66756F;
-    --accent:#12806A; --accent-2:#0C5F4E; --accent-wash:#DCEDE7;
-    --warn:#B4841F; --warn-wash:#F7EAD0; --dead:#A63A46; --dead-wash:#F5DEE0;
-    --edge:#7E8F89; --edge-hot:#12806A;
-    --k-pub:#12806A; --k-pub-bg:#DCEDE7; --k-sub:#37588C; --k-sub-bg:#D9E2F2;
-    --k-ss:#B4841F; --k-ss-bg:#F7EAD0; --k-sc:#8C5A2B; --k-sc-bg:#F0E1D2;
-    --k-as:#6E4BB0; --k-as-bg:#E5DCF3; --k-ac:#A63A46; --k-ac-bg:#F5DEE0;
-    --k-param:#5E8069; --k-param-bg:#DDE8E0;
-    --shadow:0 1px 2px rgba(16,25,23,.05),0 8px 24px -12px rgba(16,25,23,.18);
-    --shadow-lift:0 2px 6px rgba(16,25,23,.10),0 14px 32px -14px rgba(16,25,23,.32);
-  }
+/*__PALETTE_CSS__*/
   *{box-sizing:border-box;}
   body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);
     font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;}
@@ -688,9 +626,10 @@ _HTML_TEMPLATE = r"""<!doctype html>
 </div>
 <script>
 "use strict";
+/*__JS_PRIMITIVES__*/
 var DATA = /*__DATA__*/null;
 (function(){
-  var NS="http://www.w3.org/2000/svg";
+  var NS=STUDIO.NS;
   var KIND_ORDER = DATA.kindOrder, KIND_LABELS = DATA.kindLabels;
   var ARROW_KINDS = ["pub","sub","ss","sc","as","ac"];
 
@@ -698,9 +637,7 @@ var DATA = /*__DATA__*/null;
   var NW=196, GAPX=64, GAPY=52, PADX=30, PADY=40;
   var DEPS_NW=210, DEPS_COLGAP=320, DEPS_ROWH=64, DEPS_PAD=40;
 
-  function el(tag, cls){ var e=document.createElement(tag); if(cls) e.className=cls; return e; }
-  function svgEl(tag){ return document.createElementNS(NS, tag); }
-  function txt(parent, cls, s){ var e=el("span",cls); e.textContent=s; parent.appendChild(e); return e; }
+  var el=STUDIO.el, svgEl=STUDIO.svgEl, txt=STUDIO.txt;
 
   var controllers = [];
 
@@ -749,13 +686,7 @@ var DATA = /*__DATA__*/null;
     var scroll=el("div","graph-scroll");
     var graph=el("div","graph");
     var svg=svgEl("svg"); svg.setAttribute("aria-hidden","true");
-    var defs=svgEl("defs"); var mk=svgEl("marker");
-    mk.setAttribute("id","ah"+index); mk.setAttribute("viewBox","0 0 10 10");
-    mk.setAttribute("refX","9"); mk.setAttribute("refY","5");
-    mk.setAttribute("markerWidth","7"); mk.setAttribute("markerHeight","7");
-    mk.setAttribute("orient","auto-start-reverse");
-    var mp=svgEl("path"); mp.setAttribute("d","M0,1 L9,5 L0,9 z"); mp.setAttribute("fill","context-stroke");
-    mk.appendChild(mp); defs.appendChild(mk); svg.appendChild(defs);
+    STUDIO.makeArrowMarkers(svg, index);
     graph.appendChild(svg); scroll.appendChild(graph); shell.appendChild(scroll);
 
     // legend
@@ -848,10 +779,10 @@ var DATA = /*__DATA__*/null;
     model.ghosts.forEach(function(g){ nodes.push({m:{label:g.label, interfaces:[], params:[], id:g.id}, id:g.id, ghost:true}); });
     var byId={}; nodes.forEach(function(nd){ byId[nd.id]=nd; });
 
-    var cols = Math.max(1, Math.ceil(Math.sqrt(nodes.length)));
+    var gpos = STUDIO.gridPositions(nodes.length,
+      {padx:PADX, pady:PADY, nw:NW, gapx:GAPX, rowh:220, gapy:GAPY});
     nodes.forEach(function(nd,i){
-      var c=i%cols, r=Math.floor(i/cols);
-      nd.mainHome={x:PADX+c*(NW+GAPX), y:PADY+r*(220+GAPY)};
+      nd.mainHome={x:gpos[i].x, y:gpos[i].y};
       nd.main={x:nd.mainHome.x, y:nd.mainHome.y};
     });
     // deps homes: node boxes left column, package boxes right column
@@ -994,11 +925,7 @@ var DATA = /*__DATA__*/null;
       return {x:cx, y:cy};
     }
 
-    function bezier(x1,y1,x2,y2){
-      var dx=x2-x1;
-      var off=Math.max(40,Math.abs(dx)*0.4);
-      return "M"+x1+","+y1+" C"+(x1+off)+","+y1+" "+(x2-off)+","+y2+" "+x2+","+y2;
-    }
+    var bezier = STUDIO.bezier;
 
     function draw(){
       if(level===4){ drawDeps(); return; }
@@ -1112,27 +1039,19 @@ var DATA = /*__DATA__*/null;
       }
     }
 
-    // ---- dragging ------------------------------------------------------------------
-    var drag=null;
+    // ---- dragging (shared pointer-capture primitive) -------------------------------
     function wireDrag(getPos, node){
-      node.el.addEventListener("pointerdown",function(ev){
-        var pos=getPos(node);
-        drag={node:node,getPos:getPos,px:ev.clientX,py:ev.clientY,ox:pos.x,oy:pos.y,moved:0};
-        try{ node.el.setPointerCapture(ev.pointerId); }catch(e){}
-        graph.classList.add("dragging"); ev.preventDefault();
-      });
-      node.el.addEventListener("pointermove",function(ev){
-        if(!drag||drag.node!==node) return;
-        var ddx=ev.clientX-drag.px, ddy=ev.clientY-drag.py;
-        drag.moved=Math.max(drag.moved,Math.abs(ddx)+Math.abs(ddy));
-        var pos=drag.getPos(node); pos.x=drag.ox+ddx; pos.y=drag.oy+ddy;
-        node.el.style.left=pos.x+"px"; node.el.style.top=pos.y+"px"; draw();
-      });
-      node.el.addEventListener("pointerup",function(ev){
-        if(!drag||drag.node!==node) return;
-        var wasClick=drag.moved<5; drag=null; graph.classList.remove("dragging");
-        try{ node.el.releasePointerCapture(ev.pointerId); }catch(e){}
-        if(wasClick && node.id!=null){ focus=(focus===node.id)?null:node.id; applyFocus(); }
+      STUDIO.makeDraggable(node.el, {
+        getPos:function(){ return getPos(node); },
+        onStart:function(ev){ graph.classList.add("dragging"); ev.preventDefault(); },
+        onMove:function(x,y){
+          var pos=getPos(node); pos.x=x; pos.y=y;
+          node.el.style.left=x+"px"; node.el.style.top=y+"px"; draw();
+        },
+        onEnd:function(wasClick){
+          graph.classList.remove("dragging");
+          if(wasClick && node.id!=null){ focus=(focus===node.id)?null:node.id; applyFocus(); }
+        }
       });
     }
     nodes.forEach(function(nd){
@@ -1167,8 +1086,7 @@ var DATA = /*__DATA__*/null;
     };
   }
 
-  function esc(s){ return (""+s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
-  function cssEsc(s){ return (window.CSS&&CSS.escape)?CSS.escape(s):(""+s).replace(/["\\]/g,"\\$&"); }
+  var esc=STUDIO.esc, cssEsc=STUDIO.cssEsc;
 
   // ---- tab wiring ------------------------------------------------------------------
   var tabbar=document.getElementById("tabbar");
@@ -1198,12 +1116,7 @@ var DATA = /*__DATA__*/null;
   });
 
   // manual theme toggle (standalone file -- no host to stamp data-theme)
-  var root=document.documentElement, tb=document.getElementById("themebtn");
-  tb.addEventListener("click",function(){
-    var cur=root.getAttribute("data-theme");
-    if(!cur){ cur=window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"; }
-    root.setAttribute("data-theme",cur==="dark"?"light":"dark");
-  });
+  STUDIO.wireTheme(document.getElementById("themebtn"));
 })();
 </script>
 </body>

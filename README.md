@@ -117,7 +117,8 @@ reports 19+.
 .lsp.json                       ros2 + ros language servers (auto-discovered at plugin root)
 hooks/hooks.json                PostToolUse linter for .ros2 and .rossystem (auto-discovered)
 commands/update-ros-catalog.md  slash command: refresh popular-ROS-packages reference (cheap agent)
-commands/ros-plot.md            slash command: render .rossystem models as one interactive HTML file
+commands/ros-plot.md            slash command: render .rossystem models as one interactive HTML file (read-only)
+commands/ros-studio.md          slash command: interactive AUTHORING editor + deterministic generate/validate
 agents/ros-modeler.md           subagent, preloads the ros-model skill
 skills/ros-model/
   SKILL.md                      entry point: decision tree, hard rules, self-check
@@ -125,7 +126,10 @@ skills/ros-model/
   references/rossystem-syntax.md .rossystem grammar + RosSystemValidator behaviour
   references/worked-examples.md  3 full transformations, failure catalogue, source-defect policy
 scripts/rosmodel_lint.py        static linter, 68 rules (.ros / .ros2 / .rossystem)
-scripts/ros_plot.py             /ros-plot backend: .rossystem -> self-contained interactive HTML
+scripts/ros_plot.py             /ros-plot backend: .rossystem -> self-contained interactive HTML (read-only)
+scripts/ros_studio.py           /ros-studio backend: init (seed) / render (editor HTML) / generate (+ lint, oracle)
+scripts/_studio_common.py       shared HTML/CSS/JS primitives + emit vocabulary (imported by both ros_plot and ros_studio)
+scripts/_studio_editor.py       the /ros-studio editor page as one raw-string template
 scripts/README.md               rule reference + deviations + test evidence
 tests/roundtrip.py              semantic round-trip harness
 tests/fixtures/manifest.md      fixture inventory
@@ -207,6 +211,41 @@ negative control (a planted semantic change *must* be detected).
 py -3 scripts/rosmodel_lint.py out/my_pkg.ros2 out/my_system.rossystem
 py -3 tests/roundtrip.py compare corpus/my_pkg.ros2 out/my_pkg.ros2
 ```
+
+## /ros-studio — the authoring editor (supersedes /ros-plot for authoring)
+
+`/ros-plot` **reads** a `.rossystem`; `/ros-studio` **builds** one. The editor is the same kind of
+self-contained, no-network HTML page, but interactive: draggable nodes with kind-coloured ports, an
+inspector, connection drawing with live legality, a node catalogue, offline autocomplete, and a
+View ⇄ Edit toggle that also carries `/ros-plot`'s four read-only abstraction levels (System │
+Interfaces │ Full │ Deps). `/ros-plot` is **not** removed — it stays as the lightweight read-only
+path. Both share one primitives module (`scripts/_studio_common.py`: the palette + seven kind
+colours, the SVG arrowhead marker, the bezier edge, pointer-capture drag, theme toggle, grid layout)
+so the viewer and the editor can never drift.
+
+The browser only authors an in-memory project; the Python companion owns generation and validation:
+
+```bash
+# seed a project.json from an existing system (recovers interface types from the sibling .ros2)
+py scripts/ros_studio.py init path/to/system.rossystem --out project.json
+# ...or start blank:  py scripts/ros_studio.py init --out project.json
+
+# render the editor (autocomplete data embedded; does NOT auto-open — add --open if you want it)
+py scripts/ros_studio.py render project.json --out ros-studio.html
+
+# author in the browser, hit Commit (downloads project.json), then generate + validate:
+py scripts/ros_studio.py generate project.json --outdir generated            # emits + rosmodel_lint
+py scripts/ros_studio.py generate project.json --outdir generated --oracle    # + real language server
+```
+
+`generate` emits `.ros2` / `.rossystem` / companion `.ros` **deterministically** from the linter's
+own grammar vocabulary (block names, arrow pairs, quoting), always runs `rosmodel_lint`, and with
+`--oracle` stages catalogue dependencies (`collect_deps`) and asks the real server (`ask_oracle`). On
+a lint ERROR it re-renders the editor with the diagnostics injected onto the offending nodes as
+`<project>.error.html` and exits non-zero. The three autocomplete datasets come from
+`assets/type_index.json` (message/service/action types), `assets/node_index.json` +
+`references/popular-ros-packages.md` (package names) and `assets/node_index.json` (the node
+catalogue); each is guarded, so a stripped install still runs (autocomplete just narrows).
 
 ---
 
