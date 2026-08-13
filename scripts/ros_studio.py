@@ -49,6 +49,17 @@ ASSETS = os.path.join(PLUGIN_ROOT, "assets")
 ARROW_KINDS = L.ARROW_KIND_ORDER            # ["pub","sub","ss","sc","as","ac"]
 SRC_SIDE = {"pub": 1, "ss": 1, "as": 1, "sub": 0, "sc": 0, "ac": 0}
 
+# The three QoS fields whose value is (EString | 'infinite') (Ros2.xtext:38-41). Everything
+# else in QOS_PINNED is either an enum keyword or Integer0, so only these three are quoted.
+QOS_DURATIONS = ("lease_duration", "lifespan", "deadline")
+
+# Enum vocabularies for the QoS editor. L.QOS_ENUMS is the linter's own table, but it has no
+# `liveliness` entry: check_qos short-circuits on QOS_NEWER before it reaches the enum branch,
+# so the linter never validates that value and never needed the list. The grammar does --
+# ('liveliness:' Liveliness=('automatic'|'manual')) (Ros2.xtext:38) -- and the editor must
+# offer exactly those two, or it hands the author a value the parser cannot lex.
+QOS_UI_ENUMS = dict(L.QOS_ENUMS, liveliness=["automatic", "manual"])
+
 
 # ========================================================================================
 # Small emit helpers (quoting mirrors rosmodel_lint's grammar facts)
@@ -297,9 +308,13 @@ def seed_from_rossystem(path):
                        "value": p.get("value")} for p in mn.get("params", [])]
             artifact = artifact or (node_name or mn["label"])
 
+        # `namespace:` is an optional RosNode member (RosSystem.xtext:64) that ros_plot has
+        # always read and ros_studio used to drop on the floor -- the same silent data loss as
+        # the exposure label, and the one that matters for a multi-robot system.
         node = {"id": nid("n"), "label": mn["label"], "backing": backing,
                 "pkg": pkg or "", "node": node_name or mn["label"],
                 "artifact": artifact, "catalogueFile": cat_file,
+                "namespace": mn.get("namespace"),
                 "x": 0, "y": 0, "ifaces": ifaces, "params": params}
         nodes.append(node)
         node_by_modelid[mn["id"]] = node
@@ -480,14 +495,26 @@ def _emit_qos(lines, qos, indent):
     'infinite' per the grammar; enums are bare keywords."""
     if not qos or not isinstance(qos, dict):
         return
-    lines.append(indent + "qos:")
+    body = []
     for key in L.QOS_PINNED:
         if key not in qos or qos[key] in (None, ""):
             continue
-        val = qos[key]
-        if key in L.QOS_NEWER and key in ("lease_duration", "lifespan", "deadline"):
-            val = _q_double(val) if str(val) != "infinite" else _q_double("infinite")
-        lines.append(indent + "  " + key + ": " + str(val))
+        val = str(qos[key])
+        if key in QOS_DURATIONS:
+            # 'infinite' is a grammar KEYWORD in (EString | 'infinite'), not an EString.
+            # Quoting it used to be unconditional here, which made every `deadline: infinite`
+            # come back out as deadline: "infinite" -- an RM035 ERROR ("not an integer
+            # string"), so `generate` refused its own output. (The 3.1.0 server accepts the
+            # quoted form, so this never showed up in an --oracle run; only the linter caught
+            # it, and only once the field became editable.)
+            if val != "infinite":
+                val = _q_double(val)
+        body.append(indent + "  " + key + ": " + val)
+    # a dict whose every value is blank must not open a bodiless `qos:` -- that is a parse
+    # error, and the editor can produce such a dict by clearing the last field.
+    if body:
+        lines.append(indent + "qos:")
+        lines.extend(body)
 
 
 def _companion_ros(package, blocks):
@@ -582,6 +609,12 @@ def emit_rossystem(project):
         if n["backing"] == "cat" and n.get("catalogueFile"):
             comment = "  # assets/rosmodelscatalog/%s" % n["catalogueFile"]
         lines.append("      from: " + _q_double(from_val) + comment)
+        # ROSSYSTEM_NODE_KEYS fixes from -> namespace -> interfaces -> parameters
+        # (RosSystem.xtext:60-75); emitting it anywhere else is RM039. The value is a plain
+        # EString, so it is quoted like every other EString we write.
+        ns = (n.get("namespace") or "").strip()
+        if ns:
+            lines.append("      namespace: " + _q_double(ns))
         exposed = [f for f in n["ifaces"] if (n["id"], f["id"]) in labels]
         exposed.sort(key=lambda f: (ARROW_KINDS.index(f["kind"]), f["name"]))
         if exposed:
@@ -817,6 +850,22 @@ def load_autocomplete():
     else:
         warnings.append("assets/type_index.json missing — type autocomplete disabled")
 
+    # {type: relative .ros file} -- the same lookup _type_catalogue_file() does, embedded so
+    # the page can reproduce _type_comment()/_companion_types() byte-for-byte in its .ros2
+    # preview. Without it the preview would have to guess whether a type discloses a source
+    # file, and tests/studio_parity.js could not hold the two emitters to the same bytes.
+    type_files = {}
+    if os.path.isfile(tpath):
+        try:
+            with open(tpath, encoding="utf-8") as h:
+                td = json.load(h)
+            for name, entry in (td.get("types") or {}).items():
+                rel = (entry or {}).get("file")
+                if rel:
+                    type_files[name] = rel
+        except Exception:
+            pass          # already reported above; the preview degrades to "no comment"
+
     catalogue = {}
     packages = set()
     npath = os.path.join(ASSETS, "node_index.json")
@@ -841,8 +890,8 @@ def load_autocomplete():
     # can type-check catalogue connections offline (node_index carries only the kind).
     cat_types = catalogue_types_map(catalogue)
 
-    return {"types": types, "packages": sorted(packages), "catalogue": catalogue,
-            "catalogueTypes": cat_types, "warnings": warnings}
+    return {"types": types, "typeFiles": type_files, "packages": sorted(packages),
+            "catalogue": catalogue, "catalogueTypes": cat_types, "warnings": warnings}
 
 
 # ========================================================================================
@@ -857,11 +906,27 @@ def render_editor(project, diagnostics=None, banner=None):
     payload = {
         "project": project,
         "types": ac["types"],
+        "typeFiles": ac.get("typeFiles", {}),
         "packages": ac["packages"],
         "catalogue": ac["catalogue"],
         "catalogueTypes": ac.get("catalogueTypes", {}),
         "kindOrder": ARROW_KINDS,
         "kindLabels": {k: C.KIND_LABELS[k] for k in ARROW_KINDS},
+        "blocks": {k: C.KIND_TO_BLOCK[k] for k in ARROW_KINDS},
+        # The QoS vocabulary the editor offers comes from the LINTER's tables, not from a
+        # hand-copy in the page: the control can then never offer a field or a value that
+        # rosmodel_lint would reject, and its inline severities mirror the rules directly
+        # (RM031 info / RM034 warning / RM035 error).
+        "qos": {
+            "fields": L.QOS_PINNED,
+            "enums": QOS_UI_ENUMS,
+            "newer": L.QOS_NEWER,
+            "discouraged": L.QOS_DISCOURAGED,
+            "durations": list(QOS_DURATIONS),
+            "int32Min": L.INT32_MIN,
+            "int32Max": L.INT32_MAX,
+        },
+        "typeSegBlocks": C.TYPE_SEG_TO_ROS_BLOCK,
         "banner": banner,
         "acWarnings": ac["warnings"],
     }

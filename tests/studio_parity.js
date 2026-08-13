@@ -34,7 +34,15 @@ var STUDIO = path.join(ROOT, "scripts", "ros_studio.py");
 // The shipped pure functions genSystem() transitively needs, plus ifaceConnected, which the
 // page uses to decide the "expose" checkbox is forced on -- the same rule _exposure_labels()
 // applies when it walks the connections, so it is cross-checked here too.
-var WANTED = ["qd", "nodeById", "ifaceById", "ifaceConnected", "exposureLabels", "genSystem"];
+//
+// The second group is genRos2()'s closure. The .ros2 side is checked because `qos:` and
+// `fromGitRepo:` are editable ONLY in this page and appear ONLY in that file: the author's
+// single chance to see them before Commit is that preview, so it has to be the emitter's
+// bytes and not an approximation of them.
+var WANTED = ["qd", "qs2", "nodeById", "ifaceById", "ifaceConnected", "exposureLabels",
+  "genSystem",
+  "handPkgNodes", "companionPkgs", "typeComment", "pyFloat", "pyRepr", "fmtParamValue",
+  "genQos", "genRos2"];
 
 
 // ---------------------------------------------------------------------------------------
@@ -131,7 +139,13 @@ function loadShipped(html, project) {
   var body =
     "var DATA = __data;\n" +
     "var KINDS = DATA.kindOrder;\n" +
+    "var BLOCK = DATA.blocks;\n" +
+    "var TYPEFILES = DATA.typeFiles || {};\n" +
+    "var SEGBLOCK = DATA.typeSegBlocks || {};\n" +
+    "var QOS = DATA.qos;\n" +
+    "var QOS_DUR = {}; (QOS.durations||[]).forEach(function(k){QOS_DUR[k]=1;});\n" +
     "var project = __project;\n" +
+    "project.packages = project.packages || {};\n" +   // the page normalises this on load
     "var document = { getElementById: function(id){\n" +
     "  if(id === 'sysname') return { value: __sysname };\n" +
     "  throw new Error('parity sandbox: unexpected document.getElementById(' + id + ')');\n" +
@@ -170,6 +184,27 @@ function compare(projectPath, htmlPath, expectPath) {
     var d = firstDiff(expected, actual);
     problems.push("genSystem() differs from the Python emitter at " + (d || "(trailing bytes)"));
   }
+
+  // Every .ros2 the companion wrote next to that .rossystem, by package name. The editor
+  // decides on its own which packages produce a file (hand-authored + non-empty pkg), so an
+  // extra or a missing file is itself a parity failure and is reported as one.
+  var outdir = path.dirname(expectPath);
+  var wrote = fs.readdirSync(outdir).filter(function (f) { return /\.ros2$/.test(f); })
+    .map(function (f) { return f.replace(/\.ros2$/, ""); }).sort();
+  var previews = fns.handPkgNodes().order;
+  if (wrote.join(",") !== previews.join(","))
+    problems.push("the .ros2 file set differs: python wrote [" + wrote.join(", ")
+      + "], the editor previews [" + previews.join(", ") + "]");
+  wrote.forEach(function (pkg) {
+    if (previews.indexOf(pkg) < 0) return;              // already reported above
+    var want = fs.readFileSync(path.join(outdir, pkg + ".ros2"), "utf8");
+    var got = fns.genRos2(pkg);
+    if (got !== want) {
+      var dd = firstDiff(want, got);
+      problems.push("genRos2(" + pkg + ") differs from the Python emitter at "
+        + (dd || "(trailing bytes)"));
+    }
+  });
 
   // cross-check the exposure rule itself: every connection endpoint must read as connected
   // AND must have been assigned a label, which is what makes the connections block emittable.
@@ -300,9 +335,16 @@ function main(argv) {
   return failures ? 1 : 0;
 }
 
-try {
-  process.exit(main(process.argv.slice(2)));
-} catch (e) {
-  console.error("studio_parity: " + (e && e.message ? e.message : e));
-  process.exit(2);
+// Also usable as a library, so another harness can pull functions out of a rendered page with
+// THIS extractor rather than a second, subtly different copy of the brace counter.
+if (require.main === module) {
+  try {
+    process.exit(main(process.argv.slice(2)));
+  } catch (e) {
+    console.error("studio_parity: " + (e && e.message ? e.message : e));
+    process.exit(2);
+  }
+} else {
+  module.exports = { extractScript: extractScript, extractData: extractData,
+    sliceFunction: sliceFunction, loadShipped: loadShipped };
 }

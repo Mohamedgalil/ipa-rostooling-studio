@@ -129,6 +129,19 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .iedit .expchk{display:flex;align-items:center;gap:.2rem;font-size:.6rem;color:var(--ink-3);white-space:nowrap;cursor:pointer}
   .iedit .expchk input{margin:0}
   .iedit.orphan{border-color:var(--dead);background:var(--dead-wash)}
+  .iedit .qtog{cursor:pointer;font-family:var(--mono);font-size:.56rem;font-weight:700;text-transform:uppercase;color:var(--ink-3);border:1px solid var(--rule);border-radius:3px;padding:.1em .3em;white-space:nowrap}
+  .iedit .qtog.set{color:var(--accent-2);border-color:var(--accent);background:var(--accent-wash)}
+  .qosbox{margin:-.1rem 0 .35rem;padding:.4rem .45rem;border:1px solid var(--rule);border-top:none;border-radius:0 0 5px 5px;background:var(--surface)}
+  .qosbox .qrow{display:flex;align-items:center;gap:.35rem;margin-bottom:.18rem}
+  .qosbox .qrow label{flex:0 0 6.6em;font-family:var(--mono);font-size:.62rem;color:var(--ink-3)}
+  .qosbox .qrow select,.qosbox .qrow input{flex:1;min-width:0;font-family:var(--mono);font-size:.66rem;background:var(--surface-2);border:1px solid var(--rule);border-radius:4px;padding:.15rem .25rem;color:var(--ink)}
+  .qosbox .qnote{font-size:.6rem;line-height:1.35;margin:0 0 .3rem 6.95em;color:var(--ink-3)}
+  .qosbox .qnote.i{color:var(--ink-3)} .qosbox .qnote.w{color:var(--warn)} .qosbox .qnote.e{color:var(--dead);font-weight:600}
+  .qosbox .qnote:empty{display:none}
+  .syspanel .pkgrow{margin-bottom:.5rem}
+  .syspanel .pkgrow .pn{font-family:var(--mono);font-size:.7rem;font-weight:600;margin-bottom:.15rem}
+  .hint{font-size:.66rem;line-height:1.4;color:var(--ink-3);margin-top:.15rem}
+  .hint.w{color:var(--warn)}
   .addform{display:flex;flex-direction:column;gap:.35rem;padding:.5rem;border:1px dashed var(--rule);border-radius:6px;margin-top:.35rem}
   .kseg{display:flex;gap:2px}
   .kseg button{flex:1;font-family:var(--mono);font-size:.6rem;font-weight:700;text-transform:uppercase;padding:.28rem 0;border:1px solid var(--rule);background:var(--surface);color:var(--ink-3);cursor:pointer;border-radius:4px}
@@ -280,8 +293,15 @@ var DATA = /*__DATA__*/null;
   var SRC_SIDE={pub:1,ss:1,as:1,sub:0,sc:0,ac:0};
   var COMPLEMENT={pub:"sub",sub:"pub",ss:"sc",sc:"ss",as:"ac",ac:"as"};
   var PAIR_TOPIC={pub:1,sub:1};
-  var BLOCK={pub:"publishers",sub:"subscribers",ss:"serviceservers",sc:"serviceclients",as:"actionservers",ac:"actionclients"};
+  var BLOCK=DATA.blocks;                  // kind -> .ros2 spec block, from _studio_common
   var TYPES=DATA.types||[], TYPESET={}; TYPES.forEach(function(t){TYPESET[t]=1;});
+  var TYPEFILES=DATA.typeFiles||{};       // {type: relative .ros file} -- drives the RM089 comment
+  var SEGBLOCK=DATA.typeSegBlocks||{};    // msg/srv/action -> msgs/srvs/actions
+  var QOS=DATA.qos||{fields:[],enums:{},newer:[],discouraged:[],durations:[]};
+  var QOS_NEW={}, QOS_DISC={}, QOS_DUR={};
+  (QOS.newer||[]).forEach(function(k){QOS_NEW[k]=1;});
+  (QOS.discouraged||[]).forEach(function(k){QOS_DISC[k]=1;});
+  (QOS.durations||[]).forEach(function(k){QOS_DUR[k]=1;});
   var PACKAGES=DATA.packages||[];
   var CATALOGUE=DATA.catalogue||{};
   var CATTYPES=DATA.catalogueTypes||{};   // {pkg.node: {ifaceName: type}} from the vendored .ros2
@@ -289,6 +309,8 @@ var DATA = /*__DATA__*/null;
   var project=DATA.project;
   project.nodes=project.nodes||[];
   project.connections=project.connections||[];
+  project.packages=project.packages||{};
+  project.system=project.system||{};
   var DIAG=(project.diagnostics&&project.diagnostics.byNode)||{};
   var uid=1000; function nid(){return "x"+(++uid);}
 
@@ -298,6 +320,9 @@ var DATA = /*__DATA__*/null;
       inspector=document.getElementById("inspector");
   STUDIO.makeArrowMarkers(svg,"");
   var selNode=null, selEdge=null, addKind="pub", mode="edit", level=3;
+  // which interfaces have their QoS panel open. Kept OUTSIDE `project` on purpose: it is view
+  // state, and putting it in the model would make opening a panel an undoable edit.
+  var qosOpen={};
   var kindShown={}; KINDS.forEach(function(k){kindShown[k]=true;});
 
   document.getElementById("sysname").value=(project.system&&project.system.name)||"system";
@@ -364,6 +389,7 @@ var DATA = /*__DATA__*/null;
   function applyState(json){
     project=JSON.parse(json);
     project.nodes=project.nodes||[]; project.connections=project.connections||[];
+    project.packages=project.packages||{}; project.system=project.system||{};
     syncUid();
     document.getElementById("sysname").value=(project.system&&project.system.name)||"system";
     if(selNode&&!nodeById(selNode)) selNode=null;   // it may have been deleted in this state
@@ -439,7 +465,9 @@ var DATA = /*__DATA__*/null;
     var fromStr='"'+n.pkg+"."+n.node+'"';
     var h='<div class="nhead" data-drag><span class="ntitle">'+esc(n.label)+'</span>'
       +'<span class="badge '+(n.backing==="cat"?"cat":"")+'">'+(n.backing==="cat"?"catalogue":"authored")+'</span></div>'
-      +'<div class="nfrom">from: '+esc(fromStr)+'</div><div class="ifaces"></div>';
+      +'<div class="nfrom">from: '+esc(fromStr)
+      +((n.namespace&&String(n.namespace).trim())?'<br>namespace: '+esc(n.namespace):'')
+      +'</div><div class="ifaces"></div>';
     el.innerHTML=h;
     var box=el.querySelector(".ifaces");
     for(var j=0;j<n.ifaces.length;j++){
@@ -602,11 +630,69 @@ var DATA = /*__DATA__*/null;
   var dragState=null, wire=null;
   wireCanvas();
 
+  // ============================ qos editing ============================
+  // QoS was seeded by parse_ros2 and emitted by _emit_qos long before it was editable, so a
+  // seeded model could carry a QoS block the author could neither see nor repair. The
+  // vocabulary and the severities below all come from DATA.qos, which ros_studio fills from
+  // rosmodel_lint's own tables -- the control cannot offer a field the linter would reject.
+  function qosVal(f,k){ return (f.qos&&f.qos[k]!=null)?String(f.qos[k]):""; }
+  function qosCount(f){
+    var c=0; if(!f.qos) return 0;
+    QOS.fields.forEach(function(k){ if(f.qos[k]!=null&&f.qos[k]!=="") c++; });
+    return c;
+  }
+  // RM035, mirrored at ENTRY time rather than after Commit. CheckDuration calls
+  // Integer.parseInt on the value and the unit is NANOSECONDS, so the whole field tops out at
+  // about 2.147 seconds -- every human-plausible timeout ("5000000000" = 5 s) is an ERROR.
+  // Confirmed against the real validator, oracle case 14.
+  function qosDurationProblem(v){
+    v=String(v==null?"":v).trim();
+    if(!v||v==="infinite") return null;
+    if(!/^[+-]?[0-9]+$/.test(v))
+      return "RM035 ERROR — Integer.parseInt rejects decimal points, underscores, exponents "
+           + "and spaces. Use a bare integer of nanoseconds, or the keyword infinite.";
+    var n=parseInt(v,10);
+    if(n<QOS.int32Min||n>QOS.int32Max)
+      return "RM035 ERROR — overflows signed 32-bit. The unit is NANOSECONDS, so ~2.147 s is "
+           + "the longest expressible duration; the validator throws on this value. Use "
+           + "infinite if you meant “no limit”.";
+    return null;
+  }
+  function qosNote(k,v){
+    v=String(v==null?"":v).trim();
+    if(!v) return ["",""];
+    if(QOS_DUR[k]){ var p=qosDurationProblem(v); if(p) return ["e",p]; }
+    if(QOS_NEW[k]) return ["i","RM031 INFO — legal on the current server (verified), but a "
+      +"consumer on a toolchain built before 2025-10-16 cannot even LEX this keyword."];
+    if(QOS_DISC[k]) return ["w","RM034 — Corpus B suppresses this field. Keep it only if the "
+      +"value came from the source; never invent one."];
+    return ["",""];
+  }
+  function qosPanel(f){
+    if(!qosOpen[f.id]) return "";
+    var h='<div class="qosbox">';
+    QOS.fields.forEach(function(k){
+      var v=qosVal(f,k), note=qosNote(k,v);
+      h+='<div class="qrow"><label>'+esc(k)+'</label>';
+      if(QOS.enums[k]){
+        h+='<select data-qk="'+k+'" data-qi="'+f.id+'"><option value=""'+(v?"":" selected")+'>—</option>'
+          +QOS.enums[k].map(function(o){return '<option'+(o===v?" selected":"")+'>'+esc(o)+'</option>';}).join("")
+          +'</select>';
+      }else{
+        h+='<input data-undo="1" data-qk="'+k+'" data-qi="'+f.id+'" value="'+esc(v)+'" placeholder="'
+          +(QOS_DUR[k]?"nanoseconds, or infinite":(k==="depth"?"non-negative integer":""))+'">';
+      }
+      h+='</div><div class="qnote '+note[0]+'" data-qnote="'+k+'/'+f.id+'">'+esc(note[1])+'</div>';
+    });
+    h+='<div class="hint">blank clears a field; with nothing set, no qos: block is written.</div></div>';
+    return h;
+  }
+
   // ============================ inspector ============================
   function fillInspector(){
     if(selEdge){ return fillEdgeInspector(); }
     var n=selNode&&nodeById(selNode);
-    if(!n){inspector.className="inspector empty";inspector.textContent="Select a node to "+(mode==="edit"?"edit":"inspect")+" it.";return;}
+    if(!n) return fillSystemInspector();
     inspector.className="inspector";
     if(mode!=="edit"){ return fillReadonlyNode(n); }
     var cat=n.backing==="cat";
@@ -618,6 +704,12 @@ var DATA = /*__DATA__*/null;
       +'<div class="fld"><label>package '+(cat?"":"(lowercase — uppercase is an ERROR)")+'</label><input id="f_pkg" data-undo="1" list="pkglist" value="'+esc(n.pkg)+'" '+(cat?"disabled":"")+'></div>'
       +'<div class="fld"><label>node</label><input id="f_node" data-undo="1" value="'+esc(n.node)+'" '+(cat?"disabled":"")+'></div>'
       +'<div class="fld"><label>artifact (arrow target base)</label><input id="f_art" data-undo="1" value="'+esc(n.artifact||"")+'" '+(cat?"disabled":"")+'></div>'
+      // namespace is a property of the node INSTANCE in the system, not of the backing
+      // artifact, so it is editable for catalogue nodes too. Blank = omit the key.
+      +'<div class="fld"><label>namespace (optional)</label><input id="f_ns" data-undo="1" value="'+esc(n.namespace||"")+'" placeholder="e.g. /robot1">'
+      +((n.namespace&&String(n.namespace).trim())
+        ?'<div class="hint w">emitted between from: and interfaces:. 0 of 52 corpus files use it — rosmodel_lint warns (RM044); the 3.1.0 server accepts it.</div>'
+        :'<div class="hint">set this to scope the node in a multi-robot system.</div>')+'</div>'
       +'<div class="fld"><label>from: (derived)</label><div class="derived">"'+esc(n.pkg)+'.'+esc(n.node)+'"</div></div></div>';
     ih+='<div class="insec"><h4>interfaces</h4>';
     for(var j=0;j<n.ifaces.length;j++){var f=n.ifaces[j];
@@ -626,8 +718,10 @@ var DATA = /*__DATA__*/null;
         +'<span class="grow"><span class="inm2">'+esc(f.name)+'</span><br><span class="ity2">'+esc(f.type||"—")+' · "'+esc(n.artifact||"")+'::'+esc(f.name)+'"</span>'
         +'<span class="lblrow"><input class="ilbl" data-undo="1" data-lbl="'+f.id+'" value="'+esc(f.label||"")+'" placeholder="'+esc(f.name)+'" title="exposure label — the key written into the .rossystem. Blank derives it from the interface name.">'
         +'<label class="expchk" title="'+(conn?"connected — always exposed":"write this interface into the .rossystem even with nothing wired to it")+'">'
-        +'<input type="checkbox" data-exp="'+f.id+'"'+((f.exposed||conn)?" checked":"")+(conn?" disabled":"")+'>expose</label></span></span>'
-        +'<span class="del" data-del="'+f.id+'">✕</span></div>';
+        +'<input type="checkbox" data-exp="'+f.id+'"'+((f.exposed||conn)?" checked":"")+(conn?" disabled":"")+'>expose</label>'
+        +'<span class="qtog'+(qosCount(f)?" set":"")+'" data-qtog="'+f.id+'" title="quality of service — written into the .ros2, not the .rossystem">qos'+(qosCount(f)?"·"+qosCount(f):"")+'</span>'
+        +'</span></span>'
+        +'<span class="del" data-del="'+f.id+'">✕</span></div>'+qosPanel(f);
     }
     ih+='<div class="addform"><div class="kseg" id="kseg">'+KINDS.map(function(k){return '<button data-k="'+k+'" class="'+(k===addKind?"on":"")+'">'+k+'</button>';}).join("")+'</div>'
       +'<input id="ni_name" placeholder="interface name (quoted for you)">'
@@ -648,11 +742,74 @@ var DATA = /*__DATA__*/null;
     inspector.innerHTML=ih;
     wireInspector(n);
   }
+  // fromFile is a SYSTEM member and fromGitRepo a PACKAGE member, so neither has a node to
+  // hang off; both were seeded and emitted with no way to edit them, which meant every
+  // from-scratch project shipped without fromFile and took an RM053 warning. The inspector's
+  // idle state (nothing selected) is where they live now.
+  function handPackages(){
+    var seen={}, out=[];
+    project.nodes.forEach(function(n){
+      if(n.backing==="hand"&&n.pkg&&!seen[n.pkg]){ seen[n.pkg]=1; out.push(n.pkg); }
+    });
+    return out.sort();
+  }
+  function fillSystemInspector(){
+    inspector.className="inspector syspanel";
+    var ff=(project.system&&project.system.fromFile)||"", pkgs=handPackages(), edit=(mode==="edit");
+    var h='<div class="insec"><h4>system</h4>';
+    if(edit){
+      h+='<div class="fld"><label>fromFile (the launch file this system stands for)</label>'
+        +'<input id="f_fromfile" data-undo="1" value="'+esc(ff)+'" placeholder="pkg/launch/bringup.launch.py">'
+        // STATUS.md sec 4 / N3 claimed omitting fromFile makes the validator NPE. Re-probed
+        // against the rebuilt 3.1.0 server on 2026-08-13: ACCEPTED, 0 errors, 0 warnings. So
+        // this is a lint warning, not a crash -- do NOT fabricate a path to dodge it.
+        +(ff?'<div class="hint">written as the first line of the .rossystem.</div>'
+            :'<div class="hint w">absent — rosmodel_lint warns (RM053). The current 3.1.0 '
+             +'server ACCEPTS a system without it (re-verified), so leave it blank rather '
+             +'than inventing a path you do not have.</div>')
+        +'</div>';
+    }else{
+      h+='<div class="fld"><label>fromFile</label><div class="derived">'+esc(ff||"(absent)")+'</div></div>';
+    }
+    h+='<div class="fld"><label>contents</label><div class="derived">'+project.nodes.length
+      +' node(s) · '+project.connections.length+' connection(s)</div></div></div>';
+
+    h+='<div class="insec"><h4>packages (.ros2)</h4>';
+    if(!pkgs.length) h+='<div class="roinfo">No hand-authored package yet — catalogue nodes '
+      +'reference a vendored .ros2 and generate none.</div>';
+    pkgs.forEach(function(p){
+      var git=(project.packages[p]||{}).fromGitRepo||"";
+      h+='<div class="pkgrow"><div class="pn">'+esc(p)+'.ros2</div>'
+        +(edit?'<input data-git="'+esc(p)+'" data-undo="1" value="'+esc(git)
+               +'" placeholder="fromGitRepo — https://github.com/org/repo/">'
+              :'<div class="derived">'+esc(git||"(no fromGitRepo)")+'</div>')
+        +'</div>';
+    });
+    h+='</div><div class="insec"><h4>selection</h4><div class="roinfo">Select a node to '
+      +(edit?'edit it, or add one from the rail':'inspect it')+'.</div></div>';
+    inspector.innerHTML=h;
+
+    var ffi=document.getElementById("f_fromfile");
+    if(ffi) ffi.oninput=function(e){
+      pushUndo("fromfile");
+      project.system.fromFile=e.target.value.trim()||null;
+      runIssues();};
+    inspector.querySelectorAll("[data-git]").forEach(function(x){x.oninput=function(){
+      var p=x.dataset.git;
+      pushUndo("git:"+p);
+      if(!project.packages[p]) project.packages[p]={};
+      project.packages[p].fromGitRepo=x.value.trim()||null;};});
+  }
   function fillReadonlyNode(n){
-    var rows=n.ifaces.map(function(f){return f.kind+"  "+f.name+(f.type?"  "+f.type:"");}).join("\n")||"(none)";
+    var rows=n.ifaces.map(function(f){
+      var q=qosCount(f)?("  qos["+QOS.fields.filter(function(k){return f.qos[k]!=null&&f.qos[k]!=="";})
+                                            .map(function(k){return k+"="+f.qos[k];}).join(" ")+"]"):"";
+      return f.kind+"  "+f.name+(f.type?"  "+f.type:"")+q;}).join("\n")||"(none)";
     var pr=n.params.map(function(p){return p.name+" : "+p.ptype+" = "+p.value;}).join("\n")||"(none)";
     inspector.innerHTML='<div class="insec"><h4>node: '+esc(n.label)+'</h4>'
-      +'<div class="roinfo">from: "'+esc(n.pkg)+'.'+esc(n.node)+'"<br>backing: '+n.backing+'<br>artifact: '+esc(n.artifact||"")+'</div></div>'
+      +'<div class="roinfo">from: "'+esc(n.pkg)+'.'+esc(n.node)+'"'
+      +((n.namespace&&String(n.namespace).trim())?'<br>namespace: '+esc(n.namespace):'')
+      +'<br>backing: '+n.backing+'<br>artifact: '+esc(n.artifact||"")+'</div></div>'
       +'<div class="insec"><h4>interfaces</h4><pre class="roinfo" style="white-space:pre-wrap">'+esc(rows)+'</pre></div>'
       +'<div class="insec"><h4>parameters</h4><pre class="roinfo" style="white-space:pre-wrap">'+esc(pr)+'</pre></div>'
       +((DIAG[n.id]&&DIAG[n.id].length)?'<div class="insec"><h4>diagnostics</h4><pre class="roinfo" style="white-space:pre-wrap;color:var(--dead)">'+esc(DIAG[n.id].join("\n"))+'</pre></div>':'');
@@ -682,6 +839,30 @@ var DATA = /*__DATA__*/null;
     if(pkg) pkg.oninput=function(e){pushUndo("pkg:"+n.id);n.pkg=e.target.value.toLowerCase();e.target.value=n.pkg;render();};
     if(nod) nod.oninput=function(e){pushUndo("node:"+n.id);n.node=e.target.value;render();};
     if(art) art.oninput=function(e){pushUndo("art:"+n.id);n.artifact=e.target.value;render();};
+    var ns=document.getElementById("f_ns");
+    // no fillInspector() here: the RM044 hint under the field only changes between "set" and
+    // "unset", and rebuilding the panel mid-word would cost the caret. render() repaints the
+    // node card (which shows the namespace) and re-runs the instant checks.
+    if(ns) ns.oninput=function(e){pushUndo("ns:"+n.id);n.namespace=e.target.value.trim()||null;render();};
+    inspector.querySelectorAll("[data-qtog]").forEach(function(x){x.onclick=function(){
+      var id=x.dataset.qtog; qosOpen[id]=!qosOpen[id]; fillInspector();};});
+    inspector.querySelectorAll("[data-qk]").forEach(function(x){
+      var apply=function(){
+        var f=ifaceById(n,x.dataset.qi); if(!f) return;
+        var k=x.dataset.qk, v=String(x.value).trim();
+        pushUndo("qos:"+f.id+":"+k);
+        if(!f.qos) f.qos={};
+        if(v==="") delete f.qos[k]; else f.qos[k]=v;
+        if(!qosCount(f)) f.qos=null;
+        var note=qosNote(k,v);
+        var el=inspector.querySelector('[data-qnote="'+STUDIO.cssEsc(k+"/"+f.id)+'"]');
+        if(el){ el.className="qnote "+note[0]; el.textContent=note[1]; }
+        var tog=inspector.querySelector('[data-qtog="'+STUDIO.cssEsc(f.id)+'"]');
+        if(tog){ var c=qosCount(f); tog.className="qtog"+(c?" set":""); tog.textContent="qos"+(c?"·"+c:""); }
+        render();
+      };
+      if(x.tagName==="SELECT") x.onchange=apply; else x.oninput=apply;
+    });
     inspector.querySelectorAll("[name=bk]").forEach(function(r){r.onchange=function(e){pushUndo();n.backing=e.target.value;render();fillInspector();};});
     inspector.querySelectorAll("[data-del]").forEach(function(x){x.onclick=function(){
       pushUndo();
@@ -738,7 +919,7 @@ var DATA = /*__DATA__*/null;
   document.getElementById("addNode").onclick=function(){
     pushUndo();
     var n={id:nid(),label:"new_node",backing:"hand",pkg:"new_package",node:"new_node",artifact:"new_node",
-      catalogueFile:null,x:200+Math.random()*120,y:340+Math.random()*80,ifaces:[],params:[]};
+      catalogueFile:null,namespace:null,x:200+Math.random()*120,y:340+Math.random()*80,ifaces:[],params:[]};
     project.nodes.push(n); selNode=n.id; selEdge=null; render(); fillInspector();
   };
   var catScrim=document.getElementById("catScrim");
@@ -765,7 +946,7 @@ var DATA = /*__DATA__*/null;
     var parts=key.split("."), pkg=parts[0], node=parts.slice(1).join(".");
     var tmap=CATTYPES[key]||{};   // real interface types recovered from the vendored .ros2
     var n={id:nid(),label:node,backing:"cat",pkg:pkg,node:node,artifact:e.artifact||node,catalogueFile:e.file||null,
-      x:220+Math.random()*140,y:120+Math.random()*120,
+      namespace:null,x:220+Math.random()*140,y:120+Math.random()*120,
       // a catalogue node arrives with its FULL interface set; exposing all of it would write
       // dozens of unwired lines, so these start unexposed and surface as you connect them.
       ifaces:Object.keys(e.interfaces||{}).map(function(nm){return {id:nid(),name:nm,kind:e.interfaces[nm],type:tmap[nm]||null,qos:null,label:null,exposed:false};}),params:[]};
@@ -797,17 +978,31 @@ var DATA = /*__DATA__*/null;
     for(var i=0;i<project.nodes.length;i++){var n=project.nodes[i];
       if(n.backing==="hand" && /[A-Z]/.test(n.pkg)) issues.push(["e",'package "'+n.pkg+'" has uppercase — validator ERROR (RM010)']);
       labels[n.label]=(labels[n.label]||0)+1;
+      // RM044: legal and the server accepts it, but 0 of 52 corpus files use it, so the linter
+      // warns. Surface it here rather than letting Commit be the first mention.
+      if(n.namespace&&String(n.namespace).trim())
+        issues.push(["w",n.label+': namespace "'+n.namespace+'" has zero corpus support (RM044)']);
       var seen={};
       for(var j=0;j<n.ifaces.length;j++){var f=n.ifaces[j];
         if(seen[f.name]) issues.push(["w",n.label+": duplicate interface name \""+f.name+"\""]); seen[f.name]=1;
         // B2: a hand-authored interface with no type blocks generation (server can't resolve it)
         if(n.backing==="hand" && (!f.type||String(f.type).trim()==="")) issues.push(["e",n.label+": interface \""+f.name+"\" ("+f.kind+") has no message type"]);
+        // RM035 on a QoS duration is a hard ERROR that would stop `generate` after the files
+        // are already written; the panel has to say so while it is still editable.
+        if(f.qos) (QOS.durations||[]).forEach(function(k){
+          if(qosDurationProblem(f.qos[k]))
+            issues.push(["e",n.label+': qos '+k+' "'+f.qos[k]+'" is rejected by CheckDuration (RM035)']);
+        });
       }
       if(!project.nodes.length){}
       if(DIAG[n.id]) DIAG[n.id].forEach(function(m){issues.push(["e",m]);});
     }
     for(var l in labels) if(labels[l]>1) issues.push(["e",'duplicate node label "'+l+'" (RM009)']);
     if(!project.nodes.length) issues.push(["e","system has no nodes — add one before generating (the server rejects an empty nodes: block)"]);
+    // RM053. A warning, not an error: the current server ACCEPTS a system with no fromFile
+    // (re-probed 2026-08-13, 0 errors / 0 warnings), so this must not be dressed up as a crash.
+    if(!(project.system&&project.system.fromFile))
+      issues.push(["w","no fromFile — rosmodel_lint warns (RM053); set it in the system panel (deselect to reach it)"]);
     // B1: a drawn connection whose endpoints carry different types is rejected by the server
     for(var ci=0;ci<project.connections.length;ci++){var c=project.connections[ci];
       var fa=ifaceById(nodeById(c.from.n),c.from.i), ta=ifaceById(nodeById(c.to.n),c.to.i);
@@ -868,6 +1063,9 @@ var DATA = /*__DATA__*/null;
     project.nodes.forEach(function(n){
       o+='    '+qd(n.label)+':\n      from: '+qd(n.pkg+"."+n.node);
       o+=(n.backing==="cat"&&n.catalogueFile)?"  # assets/rosmodelscatalog/"+n.catalogueFile+"\n":"\n";
+      // RosSystem.xtext:60-75 fixes from -> namespace -> interfaces -> parameters (RM039).
+      var ns=String(n.namespace==null?"":n.namespace).trim();
+      if(ns) o+='      namespace: '+qd(ns)+'\n';
       var exposed=n.ifaces.filter(function(f){return labels[n.id+"/"+f.id];});
       // emit_rossystem() writes the exposures sorted by (kind order, name). Without the same
       // sort the preview matched only for a freshly seeded project, where the seeder happens
@@ -889,18 +1087,128 @@ var DATA = /*__DATA__*/null;
     }
     return o;
   }
-  function genRos2(n){
-    var o=n.pkg.toLowerCase()+":\n  artifacts:\n    "+(n.artifact||n.node)+":\n      node: "+n.node+"\n";
-    KINDS.forEach(function(k){
-      var fs=n.ifaces.filter(function(f){return f.kind===k;}).sort(function(a,b){return a.name<b.name?-1:1;});
-      if(!fs.length) return;
-      o+="      "+BLOCK[k]+":\n";
-      fs.forEach(function(f){o+="        "+qs2(f.name)+":\n          type: "+qs2(f.type||"TODO_pkg/msg/Type")+"\n";});
+  // ---- .ros2 preview -----------------------------------------------------------------
+  // Byte-parity with generate_files()/emit_ros2() in ros_studio.py, and pinned by
+  // tests/studio_parity.js. It used to be a rough sketch (no fromGitRepo, no qos, unsorted
+  // artifacts, a lowercased package name) -- tolerable while nothing in this file was
+  // .ros2-only, but QoS and fromGitRepo are editable HERE and nowhere else, so this preview
+  // is the only place an author can check them before handing the project to the companion.
+  function handPkgNodes(){
+    var by={}, order=[];
+    project.nodes.forEach(function(n){
+      if(n.backing!=="hand"||!n.pkg) return;
+      if(!by[n.pkg]){ by[n.pkg]=[]; order.push(n.pkg); }
+      by[n.pkg].push(n);
     });
-    if(n.params.length){
-      o+="      parameters:\n";
-      n.params.forEach(function(p){o+="        "+qs2(p.name)+":\n          type: "+p.ptype+"\n          default: "+(p.ptype==="String"?qs2(p.value):p.value)+"\n";});
+    order.sort();
+    return {by:by,order:order};
+  }
+  // _companion_types(): a type whose package is authored locally and that the type catalogue
+  // does not define gets a generated companion .ros -- and its reference then carries NO
+  // "# assets/roscommonobjects/..." disclosure comment.
+  function companionPkgs(){
+    var local={}, out={};
+    project.nodes.forEach(function(n){ if(n.backing==="hand"&&n.pkg) local[n.pkg]=1; });
+    project.nodes.forEach(function(n){
+      if(n.backing!=="hand") return;
+      (n.ifaces||[]).forEach(function(f){
+        var typ=f.type;
+        if(!typ||String(typ).indexOf("/")<0) return;
+        var parts=String(typ).split("/");
+        if(parts.length!==3) return;
+        if(local[parts[0]]&&!TYPEFILES[typ]&&SEGBLOCK[parts[1]]) out[parts[0]]=1;
+      });
+    });
+    return out;
+  }
+  function typeComment(typ,comp){
+    if(!typ||String(typ).indexOf("/")<0) return "";
+    if(comp[String(typ).split("/")[0]]) return "";
+    var rel=TYPEFILES[typ];
+    return rel?("  # assets/roscommonobjects/"+rel):"";
+  }
+  // Python float(): anything it would reject becomes 0.0 in _fmt_param_value. This accepts the
+  // plain numeral forms only -- float() also takes "inf", "1_0" and surrounding tabs, which no
+  // parameter default in the corpus uses.
+  function pyFloat(raw){
+    raw=String(raw==null?"":raw).trim();
+    if(!/^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$/.test(raw)) return 0;
+    var f=parseFloat(raw);
+    return isFinite(f)?f:0;
+  }
+  // Python repr() of a float, which is NOT String(Number): CPython switches to exponential at
+  // 1e16 and below 1e-4 (JS: 1e21 and 1e-7) and pads the exponent to two digits. Getting this
+  // wrong would print "1e+16" where the emitter writes "1.0e+16" -- and a mantissa with no
+  // '.' is the RM041 DECINT trap the emitter exists to avoid.
+  function pyRepr(f){
+    if(f===0) return (1/f===-Infinity)?"-0.0":"0.0";
+    var ex=f.toExponential(), at=ex.indexOf("e"), e=parseInt(ex.slice(at+1),10);
+    if(e>=-4&&e<=15){ var s=String(f); return (s.indexOf(".")<0)?s+".0":s; }
+    var mant=ex.slice(0,at);
+    if(mant.indexOf(".")<0) mant+=".0";
+    var a=Math.abs(e);
+    return mant+"e"+(e<0?"-":"+")+(a<10?("0"+a):String(a));
+  }
+  function fmtParamValue(ptype,value){
+    ptype=String(ptype||"String").trim();
+    var raw=(value==null)?"":String(value);
+    if(ptype==="Boolean") return /^\s*(t|1|y|true)/i.test(raw)?"true":"false";
+    if(ptype==="Integer"){
+      if(!raw) return "0";
+      var t=Math.trunc(pyFloat(raw));
+      // Python's int() is exact for any float; JS String() gives "1e+30" past 1e21, so hand
+      // the out-of-safe-range case to BigInt, which prints the same digits int() would.
+      if(Math.abs(t)>9007199254740991&&typeof BigInt==="function") return BigInt(t).toString();
+      return String(t);
     }
+    if(ptype==="Double") return pyRepr(pyFloat(raw));
+    return qs2(raw);
+  }
+  function genQos(qos,indent){
+    if(!qos) return "";
+    var out=[];
+    QOS.fields.forEach(function(k){
+      var v=qos[k];
+      if(v==null||v==="") return;
+      v=String(v);
+      // 'infinite' is a grammar keyword, not an EString: quoting it is an RM035 error.
+      if(QOS_DUR[k]&&v!=="infinite") v=qd(v);
+      out.push(indent+"  "+k+": "+v+"\n");
+    });
+    return out.length?(indent+"qos:\n"+out.join("")):"";
+  }
+  function genRos2(pkg){
+    var g=handPkgNodes(), comp=companionPkgs();
+    var nodes=(g.by[pkg]||[]).slice().sort(function(a,b){
+      var x=String(a.artifact||""), y=String(b.artifact||"");
+      return x<y?-1:(x>y?1:0);});
+    var git=(project.packages[pkg]||{}).fromGitRepo;
+    var o=pkg+":\n";
+    if(git) o+="  fromGitRepo: "+qd(git)+"\n";
+    o+="  artifacts:\n";
+    nodes.forEach(function(n){
+      o+="    "+(n.artifact||"")+":\n      node: "+n.node+"\n";
+      KINDS.forEach(function(k){
+        var fs=n.ifaces.filter(function(f){return f.kind===k;}).sort(function(a,b){
+          return a.name<b.name?-1:(a.name>b.name?1:0);});
+        if(!fs.length) return;
+        o+="      "+BLOCK[k]+":\n";
+        fs.forEach(function(f){
+          var typ=f.type||"TODO_pkg/msg/Type";
+          o+="        "+qs2(f.name)+":\n          type: "+qs2(typ)+typeComment(typ,comp)+"\n";
+          o+=genQos(f.qos,"          ");
+        });
+      });
+      var ps=(n.params||[]).slice().sort(function(a,b){
+        return a.name<b.name?-1:(a.name>b.name?1:0);});
+      if(ps.length){
+        o+="      parameters:\n";
+        ps.forEach(function(p){
+          o+="        "+qs2(p.name)+":\n          type: "+(p.ptype||"String")
+            +"\n          default: "+fmtParamValue(p.ptype,p.value)+"\n";
+        });
+      }
+    });
     return o;
   }
   function genProjectJson(){
@@ -915,7 +1223,12 @@ var DATA = /*__DATA__*/null;
     tabs.forEach(function(t){var bt=document.createElement("button");bt.textContent=t[1];bt.className=t[0]===tab?"on":"";bt.onclick=function(){showGen(t[0]);};tb.appendChild(bt);});
     var out="";
     if(tab==="system") out=genSystem();
-    else if(tab==="ros2") out=project.nodes.filter(function(n){return n.backing==="hand";}).map(genRos2).join("\n");
+    else if(tab==="ros2"){
+      var order=handPkgNodes().order;
+      out=order.length
+        ? order.map(function(p){return "# "+p+".ros2\n"+genRos2(p);}).join("\n")
+        : "(no hand-authored package — catalogue-only systems generate no .ros2)";
+    }
     else out=genProjectJson();
     document.getElementById("genOut").textContent=out;
   }
@@ -1006,7 +1319,8 @@ var DATA = /*__DATA__*/null;
   })();
 
   render();
-  updateHistoryUI();
+  fillInspector();      // the idle inspector is the SYSTEM panel (fromFile, fromGitRepo), not
+  updateHistoryUI();    // a placeholder, so it has to be painted before anything is selected
 })();
 </script>
 </body>
