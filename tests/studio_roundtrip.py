@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""studio_roundtrip.py -- regression harness for /ros-studio's seed -> generate round-trip.
+"""studio_roundtrip.py -- regression harness for /ros-studio's seed -> generate round-trip,
+and for the JS/Python parity of the editor's preview.
 
 The defect this exists to catch: `init` used to discard the .rossystem exposure LABEL
 ("odom_pub") and keep only the interface NAME it arrow-points at ("odom"), then re-link
@@ -10,6 +11,15 @@ failed to re-link and its connection was dropped -- silently, with `generate` st
 
 So the assertion here is not "it runs" or "it lints clean" -- a truncated model does both. It
 is that the set of NODES, EXPOSURES and CONNECTIONS survives the trip unchanged.
+
+Three checks per fixture:
+  ROUND-TRIP   seed -> generate preserves every node, exposure and connection.
+  ORPHAN-GATE  an arrow target the backing artifact does not declare BLOCKS generation.
+  PARITY       tests/studio_parity.js: the editor's genSystem() -- pulled out of the RENDERED
+               page, not out of the template -- emits the same bytes as emit_rossystem(). The
+               editor is a live preview of that emitter; if the two drift, the page lies about
+               the model and every other check here still passes. Needs `node`; SKIPs without
+               it (the round-trip checks still run and still gate).
 
     python tests/studio_roundtrip.py [FILE.rossystem ...]
 
@@ -27,6 +37,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_ROOT = os.path.dirname(_HERE)
 SCRIPTS = os.path.join(PLUGIN_ROOT, "scripts")
 STUDIO = os.path.join(SCRIPTS, "ros_studio.py")
+PARITY_JS = os.path.join(_HERE, "studio_parity.js")
 
 EXPOSURE_RE = re.compile(
     r'^\s+-\s+"?([\w.-]+)"?:\s*(pub|sub|ss|sc|as|ac)->\s*"?([\w:.-]+)"?\s*$')
@@ -153,6 +164,36 @@ def check_orphan_gate(src, work):
     return not fails, fails
 
 
+def check_parity(work):
+    """Hand the artefacts check_roundtrip just built to tests/studio_parity.js, which pulls the
+    shipped pure functions out of the RENDERED editor and diffs its .rossystem preview against
+    the Python emitter's bytes. Returns (True|False|None, [lines]); None means SKIP."""
+    node = shutil.which("node")
+    if node is None:
+        return None, ["skipped: `node` is not on PATH — the editor's JS cannot be run"]
+    if not os.path.isfile(PARITY_JS):
+        return None, ["skipped: %s is missing" % PARITY_JS]
+    proj = os.path.join(work, "project.json")
+    outdir = os.path.join(work, "generated")
+    if not os.path.isfile(proj) or not os.path.isdir(outdir):
+        return False, ["the round-trip produced nothing to compare against"]
+    cand = [f for f in os.listdir(outdir) if f.endswith(".rossystem")]
+    if not cand:
+        return False, ["no generated .rossystem to compare against"]
+
+    html = os.path.join(work, "editor.html")
+    code, out = run(["render", proj, "--out", html])
+    if code != 0:
+        return False, ["render failed (exit %d):\n%s" % (code, out)]
+    proc = subprocess.run([node, PARITY_JS, "--project", proj, "--html", html,
+                           "--expect", os.path.join(outdir, cand[0])],
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    text = proc.stdout.decode("utf-8", "replace")
+    if proc.returncode == 0:
+        return True, []
+    return False, [line for line in text.splitlines() if line.strip()]
+
+
 def main(argv):
     targets = argv[1:]
     if not targets:
@@ -163,8 +204,12 @@ def main(argv):
         print("no .rossystem to test")
         return 1
 
-    print("%-38s %-12s %-12s" % ("FIXTURE", "ROUND-TRIP", "ORPHAN-GATE"))
-    print("-" * 64)
+    def verdict(state):
+        return "PASS" if state else ("SKIP" if state is None else "FAIL")
+
+    print("%-38s %-12s %-12s %-12s"
+          % ("FIXTURE", "ROUND-TRIP", "ORPHAN-GATE", "PARITY"))
+    print("-" * 77)
     failures = 0
     for src in targets:
         work = tempfile.mkdtemp(prefix="studio-rt-")
@@ -173,10 +218,9 @@ def main(argv):
             gate_dir = os.path.join(work, "gate")
             os.makedirs(gate_dir, exist_ok=True)
             gate_ok, gate_why = check_orphan_gate(src, gate_dir)
-            print("%-38s %-12s %-12s" % (
-                os.path.basename(src),
-                "PASS" if ok else "FAIL",
-                "PASS" if gate_ok else ("SKIP" if gate_ok is None else "FAIL")))
+            par_ok, par_why = check_parity(work)
+            print("%-38s %-12s %-12s %-12s" % (
+                os.path.basename(src), verdict(ok), verdict(gate_ok), verdict(par_ok)))
             for line in why:
                 failures += 1
                 print("    round-trip: %s" % line)
@@ -184,6 +228,13 @@ def main(argv):
                 for line in gate_why:
                     failures += 1
                     print("    orphan-gate: %s" % line)
+            if par_ok is False:
+                for line in par_why:
+                    failures += 1
+                    print("    parity: %s" % line)
+            elif par_ok is None:
+                for line in par_why:
+                    print("    parity: %s" % line)
         finally:
             shutil.rmtree(work, ignore_errors=True)
     print()

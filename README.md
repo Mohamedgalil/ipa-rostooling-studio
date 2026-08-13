@@ -132,6 +132,8 @@ scripts/_studio_common.py       shared HTML/CSS/JS primitives + emit vocabulary 
 scripts/_studio_editor.py       the /ros-studio editor page as one raw-string template
 scripts/README.md               rule reference + deviations + test evidence
 tests/roundtrip.py              semantic round-trip harness
+tests/studio_roundtrip.py       /ros-studio seed -> generate: round-trip, orphan gate, JS/Python parity
+tests/studio_parity.js          the editor's .rossystem preview vs the Python emitter, byte for byte
 tests/fixtures/manifest.md      fixture inventory
 tests/regenerated/              adversarial regeneration outputs (4 corpus targets)
 tests/oracle/ask_oracle.py      drives the REAL language servers; 13 cases
@@ -237,6 +239,15 @@ py scripts/ros_studio.py render project.json --out ros-studio.html
 py scripts/ros_studio.py generate project.json --outdir generated            # emits + rosmodel_lint
 py scripts/ros_studio.py generate project.json --outdir generated --oracle    # + real language server
 ```
+
+Because Commit is a manual download, the page also holds the session itself: every mutating action
+snapshots the project onto a 50-deep undo stack (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y, with a burst of
+keystrokes in one field coalesced into one entry), the project is autosaved to `localStorage` under
+the system name, and closing the tab with work not yet committed asks first. A stored autosave is
+never applied silently: on load the page names it, shows both it and the seeded project, and makes
+you choose. `tests/studio_parity.js` (wired into `tests/studio_roundtrip.py`) keeps the editor's
+`.rossystem` preview byte-identical to the Python emitter by pulling the shipped functions out of
+the *rendered* page and diffing.
 
 `generate` emits `.ros2` / `.rossystem` / companion `.ros` **deterministically** from the linter's
 own grammar vocabulary (block names, arrow pairs, quoting), always runs `rosmodel_lint`, and with

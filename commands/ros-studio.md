@@ -68,6 +68,21 @@ Inside the editor, **Commit** opens a modal that downloads the `project.json` (a
 user saves it, returns, and says "done"; you then run `generate` on that file to produce and
 validate the real files.
 
+Because that hand-off is manual, the page keeps the session safe on its own:
+
+- **Undo / redo** (topbar buttons, `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y`) over a 50-deep stack of
+  project snapshots. Deleting a node also deletes every connection touching it, and undo brings
+  both back. Typing in one field coalesces into a single entry, and the shortcut is left to the
+  browser inside fields the model has never seen (catalogue search, the add-interface form).
+- **Autosave** to `localStorage`, debounced and keyed by system name. On load a stored autosave
+  is *offered*, never applied: the prompt names it, shows it beside the project the companion
+  seeded, and requires a choice. Blocked or full storage degrades to a warning in the topbar.
+- **An unsaved-work guard** on tab close, armed only while there are changes since the last
+  Commit/download.
+
+If the user reports the page asking to restore something unexpected, that is a previous session's
+autosave for the same system name — "Discard and use the seeded project" clears it.
+
 ## Reporting back
 
 1. **Report the printed path** (project.json, HTML, or the generated files) verbatim.

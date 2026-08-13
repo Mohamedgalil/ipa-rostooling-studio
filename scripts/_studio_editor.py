@@ -35,6 +35,9 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .seg button{font-size:.75rem;font-weight:600;color:var(--ink-2);background:transparent;border:none;border-right:1px solid var(--rule);padding:.34rem .6rem;cursor:pointer}
   .seg button:last-child{border-right:none}
   .seg button.on{background:var(--accent);color:#fff}
+  .seg button:disabled{opacity:.38;cursor:default}
+  .savestate{font-family:var(--mono);font-size:.66rem;color:var(--ink-3);white-space:nowrap}
+  .savestate.warn{color:var(--warn)}
   .tbtn{font-size:.78rem;font-weight:600;color:var(--ink-2);background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:.4rem .7rem;cursor:pointer}
   .tbtn:hover{color:var(--ink);border-color:var(--ink-3)}
   .tbtn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
@@ -176,7 +179,11 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   <div class="seg" id="levelSeg" style="display:none">
     <button data-lvl="1">System</button><button data-lvl="2">Interfaces</button><button data-lvl="3" class="on">Full</button><button data-lvl="4">Deps</button>
   </div>
+  <div class="seg editonly" id="histSeg">
+    <button id="undoBtn" title="Undo (Ctrl+Z)" disabled>&#8630; Undo</button><button id="redoBtn" title="Redo (Ctrl+Shift+Z / Ctrl+Y)" disabled>&#8631; Redo</button>
+  </div>
   <div class="spacer"></div>
+  <span class="savestate" id="saveState"></span>
   <button class="tbtn" id="reset">Reset layout</button>
   <button class="tbtn" id="theme">&#9680; Theme</button>
   <button class="tbtn primary" id="commit">&#8681; Commit</button>
@@ -242,6 +249,22 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   </div>
 </div>
 
+<!-- No [data-close] and data-locked: restoring or discarding browser-held work is a decision,
+     not something to dismiss by clicking the backdrop. -->
+<div class="scrim" id="restoreScrim" data-locked="1">
+  <div class="modal">
+    <h3>Unsaved work found in this browser</h3>
+    <div class="body">
+      <div class="gennote">This page was rendered from the project the Python companion seeded. An autosave for the same system is held in this browser and has <b>not</b> been applied.</div>
+      <div class="roinfo" id="restoreInfo"></div>
+      <div class="modalbtns">
+        <button class="tbtn primary" id="doRestore">&#8631; Restore the autosave</button>
+        <button class="tbtn" id="doDiscard">Discard it and use the seeded project</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 "use strict";
 /*__JS_PRIMITIVES__*/
@@ -290,6 +313,115 @@ var DATA = /*__DATA__*/null;
 
   function nodeById(id){for(var i=0;i<project.nodes.length;i++)if(project.nodes[i].id===id)return project.nodes[i];return null;}
   function ifaceById(n,id){if(!n)return null;for(var i=0;i<n.ifaces.length;i++)if(n.ifaces[i].id===id)return n.ifaces[i];return null;}
+
+  // ============================ history (undo / redo) ============================
+  // ALL editor state is in `project`, so a snapshot is its JSON and undo is a stack of them.
+  // Snapshots rather than inverse commands on purpose: Delete removes a node AND every
+  // connection touching it, and an inverse would be a second, subtly different implementation
+  // of that rule -- the kind that reinstates the node and loses the edges.
+  var UNDO_CAP=50, COALESCE_MS=700;
+  var undoStack=[], redoStack=[], lastTag=null, lastTagAt=0;
+  var dirty=false;
+
+  function snapshot(){ return JSON.stringify(project); }
+  function pushSnapshot(s){
+    undoStack.push(s);
+    if(undoStack.length>UNDO_CAP) undoStack.shift();   // cap: a long session must not grow memory
+    redoStack.length=0;                                // a new edit forks the future away
+    markDirty();
+  }
+  // Call BEFORE mutating. `tag` folds a burst of keystrokes in one field into ONE entry: the
+  // first keystroke records the pre-edit project and the rest ride along, so Ctrl+Z undoes the
+  // word rather than the letter. Discrete actions pass no tag and always push.
+  function pushUndo(tag){
+    var now=Date.now();
+    if(tag && tag===lastTag && (now-lastTagAt)<COALESCE_MS){ lastTagAt=now; markDirty(); return; }
+    lastTag=tag||null; lastTagAt=now;
+    pushSnapshot(snapshot());
+  }
+  function markDirty(){ dirty=true; scheduleSave(); updateHistoryUI(); }
+
+  // Re-rendering replaces every DOM node, so a field being typed into loses focus. Put it back
+  // by id (or by the iface id on the exposure-label inputs, which have no id).
+  function keepFocus(fn){
+    var a=document.activeElement, id=(a&&a.id)||"", lbl=(a&&a.dataset&&a.dataset.lbl)||"";
+    fn();
+    var t=id?document.getElementById(id)
+           :(lbl?inspector.querySelector('[data-lbl="'+STUDIO.cssEsc(lbl)+'"]'):null);
+    if(t&&t.focus){ try{ t.focus();
+      if(t.setSelectionRange&&typeof t.value==="string") t.setSelectionRange(t.value.length,t.value.length);
+    }catch(e){} }
+  }
+  // A restored autosave brings back ids minted by a PREVIOUS session ("x1042"), but this
+  // session's counter restarts at 1000 -- restart it above them or the next add collides.
+  function syncUid(){
+    function bump(id){ var m=/^x(\d+)$/.exec(id||""); if(m) uid=Math.max(uid,+m[1]); }
+    project.nodes.forEach(function(n){ bump(n.id);
+      (n.ifaces||[]).forEach(function(f){bump(f.id);});
+      (n.params||[]).forEach(function(p){bump(p.id);}); });
+    project.connections.forEach(function(c){ bump(c.id); });
+  }
+  function applyState(json){
+    project=JSON.parse(json);
+    project.nodes=project.nodes||[]; project.connections=project.connections||[];
+    syncUid();
+    document.getElementById("sysname").value=(project.system&&project.system.name)||"system";
+    if(selNode&&!nodeById(selNode)) selNode=null;   // it may have been deleted in this state
+    lastTag=null;                                   // never coalesce across a jump in history
+    keepFocus(function(){ render(); fillInspector(); });
+    updateHistoryUI();
+  }
+  // dirty BEFORE applyState: it repaints the topbar, which reports the unsaved state.
+  function undo(){ if(!undoStack.length) return;
+    redoStack.push(snapshot()); dirty=true; scheduleSave(); applyState(undoStack.pop()); }
+  function redo(){ if(!redoStack.length) return;
+    undoStack.push(snapshot()); dirty=true; scheduleSave(); applyState(redoStack.pop()); }
+  function updateHistoryUI(){
+    var u=document.getElementById("undoBtn"), r=document.getElementById("redoBtn");
+    if(u) u.disabled=!undoStack.length;
+    if(r) r.disabled=!redoStack.length;
+    var s=document.getElementById("saveState");
+    if(s){ s.textContent=saveNote(); s.className="savestate"+(storageNote?" warn":""); }
+  }
+
+  // ============================ autosave ============================
+  // Commit is a manual download, so closing the tab used to lose the session. The key is the
+  // system name the page was RENDERED with, not the live one: renaming mid-session must not
+  // orphan the session's own autosave, and two systems in two tabs must not clobber each other.
+  var SAVE_KEY="ros-studio/v1/"+((project.system&&project.system.name)||"system");
+  var storage=(function(){
+    // Merely touching localStorage throws when storage is blocked, and a private-browsing
+    // quota of 0 only shows up on write -- so probe with a real write before trusting it.
+    try{ var s=window.localStorage; s.setItem("ros-studio/probe","1"); s.removeItem("ros-studio/probe"); return s; }
+    catch(e){ return null; }
+  })();
+  var storageNote=storage?null:"autosave unavailable — Commit before closing";
+  var saveTimer=null, savedAt=null;
+
+  function scheduleSave(){
+    if(!storage) return;
+    if(saveTimer) clearTimeout(saveTimer);
+    saveTimer=setTimeout(saveNow,800);          // debounced: a drag or a typed word is one write
+  }
+  function saveNow(){
+    saveTimer=null;
+    if(!storage) return;
+    try{
+      storage.setItem(SAVE_KEY,JSON.stringify({at:Date.now(),
+        system:(project.system&&project.system.name)||"",project:project}));
+      savedAt=Date.now();
+    }catch(e){
+      storage=null;                             // quota exceeded: stop retrying, say so once
+      storageNote="autosave failed ("+((e&&e.name)||"error")+") — Commit before closing";
+    }
+    updateHistoryUI();
+  }
+  function saveNote(){
+    if(storageNote) return storageNote;
+    if(dirty) return savedAt?"autosaved locally":"unsaved changes";
+    return savedAt?"committed":"";
+  }
+  function clearDirty(){ dirty=false; updateHistoryUI(); }
 
   // ============================ render ============================
   function render(){
@@ -406,7 +538,9 @@ var DATA = /*__DATA__*/null;
       var head=ev.target.closest("[data-drag]");
       if(!head) return;
       var el=head.closest(".node"), n=nodeById(el.dataset.n);
-      dragState={n:n,px:ev.clientX,py:ev.clientY,ox:n.x,oy:n.y,moved:0};
+      // snapshot the pre-drag layout now; it is only pushed on pointerup if the pointer
+      // actually moved, so selecting a node does not fill the undo stack with no-ops.
+      dragState={n:n,px:ev.clientX,py:ev.clientY,ox:n.x,oy:n.y,moved:0,snap:snapshot()};
       try{el.setPointerCapture(ev.pointerId);}catch(e){}
     });
     canvas.addEventListener("pointermove",function(ev){
@@ -419,8 +553,9 @@ var DATA = /*__DATA__*/null;
     });
     canvas.addEventListener("pointerup",function(ev){
       if(!dragState) return;
-      var wasClick=dragState.moved<5, n=dragState.n; dragState=null;
+      var wasClick=dragState.moved<5, n=dragState.n, snap=dragState.snap; dragState=null;
       if(wasClick){selNode=n.id;selEdge=null;render();fillInspector();}
+      else pushSnapshot(snap);
     });
     canvas.addEventListener("pointerdown",function(ev){ if(ev.target===canvas||ev.target===svg){selNode=null;selEdge=null;render();fillInspector();} });
     // connection drawing
@@ -456,7 +591,7 @@ var DATA = /*__DATA__*/null;
         var bb={n:tgt.dataset.n,i:tgt.dataset.i,kind:tgt.dataset.kind};
         var fromEnd=SRC_SIDE[a.kind]?a:bb, toEnd=SRC_SIDE[a.kind]?bb:a;
         var dup=project.connections.some(function(c){return c.from.n===fromEnd.n&&c.from.i===fromEnd.i&&c.to.n===toEnd.n&&c.to.i===toEnd.i;});
-        if(!dup) project.connections.push({id:nid(),from:{n:fromEnd.n,i:fromEnd.i},to:{n:toEnd.n,i:toEnd.i}});
+        if(!dup){ pushUndo(); project.connections.push({id:nid(),from:{n:fromEnd.n,i:fromEnd.i},to:{n:toEnd.n,i:toEnd.i}}); }
       }
       wire=null;
       canvas.querySelectorAll(".port").forEach(function(p){p.classList.remove("legal","illegal");});
@@ -476,20 +611,20 @@ var DATA = /*__DATA__*/null;
     if(mode!=="edit"){ return fillReadonlyNode(n); }
     var cat=n.backing==="cat";
     var ih='<div class="insec"><h4>node: '+esc(n.label)+'</h4>'
-      +'<div class="fld"><label>label (rossystem instance)</label><input id="f_label" value="'+esc(n.label)+'"></div>'
+      +'<div class="fld"><label>label (rossystem instance)</label><input id="f_label" data-undo="1" value="'+esc(n.label)+'"></div>'
       +'<div class="fld"><label>backing</label><div class="radio">'
       +'<label><input type="radio" name="bk" value="hand" '+(cat?"":"checked")+'> hand-authored</label>'
       +'<label><input type="radio" name="bk" value="cat" '+(cat?"checked":"")+'> catalogue</label></div></div>'
-      +'<div class="fld"><label>package '+(cat?"":"(lowercase — uppercase is an ERROR)")+'</label><input id="f_pkg" list="pkglist" value="'+esc(n.pkg)+'" '+(cat?"disabled":"")+'></div>'
-      +'<div class="fld"><label>node</label><input id="f_node" value="'+esc(n.node)+'" '+(cat?"disabled":"")+'></div>'
-      +'<div class="fld"><label>artifact (arrow target base)</label><input id="f_art" value="'+esc(n.artifact||"")+'" '+(cat?"disabled":"")+'></div>'
+      +'<div class="fld"><label>package '+(cat?"":"(lowercase — uppercase is an ERROR)")+'</label><input id="f_pkg" data-undo="1" list="pkglist" value="'+esc(n.pkg)+'" '+(cat?"disabled":"")+'></div>'
+      +'<div class="fld"><label>node</label><input id="f_node" data-undo="1" value="'+esc(n.node)+'" '+(cat?"disabled":"")+'></div>'
+      +'<div class="fld"><label>artifact (arrow target base)</label><input id="f_art" data-undo="1" value="'+esc(n.artifact||"")+'" '+(cat?"disabled":"")+'></div>'
       +'<div class="fld"><label>from: (derived)</label><div class="derived">"'+esc(n.pkg)+'.'+esc(n.node)+'"</div></div></div>';
     ih+='<div class="insec"><h4>interfaces</h4>';
     for(var j=0;j<n.ifaces.length;j++){var f=n.ifaces[j];
       var conn=ifaceConnected(n,f);
       ih+='<div class="iedit'+(f.orphan?" orphan":"")+'" data-i="'+f.id+'"><span class="kd '+f.kind+'" title="'+KIND_LABEL[f.kind]+'">'+f.kind+'</span>'
         +'<span class="grow"><span class="inm2">'+esc(f.name)+'</span><br><span class="ity2">'+esc(f.type||"—")+' · "'+esc(n.artifact||"")+'::'+esc(f.name)+'"</span>'
-        +'<span class="lblrow"><input class="ilbl" data-lbl="'+f.id+'" value="'+esc(f.label||"")+'" placeholder="'+esc(f.name)+'" title="exposure label — the key written into the .rossystem. Blank derives it from the interface name.">'
+        +'<span class="lblrow"><input class="ilbl" data-undo="1" data-lbl="'+f.id+'" value="'+esc(f.label||"")+'" placeholder="'+esc(f.name)+'" title="exposure label — the key written into the .rossystem. Blank derives it from the interface name.">'
         +'<label class="expchk" title="'+(conn?"connected — always exposed":"write this interface into the .rossystem even with nothing wired to it")+'">'
         +'<input type="checkbox" data-exp="'+f.id+'"'+((f.exposed||conn)?" checked":"")+(conn?" disabled":"")+'>expose</label></span></span>'
         +'<span class="del" data-del="'+f.id+'">✕</span></div>';
@@ -537,26 +672,31 @@ var DATA = /*__DATA__*/null;
     h+='</div>';
     inspector.innerHTML=h;
     var de=document.getElementById("delEdge");
-    if(de) de.onclick=function(){project.connections=project.connections.filter(function(x){return x.id!==c.id;});selEdge=null;render();fillInspector();};
+    if(de) de.onclick=function(){pushUndo();project.connections=project.connections.filter(function(x){return x.id!==c.id;});selEdge=null;render();fillInspector();};
   }
   function wireInspector(n){
-    document.getElementById("f_label").oninput=function(e){n.label=e.target.value;render();};
+    // Text fields coalesce on a per-field tag, so a typed word is one undo entry, not one per
+    // character; every other control here is a discrete action and pushes unconditionally.
+    document.getElementById("f_label").oninput=function(e){pushUndo("label:"+n.id);n.label=e.target.value;render();};
     var pkg=document.getElementById("f_pkg"), nod=document.getElementById("f_node"), art=document.getElementById("f_art");
-    if(pkg) pkg.oninput=function(e){n.pkg=e.target.value.toLowerCase();e.target.value=n.pkg;render();};
-    if(nod) nod.oninput=function(e){n.node=e.target.value;render();};
-    if(art) art.oninput=function(e){n.artifact=e.target.value;render();};
-    inspector.querySelectorAll("[name=bk]").forEach(function(r){r.onchange=function(e){n.backing=e.target.value;render();fillInspector();};});
+    if(pkg) pkg.oninput=function(e){pushUndo("pkg:"+n.id);n.pkg=e.target.value.toLowerCase();e.target.value=n.pkg;render();};
+    if(nod) nod.oninput=function(e){pushUndo("node:"+n.id);n.node=e.target.value;render();};
+    if(art) art.oninput=function(e){pushUndo("art:"+n.id);n.artifact=e.target.value;render();};
+    inspector.querySelectorAll("[name=bk]").forEach(function(r){r.onchange=function(e){pushUndo();n.backing=e.target.value;render();fillInspector();};});
     inspector.querySelectorAll("[data-del]").forEach(function(x){x.onclick=function(){
+      pushUndo();
       var id=x.dataset.del; n.ifaces=n.ifaces.filter(function(f){return f.id!==id;});
       project.connections=project.connections.filter(function(c){return !((c.from.n===n.id&&c.from.i===id)||(c.to.n===n.id&&c.to.i===id));});
       render();fillInspector();};});
-    inspector.querySelectorAll("[data-delp]").forEach(function(x){x.onclick=function(){n.params=n.params.filter(function(p){return p.id!==x.dataset.delp;});render();fillInspector();};});
+    inspector.querySelectorAll("[data-delp]").forEach(function(x){x.onclick=function(){pushUndo();n.params=n.params.filter(function(p){return p.id!==x.dataset.delp;});render();fillInspector();};});
     inspector.querySelectorAll("[data-lbl]").forEach(function(x){x.oninput=function(){
       var f=ifaceById(n,x.dataset.lbl); if(!f) return;
+      pushUndo("ilbl:"+f.id);
       f.label=x.value.trim()||null;    // NOT a repair for `orphan` -- that is about the arrow
       render();};});                   // TARGET (f.name), which the backing artifact must declare
     inspector.querySelectorAll("[data-exp]").forEach(function(x){x.onchange=function(){
       var f=ifaceById(n,x.dataset.exp); if(!f) return;
+      pushUndo();
       f.exposed=x.checked; render();fillInspector();};});
     var kseg=document.getElementById("kseg");
     if(kseg) kseg.querySelectorAll("button").forEach(function(b){b.onclick=function(){addKind=b.dataset.k;kseg.querySelectorAll("button").forEach(function(x){x.classList.remove("on");});b.classList.add("on");};});
@@ -571,6 +711,7 @@ var DATA = /*__DATA__*/null;
     var add=document.getElementById("ni_add");
     if(add) add.onclick=function(){
       var nm=document.getElementById("ni_name").value.trim(); if(!nm) return;
+      pushUndo();
       // a hand-added interface is exposed on sight: the author typed it in to model it, so it
       // belongs in the .rossystem whether or not it is wired up yet.
       n.ifaces.push({id:nid(),name:nm,kind:addKind,type:document.getElementById("ni_type").value.trim()||null,qos:null,label:null,exposed:true});
@@ -578,6 +719,7 @@ var DATA = /*__DATA__*/null;
     var pAdd=document.getElementById("np_add");
     if(pAdd) pAdd.onclick=function(){
       var nm=document.getElementById("np_name").value.trim(); if(!nm) return;
+      pushUndo();
       var t=document.getElementById("np_type").value, raw=document.getElementById("np_val").value.trim(), val=raw;
       if(t==="Boolean") val=/^(t|1|y|true)/i.test(raw)?"true":"false";
       else if(t==="Integer") val=String(parseInt(raw||"0",10)||0);
@@ -586,6 +728,7 @@ var DATA = /*__DATA__*/null;
       render();fillInspector();};
     var del=document.getElementById("delNode");
     if(del) del.onclick=function(){
+      pushUndo();
       project.connections=project.connections.filter(function(c){return c.from.n!==n.id&&c.to.n!==n.id;});
       project.nodes=project.nodes.filter(function(x){return x.id!==n.id;});
       selNode=null;render();fillInspector();};
@@ -593,6 +736,7 @@ var DATA = /*__DATA__*/null;
 
   // ============================ rail ============================
   document.getElementById("addNode").onclick=function(){
+    pushUndo();
     var n={id:nid(),label:"new_node",backing:"hand",pkg:"new_package",node:"new_node",artifact:"new_node",
       catalogueFile:null,x:200+Math.random()*120,y:340+Math.random()*80,ifaces:[],params:[]};
     project.nodes.push(n); selNode=n.id; selEdge=null; render(); fillInspector();
@@ -617,6 +761,7 @@ var DATA = /*__DATA__*/null;
     if(!shown) list.innerHTML='<div class="roinfo">No catalogue entries match.</div>';
   }
   function instantiate(key,e){
+    pushUndo();
     var parts=key.split("."), pkg=parts[0], node=parts.slice(1).join(".");
     var tmap=CATTYPES[key]||{};   // real interface types recovered from the vendored .ros2
     var n={id:nid(),label:node,backing:"cat",pkg:pkg,node:node,artifact:e.artifact||node,catalogueFile:e.file||null,
@@ -627,7 +772,7 @@ var DATA = /*__DATA__*/null;
     project.nodes.push(n); selNode=n.id; catScrim.classList.remove("on"); render(); fillInspector();
   }
   [].slice.call(document.querySelectorAll("[data-close]")).forEach(function(b){b.onclick=function(e){e.target.closest(".scrim").classList.remove("on");};});
-  [].slice.call(document.querySelectorAll(".scrim")).forEach(function(s){s.onclick=function(e){if(e.target===s)s.classList.remove("on");};});
+  [].slice.call(document.querySelectorAll(".scrim:not([data-locked])")).forEach(function(s){s.onclick=function(e){if(e.target===s)s.classList.remove("on");};});
 
   var KCOL={pub:"--k-pub",sub:"--k-sub",ss:"--k-ss",sc:"--k-sc",as:"--k-as",ac:"--k-ac"};
   (function(){
@@ -724,6 +869,12 @@ var DATA = /*__DATA__*/null;
       o+='    '+qd(n.label)+':\n      from: '+qd(n.pkg+"."+n.node);
       o+=(n.backing==="cat"&&n.catalogueFile)?"  # assets/rosmodelscatalog/"+n.catalogueFile+"\n":"\n";
       var exposed=n.ifaces.filter(function(f){return labels[n.id+"/"+f.id];});
+      // emit_rossystem() writes the exposures sorted by (kind order, name). Without the same
+      // sort the preview matched only for a freshly seeded project, where the seeder happens
+      // to build n.ifaces in that order -- the first interface ADDED in the editor is appended
+      // and the preview then shows it in a position the emitter will not use.
+      exposed.sort(function(a,b){var d=KINDS.indexOf(a.kind)-KINDS.indexOf(b.kind);
+        return d||(a.name<b.name?-1:(a.name>b.name?1:0));});
       if(exposed.length){
         o+="      interfaces:\n";
         exposed.forEach(function(f){o+='        - '+qd(labels[n.id+"/"+f.id])+': '+f.kind+'-> '+qd((n.artifact||"")+"::"+f.name)+'\n';});
@@ -774,8 +925,11 @@ var DATA = /*__DATA__*/null;
     a.href=url; a.download=(document.getElementById("sysname").value||"project")+".project.json";
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(function(){URL.revokeObjectURL(url);},1000);
+    clearDirty();     // the project has left the page; the beforeunload guard stands down
   };
-  document.getElementById("selJson").onclick=function(){var t=document.getElementById("copyBox");t.focus();t.select();try{document.execCommand("copy");}catch(e){}};
+  document.getElementById("selJson").onclick=function(){var t=document.getElementById("copyBox");t.focus();t.select();
+    // copy-to-clipboard is the other hand-off route to the companion, so it counts as committed
+    try{if(document.execCommand("copy")) clearDirty();}catch(e){}};
 
   // ============================ mode / level ============================
   var modeSeg=document.getElementById("modeSeg"), levelSeg=document.getElementById("levelSeg");
@@ -792,17 +946,67 @@ var DATA = /*__DATA__*/null;
 
   // ============================ misc ============================
   STUDIO.wireTheme(document.getElementById("theme"));
-  document.getElementById("reset").onclick=function(){HOME.forEach(function(h){var n=nodeById(h.id);if(n){n.x=h.x;n.y=h.y;}});render();};
-  document.getElementById("sysname").oninput=function(e){project.system=project.system||{};project.system.name=e.target.value;};
+  document.getElementById("reset").onclick=function(){pushUndo();HOME.forEach(function(h){var n=nodeById(h.id);if(n){n.x=h.x;n.y=h.y;}});render();};
+  document.getElementById("sysname").oninput=function(e){pushUndo("sysname");project.system=project.system||{};project.system.name=e.target.value;};
+  document.getElementById("undoBtn").onclick=undo;
+  document.getElementById("redoBtn").onclick=redo;
   addEventListener("keydown",function(e){
-    if(e.key==="Escape"){[].slice.call(document.querySelectorAll(".scrim.on")).forEach(function(s){s.classList.remove("on");});selNode=null;selEdge=null;render();fillInspector();}
-    if(mode==="view" && e.key>="1" && e.key<="4" && document.activeElement.tagName!=="INPUT"){level=+e.key;setLevelButtons();render();}
-    if((e.key==="Delete"||e.key==="Backspace")&&mode==="edit"&&selNode&&document.activeElement.tagName!=="INPUT"){
+    var ae=document.activeElement, typing=ae&&/^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName||"");
+    if((e.ctrlKey||e.metaKey)&&!e.altKey){
+      var k=(e.key||"").toLowerCase();
+      if(k==="z"||k==="y"){
+        // A field bound to the project (data-undo) writes straight into the model, and its
+        // keystrokes were already coalesced into ONE project-level entry -- the browser's
+        // per-field undo would rewind the DOM and leave the model behind. Every other field
+        // (catalogue search, the not-yet-added interface form) holds text the model has never
+        // seen, so its native undo is the right one and we do not steal the key.
+        if(typing && !(ae.dataset&&ae.dataset.undo==="1")) return;
+        e.preventDefault();
+        if(k==="y"||e.shiftKey) redo(); else undo();
+        return;
+      }
+    }
+    if(e.key==="Escape"){[].slice.call(document.querySelectorAll(".scrim.on:not([data-locked])")).forEach(function(s){s.classList.remove("on");});selNode=null;selEdge=null;render();fillInspector();}
+    if(mode==="view" && e.key>="1" && e.key<="4" && !typing){level=+e.key;setLevelButtons();render();}
+    if((e.key==="Delete"||e.key==="Backspace")&&mode==="edit"&&selNode&&!typing){
+      pushUndo();
       project.connections=project.connections.filter(function(c){return c.from.n!==selNode&&c.to.n!==selNode;});
       project.nodes=project.nodes.filter(function(x){return x.id!==selNode;});selNode=null;render();fillInspector();}
   });
+  addEventListener("beforeunload",function(e){
+    if(!dirty) return;                  // clean since the last Commit: never nag
+    e.preventDefault(); e.returnValue="";   // the browser supplies its own wording
+  });
+
+  // Restore prompt. NEVER silently override the project the companion rendered into this page:
+  // name what is on offer, show both sides, and make the author choose.
+  (function(){
+    if(!storage) { updateHistoryUI(); return; }
+    var raw=null, saved=null;
+    try{ raw=storage.getItem(SAVE_KEY); }catch(e){ return; }
+    if(!raw) return;
+    try{ saved=JSON.parse(raw); }catch(e){ try{storage.removeItem(SAVE_KEY);}catch(e2){} return; }
+    if(!saved||!saved.project||!saved.project.nodes){ try{storage.removeItem(SAVE_KEY);}catch(e){} return; }
+    if(JSON.stringify(saved.project)===snapshot()) return;      // identical: nothing to decide
+    function count(p){return (p.nodes||[]).length+" node(s) · "+(p.connections||[]).length+" connection(s)";}
+    var when=new Date(saved.at||Date.now());
+    document.getElementById("restoreInfo").innerHTML=
+      'autosave &nbsp;"'+esc(saved.system||"")+'" — '+count(saved.project)+' — '+esc(when.toLocaleString())
+      +'<br>seeded &nbsp;&nbsp;"'+esc((project.system&&project.system.name)||"")+'" — '+count(project)+' — rendered by the companion';
+    var scrim=document.getElementById("restoreScrim"); scrim.classList.add("on");
+    document.getElementById("doRestore").onclick=function(){
+      pushSnapshot(snapshot());          // the seeded project stays one Ctrl+Z away
+      applyState(JSON.stringify(saved.project));
+      scrim.classList.remove("on");
+    };
+    document.getElementById("doDiscard").onclick=function(){
+      try{ storage.removeItem(SAVE_KEY); }catch(e){}
+      savedAt=null; scrim.classList.remove("on"); updateHistoryUI();
+    };
+  })();
 
   render();
+  updateHistoryUI();
 })();
 </script>
 </body>
