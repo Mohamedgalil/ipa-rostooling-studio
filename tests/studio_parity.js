@@ -365,9 +365,15 @@ function runStudio(args) {
   return r.stdout || "";
 }
 
-function generated(gen) {
-  var sys = fs.readdirSync(gen).filter(function (f) { return /\.rossystem$/.test(f); });
+function generated(gen, fixture) {
+  var sys = fs.readdirSync(gen).filter(function (f) { return /\.rossystem$/.test(f); }).sort();
   if (!sys.length) throw new Error("generate wrote no .rossystem");
+  // `generate` copies a project-local subSystems: target into the output dir UNCHANGED, so gen
+  // can hold more than one .rossystem and readdir order decided which one counted as "what
+  // Python wrote". Comparing the editor's preview of THIS project against a staged dependency
+  // reports a diff on line 1 of a file neither side is wrong about. Prefer the fixture's name.
+  var want = fixture ? path.basename(fixture) : null;
+  if (want && sys.indexOf(want) !== -1) return path.join(gen, want);
   return path.join(gen, sys[0]);
 }
 
@@ -378,7 +384,7 @@ function buildInputs(fixture, work) {
   runStudio(["init", fixture, "--out", proj]);
   runStudio(["render", proj, "--out", html]);
   var out = runStudio(["generate", proj, "--outdir", gen]);
-  return { project: proj, html: html, expect: generated(gen),
+  return { project: proj, html: html, expect: generated(gen, fixture), fixture: fixture,
            wrote: { ros2: wroteExt(out, "ros2"), ros: wroteExt(out, "ros") } };
 }
 
@@ -394,7 +400,7 @@ function permutedCase(base, work) {
   var gen = path.join(work, "gen-permuted");
   fs.writeFileSync(proj, JSON.stringify(project, null, 2), "utf8");
   var out = runStudio(["generate", proj, "--outdir", gen]);
-  return { project: proj, html: base.html, expect: generated(gen),
+  return { project: proj, html: base.html, expect: generated(gen, base.fixture),
            wrote: { ros2: wroteExt(out, "ros2"), ros: wroteExt(out, "ros") } };
 }
 
@@ -419,6 +425,10 @@ function main(argv) {
     // diff-only mode still gets the permuted case -- it costs one extra `generate` and it is
     // the half of the comparison a freshly seeded project cannot exercise (see permutedCase).
     work = fs.mkdtempSync(path.join(os.tmpdir(), "studio-parity-"));
+    // The caller already resolved which .rossystem is THIS project's (its outdir can also hold
+    // a staged subSystems: dependency), so carry that name into the permuted regeneration --
+    // otherwise generated() falls back to readdir order and compares against the dependency.
+    opts.fixture = opts.expect;
     var perm = permutedCase(opts, work);
     // the caller built the primary outdir, so its "wrote" report is not ours to read. The
     // permuted run produces the same package set (only iface ARRAYS were reversed), so its

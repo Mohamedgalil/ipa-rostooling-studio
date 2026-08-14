@@ -399,7 +399,7 @@ def check_fields(src, work):
     gen_sys = [f for f in os.listdir(outdir) if f.endswith(".rossystem")]
     if not gen_sys:
         return False, ["generate wrote no .rossystem"]
-    before, after = facts(staged), facts(os.path.join(outdir, gen_sys[0]))
+    before, after = facts(staged), facts(generated_system(outdir, staged))
     for key in ("namespaces", "fromFile"):
         missing = sorted(before[key] - after[key])
         added = sorted(after[key] - before[key])
@@ -517,7 +517,9 @@ def check_comments(src, work):
     for source in sources:
         base = os.path.basename(source)
         if base.endswith(".rossystem"):
-            cand = [f for f in written if f.endswith(".rossystem")]
+            # the file THIS project wrote, not a staged subSystems: dependency sitting beside it
+            target = generated_system(outdir, source)
+            cand = [os.path.basename(target)] if target else []
         else:
             cand = [f for f in written if f == base]
         if not cand:
@@ -551,7 +553,22 @@ def check_comments(src, work):
     return not fails, fails
 
 
-def check_parity(work, proj_name="project.json", gen_name="generated"):
+def generated_system(outdir, src):
+    """The .rossystem THIS project generated, never a staged dependency.
+
+    `generate` copies a project-local `subSystems:` target into outdir UNCHANGED, so outdir can
+    hold more than one .rossystem and os.listdir order decides what an unqualified pick gets.
+    Picking the dependency made a check compare this project's output against a file it did not
+    write, which reads as every column failing at once and sent the reader hunting a data-loss
+    bug that was not there. Prefer the source's own name, then a deterministic order."""
+    same = os.path.join(outdir, os.path.basename(src))
+    if os.path.isfile(same):
+        return same
+    cand = sorted(f for f in os.listdir(outdir) if f.endswith(".rossystem"))
+    return os.path.join(outdir, cand[0]) if cand else None
+
+
+def check_parity(work, proj_name="project.json", gen_name="generated", src=None):
     """Hand artefacts an earlier check just built to tests/studio_parity.js, which pulls the
     shipped pure functions out of the RENDERED editor and diffs its .rossystem/.ros2 previews
     against the Python emitter's bytes. Returns (True|False|None, [lines]); None means SKIP.
@@ -568,16 +585,19 @@ def check_parity(work, proj_name="project.json", gen_name="generated"):
     outdir = os.path.join(work, gen_name)
     if not os.path.isfile(proj) or not os.path.isdir(outdir):
         return False, ["the round-trip produced nothing to compare against"]
-    cand = [f for f in os.listdir(outdir) if f.endswith(".rossystem")]
-    if not cand:
-        return False, ["no generated .rossystem to compare against"]
+    expect = generated_system(outdir, src) if src else None
+    if expect is None:
+        cand = sorted(f for f in os.listdir(outdir) if f.endswith(".rossystem"))
+        if not cand:
+            return False, ["no generated .rossystem to compare against"]
+        expect = os.path.join(outdir, cand[0])
 
     html = os.path.join(work, os.path.splitext(proj_name)[0] + ".editor.html")
     code, out = run(["render", proj, "--out", html])
     if code != 0:
         return False, ["render failed (exit %d):\n%s" % (code, out)]
     proc = subprocess.run([node, PARITY_JS, "--project", proj, "--html", html,
-                           "--expect", os.path.join(outdir, cand[0])],
+                           "--expect", expect],
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     text = proc.stdout.decode("utf-8", "replace")
     if proc.returncode == 0:
@@ -665,7 +685,8 @@ def _default_targets():
     for root in (os.path.join(PLUGIN_ROOT, "examples"),
                  os.path.join(_HERE, "fixtures", "comments"),
                  os.path.join(_HERE, "fixtures", "messages"),
-                 os.path.join(_HERE, "fixtures", "subsystems")):
+                 os.path.join(_HERE, "fixtures", "subsystems"),
+                 os.path.join(_HERE, "fixtures", "sublabels")):
         if not os.path.isdir(root):
             continue
         out += sorted(os.path.join(root, f) for f in os.listdir(root)
@@ -699,9 +720,9 @@ def main(argv):
             cmt_dir = os.path.join(work, "comments")
             os.makedirs(cmt_dir, exist_ok=True)
             cmt_ok, cmt_why = check_comments(src, cmt_dir)
-            par_ok, par_why = check_parity(work)
+            par_ok, par_why = check_parity(work, src=src)
             if fld_ok:      # only meaningful once the planted artefacts exist
-                f_ok, f_why = check_parity(fld_dir, "fields.json", "fields-generated")
+                f_ok, f_why = check_parity(fld_dir, "fields.json", "fields-generated", src=src)
                 if f_ok is False:
                     par_ok = False
                     par_why = par_why + ["[planted fields] " + line for line in f_why]

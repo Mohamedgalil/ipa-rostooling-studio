@@ -626,7 +626,17 @@ def resolve_subsystem(ref, base_dir):
         for mn in sub_model["nodes"]:
             ifaces = {}
             for i in mn["interfaces"]:
-                ifaces[i.get("ifaceName") or i["label"]] = i["kind"]
+                # The LABEL, not the interface name. A connections: endpoint spells the key the
+                # referenced file wrote in its interfaces: block -- which is what
+                # build_node_index.extract_rossystem_system (label_key.value) hands the
+                # catalogue branch above, and what checkIfInterfaceInSystem resolves against.
+                # Keying by ifaceName here made the two branches disagree, and every connection
+                # into a project-local subsystem whose label differs from its interface name was
+                # silently dropped: seeded as "dangling", then absent from generate's output,
+                # exit 0. Every fixture in the repo happens to spell label == ifaceName, which
+                # is why it survived -- tests/fixtures/subsystems/labelled_base.rossystem now
+                # deliberately does not.
+                ifaces[i["label"]] = i["kind"]
             out[mn["label"]] = {"from": mn.get("from"), "interfaces": ifaces}
         return None, out
     return None, {}

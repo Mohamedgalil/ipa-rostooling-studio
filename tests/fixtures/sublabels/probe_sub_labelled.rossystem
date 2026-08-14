@@ -1,0 +1,21 @@
+# probe_sub_labelled -- the witness for "the endpoint spells the LABEL, not the interface name".
+#
+# The defect it pins: resolve_subsystem's sibling-file branch keyed a subsystem's connectable
+# interfaces by ifaceName while its catalogue branch (and build_node_index, and the linter, and
+# the real checkIfInterfaceInSystem) keyed them by the exposure label. Both connections below
+# name a label that differs from the interface behind it, so a reader that keys by name resolves
+# neither: `init` called them dangling and `generate` wrote no connections: block at all,
+# reporting 0 errors. The linter and the 3.1.0 language server both accept the source.
+probe_sub_labelled:
+  fromFile: "probe_sub_labelled/launch/probe.launch.py"
+  subSystems:
+    "labelled_base"
+  nodes:
+    "pilot":
+      from: "sub_probe_ctrl.controller"
+      interfaces:
+        - "cmd_vel_pub": pub-> "controller::cmd_vel_out"
+        - "odom_sub": sub-> "controller::odom"
+  connections:
+    - [base_odom_out, odom_sub] # label 'base_odom_out' wraps interface 'odom'
+    - [cmd_vel_pub, base_cmd_in] # label 'base_cmd_in' wraps interface 'cmd_vel'

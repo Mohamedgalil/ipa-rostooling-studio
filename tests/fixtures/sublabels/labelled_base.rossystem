@@ -1,0 +1,13 @@
+# labelled_base -- the target whose exposure LABELS differ from their interface NAMES.
+#
+# Every other subsystem target in this repo spells them the same ("odom": pub-> "...::odom"),
+# so the distinction the resolver rests on was untested on the target side, and resolve_subsystem
+# keyed its interface table by the wrong one. A connections: endpoint spells the LABEL.
+labelled_base:
+  fromFile: "labelled_base/launch/base.launch.py"
+  nodes:
+    "base_driver":
+      from: "sub_probe_base.base_driver"
+      interfaces:
+        - "base_odom_out": pub-> "base_driver::odom"
+        - "base_cmd_in": sub-> "base_driver::cmd_vel"

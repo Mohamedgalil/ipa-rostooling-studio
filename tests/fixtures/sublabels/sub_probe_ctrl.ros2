@@ -1,0 +1,12 @@
+sub_probe_ctrl:
+  artifacts:
+    controller:
+      node: controller
+      publishers:
+        'cmd_vel_out':
+          type: 'geometry_msgs/msg/Twist'
+      subscribers:
+        'odom':
+          type: 'nav_msgs/msg/Odometry'
+        'scan':
+          type: 'sensor_msgs/msg/LaserScan'
