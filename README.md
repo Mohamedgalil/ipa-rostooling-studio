@@ -228,8 +228,12 @@ so the viewer and the editor can never drift.
 The browser only authors an in-memory project; the Python companion owns generation and validation:
 
 ```bash
-# seed a project.json from an existing system (recovers interface types from the sibling .ros2)
+# seed a project.json from an existing system (interface types from the sibling .ros2, message
+# fields from the sibling .ros, comments from the source text)
 py scripts/ros_studio.py init path/to/system.rossystem --out project.json
+# ...several sources, or a whole tree, merge into ONE project (ids re-issued, colliding node
+# labels renamed, a subSystems: ref to a system also being merged collapsed onto it):
+py scripts/ros_studio.py init path/to/models/ --out project.json --name combined
 # ...or start blank:  py scripts/ros_studio.py init --out project.json
 
 # render the editor (autocomplete data embedded; does NOT auto-open — add --open if you want it)
@@ -246,8 +250,10 @@ keystrokes in one field coalesced into one entry), the project is autosaved to `
 the system name, and closing the tab with work not yet committed asks first. A stored autosave is
 never applied silently: on load the page names it, shows both it and the seeded project, and makes
 you choose. `tests/studio_parity.js` (wired into `tests/studio_roundtrip.py`) keeps the editor's
-`.rossystem` preview byte-identical to the Python emitter by pulling the shipped functions out of
-the *rendered* page and diffing.
+`.rossystem`, `.ros2` and `.ros` previews byte-identical to the Python emitters by pulling the
+shipped functions out of the *rendered* page and diffing. That last one matters because message
+FIELDS are authored only in the page: a spec whose body silently comes back empty parses, lints
+clean (RM080 is an INFO) and generates clean.
 
 `generate` emits `.ros2` / `.rossystem` / companion `.ros` **deterministically** from the linter's
 own grammar vocabulary (block names, arrow pairs, quoting), always runs `rosmodel_lint`, and with

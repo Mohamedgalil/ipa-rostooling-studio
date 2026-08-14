@@ -1,0 +1,20 @@
+# msg_probe -- the round-trip witness for .ros MESSAGE FIELDS.
+#
+# The defect it pins: a companion .ros used to be generated from type NAMES alone, so every
+# spec came back with an empty body. That parses (RM080 is an INFO -- '(BEGIN
+# message=MessageDefinition END)?' really is optional), it lints clean and it generates clean,
+# which is why nothing else in this suite noticed. STATUS.md sec 8 defect 2 records the same
+# loss on a regenerated turtlesim.ros.
+#
+# probe_msgs.ros next to this file carries one witness per legal field shape: a Header, a
+# scalar, two constants (MESSAGE_ASIGMENT -- no spaces around '='), a primitive array, a
+# SELF-referencing quoted spec ref with '[]', a deliberately bodiless spec, and a srv whose
+# response has no fields at all.
+msg_probe:
+  fromFile: "probe_pkg/launch/probe.launch.py"
+  nodes:
+    "driver":
+      from: "probe_pkg.probe_driver"
+      interfaces:
+        - "reading_pub": pub-> "probe_driver::reading"
+        - "calib_srv": ss-> "probe_driver::calibrate"

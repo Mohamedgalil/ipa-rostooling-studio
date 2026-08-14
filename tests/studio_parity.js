@@ -44,10 +44,15 @@ var STUDIO = path.join(ROOT, "scripts", "ros_studio.py");
 // as free text, so a drift here is invisible in every other check: the preview would keep
 // showing the author's words while `generate` wrote a file without them, or at a different
 // indent, or with the RM088/RM089 provenance overwritten.
+// The fourth group is the .ros companion. Message FIELDS are authored ONLY in this page --
+// nothing else in the pipeline invents one -- and a spec whose body silently comes out empty
+// is legal (RM080 INFO), so a drift there produces a file that lints clean, generates clean
+// and has lost the author's content. That is the exact defect shape STATUS.md sec 8 defect 2
+// records, which is why the preview is held to the emitter's bytes rather than eyeballed.
 var WANTED = ["qd", "qs2", "nodeById", "ifaceById", "ifaceConnected", "exposureLabels",
   "genSystem",
-  "handPkgNodes", "companionPkgs", "typeAutoNote", "pyFloat", "pyRepr", "fmtParamValue",
-  "genQos", "genRos2",
+  "handPkgNodes", "localTypePkgs", "companionTypes", "companionPkgs", "typeAutoNote",
+  "pyFloat", "pyRepr", "fmtParamValue", "genQos", "genRos2", "genRos",
   "cmtClean", "cmtList", "cmtOf", "cmtBlock", "noteSuffix"];
 
 
@@ -148,10 +153,13 @@ function loadShipped(html, project) {
     "var BLOCK = DATA.blocks;\n" +
     "var TYPEFILES = DATA.typeFiles || {};\n" +
     "var SEGBLOCK = DATA.typeSegBlocks || {};\n" +
+    "var ROS = DATA.ros || {blocks:[],bodies:{},scalars:[],arrays:[],nameKeywords:[]};\n" +
+    "var ROSSEG = {}; Object.keys(SEGBLOCK).forEach(function(s){ROSSEG[SEGBLOCK[s]]=s;});\n" +
     "var QOS = DATA.qos;\n" +
     "var QOS_DUR = {}; (QOS.durations||[]).forEach(function(k){QOS_DUR[k]=1;});\n" +
     "var project = __project;\n" +
-    "project.packages = project.packages || {};\n" +   // the page normalises this on load
+    "project.packages = project.packages || {};\n" +   // the page normalises these on load
+    "project.types = project.types || {};\n" +
     "var document = { getElementById: function(id){\n" +
     "  if(id === 'sysname') return { value: __sysname };\n" +
     "  throw new Error('parity sandbox: unexpected document.getElementById(' + id + ')');\n" +
@@ -182,11 +190,11 @@ function firstDiff(expected, actual) {
 // target's own .ros2 -- so the output directory listing is no longer the set of files THIS
 // project produces, and comparing the editor's preview set against it would fail on a file the
 // editor is right not to preview. Take the set from generate's own report instead.
-function wroteRos2(stdout) {
-  var out = [];
+function wroteExt(stdout, ext) {
+  var out = [], re = new RegExp("^wrote\\s+(.*\\." + ext + ")$");
   String(stdout).split("\n").forEach(function (line) {
-    var m = /^wrote\s+(.*\.ros2)$/.exec(line.trim());
-    if (m) out.push(path.basename(m[1]).replace(/\.ros2$/, ""));
+    var m = re.exec(line.trim());
+    if (m) out.push(path.basename(m[1]).replace(new RegExp("\\." + ext + "$"), ""));
   });
   return out.sort();
 }
@@ -208,22 +216,32 @@ function compare(projectPath, htmlPath, expectPath, knownWrote) {
   // decides on its own which packages produce a file (hand-authored + non-empty pkg), so an
   // extra or a missing file is itself a parity failure and is reported as one.
   var outdir = path.dirname(expectPath);
-  var wrote = knownWrote || fs.readdirSync(outdir).filter(function (f) { return /\.ros2$/.test(f); })
-    .map(function (f) { return f.replace(/\.ros2$/, ""); }).sort();
-  var previews = fns.handPkgNodes().order;
-  if (wrote.join(",") !== previews.join(","))
-    problems.push("the .ros2 file set differs: python wrote [" + wrote.join(", ")
-      + "], the editor previews [" + previews.join(", ") + "]");
-  wrote.forEach(function (pkg) {
-    if (previews.indexOf(pkg) < 0) return;              // already reported above
-    var want = fs.readFileSync(path.join(outdir, pkg + ".ros2"), "utf8");
-    var got = fns.genRos2(pkg);
-    if (got !== want) {
-      var dd = firstDiff(want, got);
-      problems.push("genRos2(" + pkg + ") differs from the Python emitter at "
-        + (dd || "(trailing bytes)"));
-    }
-  });
+  var known = knownWrote || {};
+
+  // Same check for the companion .ros. Its file set comes from companionTypes(), a different
+  // rule from handPkgNodes() -- a package with no node at all can own one, which is how a type
+  // the author invented gets written -- so it is compared separately rather than reused.
+  function byExt(ext, want, gen) {
+    var wrote = known[ext] || fs.readdirSync(outdir)
+      .filter(function (f) { return f.slice(-ext.length - 1) === "." + ext; })
+      .map(function (f) { return f.slice(0, -ext.length - 1); }).sort();
+    var previews = want().slice().sort();
+    if (wrote.join(",") !== previews.join(","))
+      problems.push("the ." + ext + " file set differs: python wrote [" + wrote.join(", ")
+        + "], the editor previews [" + previews.join(", ") + "]");
+    wrote.forEach(function (pkg) {
+      if (previews.indexOf(pkg) < 0) return;            // already reported above
+      var expected = fs.readFileSync(path.join(outdir, pkg + "." + ext), "utf8");
+      var got = gen(pkg);
+      if (got !== expected) {
+        var dd = firstDiff(expected, got);
+        problems.push("gen" + (ext === "ros2" ? "Ros2" : "Ros") + "(" + pkg + ") differs from "
+          + "the Python emitter at " + (dd || "(trailing bytes)"));
+      }
+    });
+  }
+  byExt("ros2", function () { return fns.handPkgNodes().order; }, fns.genRos2);
+  byExt("ros", function () { return Object.keys(fns.companionTypes()); }, fns.genRos);
 
   // cross-check the exposure rule itself: every connection endpoint must read as connected
   // AND must have been assigned a label, which is what makes the connections block emittable.
@@ -274,7 +292,8 @@ function buildInputs(fixture, work) {
   runStudio(["init", fixture, "--out", proj]);
   runStudio(["render", proj, "--out", html]);
   var out = runStudio(["generate", proj, "--outdir", gen]);
-  return { project: proj, html: html, expect: generated(gen), wrote: wroteRos2(out) };
+  return { project: proj, html: html, expect: generated(gen),
+           wrote: { ros2: wroteExt(out, "ros2"), ros: wroteExt(out, "ros") } };
 }
 
 // A seeded project happens to arrive with each node's interfaces already in the emitter's
@@ -289,7 +308,8 @@ function permutedCase(base, work) {
   var gen = path.join(work, "gen-permuted");
   fs.writeFileSync(proj, JSON.stringify(project, null, 2), "utf8");
   var out = runStudio(["generate", proj, "--outdir", gen]);
-  return { project: proj, html: base.html, expect: generated(gen), wrote: wroteRos2(out) };
+  return { project: proj, html: base.html, expect: generated(gen),
+           wrote: { ros2: wroteExt(out, "ros2"), ros: wroteExt(out, "ros") } };
 }
 
 function main(argv) {

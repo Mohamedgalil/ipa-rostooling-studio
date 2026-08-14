@@ -1,6 +1,6 @@
 ---
 description: Author RosTooling models in an interactive self-contained editor, then deterministically generate .ros2/.rossystem/.ros and validate them against the real language server, via scripts/ros_studio.py.
-argument-hint: "init [file.rossystem] | render project.json [--open] | generate project.json [--oracle]"
+argument-hint: "init [file.rossystem | dir ...] | render project.json [--open] | generate project.json [--oracle]"
 allowed-tools: Bash, Read, Glob
 ---
 
@@ -29,14 +29,29 @@ env-var convention as `hooks/hooks.json`, `.lsp.json` and `/ros-plot`:
 
 The three subcommands form the authoring loop:
 
-- **`init [FILE.rossystem]`** — build a `project.json`. With a `.rossystem` argument it seeds
-  from it: the read-only extractor recovers the system structure and the sibling `.ros2` files
-  are opened to recover each interface's type and the artifacts' parameters. With no argument it
-  writes a blank project. Prints the `project.json` path.
+- **`init [FILE.rossystem | DIR ...]`** — build a `project.json`. With a `.rossystem` argument it
+  seeds from it: the read-only extractor recovers the system structure, the sibling `.ros2` files
+  are opened to recover each interface's type and the artifacts' parameters, and the sibling
+  `.ros` files to recover the message **fields**. With no argument it writes a blank project.
+  Prints the `project.json` path.
+
+  **Several sources merge into one project.** Pass any number of `.rossystem` files and/or
+  directories (a directory contributes every `.rossystem` beneath it) and the whole tree is
+  indexed for `.ros2`/`.ros`, so a system whose artifacts live in a sibling directory can be
+  seeded at all — `init` used to print *"seeds from the first file only; ignoring N more"*. The
+  merge re-issues every id, renames a node label a merged source already used (two `nodes:` keys
+  with one name is RM009), de-duplicates packages and type definitions first-wins, and collapses
+  a `subSystems:` reference whose target is *itself* being merged onto the real nodes — declaring
+  the same node inline and by reference is RM090. The system name comes from the first source
+  unless `--name` overrides it; everything the merge cannot carry (a second `fromFile:`, a second
+  file header, a conflicting package entry) is **reported**, never silently dropped.
+  `tests/studio_roundtrip.py`'s **MULTI-FILE** section pins both hazards against
+  `tests/fixtures/multifile/` (same label, two directories) and `tests/fixtures/subsystems/`
+  (one system references the other).
 
   Seeding is **lossless** and `tests/studio_roundtrip.py` holds it to that: every node,
   exposure and connection in the source must reappear in `generate`'s output. Two fields carry
-  the parts that a name alone cannot (`formatVersion: 3`):
+  the parts that a name alone cannot (`formatVersion: 4`):
 
   - **`label`** — the exposure key written into the `.rossystem` (`"odom_pub"`), which is a
     different slot from the interface `name` the arrow points at (`"odom"`). It is preserved
@@ -66,6 +81,19 @@ The three subcommands form the authoring loop:
   turtlebot's `tf`); that ambiguity is the source file's, RM065 reports it, and the studio binds
   the first in sorted node order rather than inventing a distinguishing label that would resolve
   to nothing.
+
+  **Message types carry their fields.** A companion `.ros` used to be generated from type NAMES
+  alone, so every locally invented spec came back with an empty body — legal (`RM080` is an INFO;
+  `(BEGIN message=MessageDefinition END)?` really is optional) and therefore invisible to the
+  linter, but silent data loss whenever the source defined fields (STATUS.md sec 8 defect 2).
+  `project.types` now holds `{"<pkg>/<msg|srv|action>/<Name>": {"fields": {<body>: [{type,
+  name}]}}}`, seeded from sibling `.ros` files and editable in the **message types (.ros)**
+  section of the system panel. A field is exactly two tokens, a type then a name
+  (Basics.xtext:201-204); a **constant** is one token in the NAME box with no whitespace around
+  `=` (`FAN_OFF=0`); a reference to another spec is its **quoted, fully qualified** name
+  (`"my_msgs/msg/Reading"`), including for a type in the same package — there is no short form.
+  Specs whose package the vendored catalogue owns are neither seeded nor accepted: redeclaring
+  one would put two `Package_Impl` entries with the same name in the output directory (RM009).
 - **`render project.json`** — emit the editor HTML (`ros-studio.html` next to the project by
   default; `--out PATH` to override). The three autocomplete datasets (message/service/action
   types, package names, node catalogue) are embedded so autocomplete works offline. Prints the
@@ -89,7 +117,7 @@ The three subcommands form the authoring loop:
 
 Round-tripping a model used to **delete every comment in it** — `generate` wrote only its own
 `# assets/…` provenance lines. Comments are now captured by `init`, carried in `project.json`
-(`formatVersion: 3`), editable in the editor, and re-emitted by `generate`. The policy below is
+(`formatVersion: 4`), editable in the editor, and re-emitted by `generate`. The policy below is
 exact and `tests/studio_roundtrip.py`'s **COMMENTS** check enforces it against
 `tests/fixtures/comments/` and `tests/fixtures/subsystems/`, which between them carry one witness
 per position — including the ones the policy deliberately drops, which `init` must *report*.
@@ -135,8 +163,8 @@ Every slot is editable: a **comments** section on the node and on the connection
 `subSystems:` entry and each package's `.ros2` header in the system panel (deselect everything to
 reach it). A `subSystems:` node itself has no comment slots — it is declared in the referenced
 file, and its comments live there. The
-`.rossystem`/`.ros2` tabs under **Commit** preview the comments exactly as they will be written —
-`tests/studio_parity.js` holds that preview to the Python emitter's bytes.
+`.rossystem`/`.ros2`/`.ros` tabs under **Commit** preview the generated files exactly as they will
+be written — `tests/studio_parity.js` holds all three previews to the Python emitter's bytes.
 
 ## The commit hand-off
 

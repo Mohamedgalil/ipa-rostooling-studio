@@ -1,0 +1,10 @@
+mf_left_pkg:
+  artifacts:
+    left_driver:
+      node: left_driver
+      publishers:
+        'odom':
+          type: 'nav_msgs/msg/Odometry'
+      subscribers:
+        'cmd_vel':
+          type: 'geometry_msgs/msg/Twist'

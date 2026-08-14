@@ -1,0 +1,11 @@
+# mf_right -- the other half. Same node label, a different artifact in a different directory,
+# and a connection of its own, so the merge has to keep both nodes, rename exactly one of them
+# (RM009) and re-link every endpoint through the rename.
+mf_right:
+  fromFile: "mf_right_pkg/launch/right.launch.py"
+  nodes:
+    "driver":
+      from: "mf_right_pkg.right_planner"
+      interfaces:
+        - "right_cmd_pub": pub-> "right_planner::cmd_vel"
+        - "right_odom_sub": sub-> "right_planner::odom"

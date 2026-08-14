@@ -13,11 +13,15 @@ So the assertion here is not "it runs" or "it lints clean" -- a truncated model 
 is that the set of NODES, EXPOSURES and CONNECTIONS survives the trip unchanged.
 
 Five checks per fixture:
-  ROUND-TRIP   seed -> generate preserves every node, exposure, namespace, subSystems: entry and
-               connection. `subSystems:` is in that list because it re-opened the same wound: a
-               reused composition's nodes are not in this file's nodes: block, so every
-               connection endpoint that named one resolved to nothing and was dropped -- 6 of 9
-               on the TurtleBot 3 example, with `generate` still reporting "0 error(s)".
+  ROUND-TRIP   seed -> generate preserves every node, exposure, namespace, subSystems: entry,
+               connection and .ros MESSAGE FIELD. `subSystems:` is in that list because it
+               re-opened the same wound: a reused composition's nodes are not in this file's
+               nodes: block, so every connection endpoint that named one resolved to nothing and
+               was dropped -- 6 of 9 on the TurtleBot 3 example, with `generate` still reporting
+               "0 error(s)". The .ros fields are there for the same reason one level down: a
+               companion .ros was generated from type NAMES alone, so every spec came back with
+               an empty body -- which parses, lints clean (RM080 is an INFO) and generates
+               clean. tests/fixtures/messages/ carries one witness per legal field shape.
   ORPHAN-GATE  an arrow target the backing artifact does not declare BLOCKS generation.
   FIELDS       the optional members no example happens to use -- `namespace:` on a node,
                `fromGitRepo:` on a package, a `qos:` block on an interface -- are PLANTED into
@@ -25,9 +29,10 @@ Five checks per fixture:
                this way (ros_plot read it, ros_studio never seeded or emitted it), and a fact
                set can only protect a field some fixture actually carries, so this check
                manufactures the carrier instead of waiting for one.
-  PARITY       tests/studio_parity.js: the editor's genSystem()/genRos2() -- pulled out of the
-               RENDERED page, not out of the template -- emit the same bytes as
-               emit_rossystem()/emit_ros2(). The editor is a live preview of those emitters; if
+  PARITY       tests/studio_parity.js: the editor's genSystem()/genRos2()/genRos() -- pulled out
+               of the RENDERED page, not out of the template -- emit the same bytes as
+               emit_rossystem()/emit_ros2()/_companion_ros(). The editor is a live preview of
+               those emitters, and message fields are authored ONLY there; if
                the two drift, the page lies about the model and every other check here still
                passes. Needs `node`; SKIPs without it (the other checks still run and gate).
   COMMENTS     every comment line in the source either comes back out attached to the SAME
@@ -38,6 +43,17 @@ Five checks per fixture:
                commands/ros-studio.md; tests/fixtures/comments/ carries one witness per
                position, including two the policy deliberately drops, and
                tests/fixtures/subsystems/ adds the two subSystems: positions.
+
+And, once, a whole-directory section:
+
+  MULTI-FILE   `init` over a DIRECTORY merges every .rossystem under it into ONE project. Two
+               hazards, one fixture each: tests/fixtures/multifile/ puts two systems in two
+               subdirectories and gives BOTH their node the label "driver" (the artifacts only
+               resolve if the index spans the tree, and one label must be renamed or the output
+               has two nodes: keys with one name, RM009); tests/fixtures/subsystems/ has one
+               system REFERENCE the other, so merging them inline must drop the subSystems:
+               entry and fold its shadow nodes onto the real ones (RM090). Runs only when no
+               fixture argument is given -- merging has no per-fixture column.
 
     python tests/studio_roundtrip.py [FILE.rossystem ...]
 
@@ -73,6 +89,55 @@ ROS2_QOS_RE = re.compile(r'^\s+(profile|history|depth|reliability|durability|lea
 # block key opens the state, and the first line that is not an entry closes it again.
 SUBSYS_KEY_RE = re.compile(r'^\s{1,4}subSystems:\s*$')
 SUBSYS_ENTRY_RE = re.compile(r'^\s+-?\s*"?([\w./-]+)"?\s*$')
+
+
+STAGED_EXTS = (".ros", ".ros2", ".rossystem")
+
+# Ros.xtext:81-104. Kept here rather than imported so a change to the linter's tables cannot
+# make this harness agree with the emitter about a body keyword neither of them writes.
+ROS_BLOCKS = ("msgs", "srvs", "actions")
+ROS_BODIES = {"msgs": ("message",), "srvs": ("request", "response"),
+              "actions": ("goal", "result", "feedback")}
+
+
+def ros_facts(path):
+    """The fact set a .ros round-trip must preserve: {(package, block, Spec, body, ordinal,
+    'type name')} for every field, plus a ('', block, Spec, body, -1, '') marker per body
+    keyword so a spec that loses its whole body is caught even when it had no fields.
+
+    The ordinal is in the key on purpose -- field ORDER is part of a message definition, and a
+    reordered spec is a different message.
+
+    Deliberately a much dumber reader than ros_studio's: it keys off the 2-space ladder the
+    emitter writes (package 0 / block 2 / spec 4 / body 6 / field 8) instead of an indent
+    stack, so a bug in the shared indent parser cannot make this agree with the emitter about a
+    field neither of them kept. Both files it is ever pointed at -- the fixture and the
+    generated copy -- are written on that ladder."""
+    facts = set()
+    pkg = block = spec = body = None
+    counts = {}
+    for raw in open(path, encoding="utf-8"):
+        code = raw.split("#")[0].rstrip()
+        if not code.strip():
+            continue
+        col = len(code) - len(code.lstrip(" "))
+        text = code.strip()
+        if col == 0:
+            pkg, block, spec, body = text.rstrip(":"), None, None, None
+        elif col == 2 and text.rstrip(":") in ROS_BLOCKS:
+            block, spec, body = text.rstrip(":"), None, None
+        elif col == 4 and block:
+            spec, body = text, None
+        elif col == 6 and spec and text in ROS_BODIES.get(block, ()):
+            body = text
+            facts.add(("", block, spec, body, -1, ""))
+        elif col >= 8 and body:
+            toks = text.split()
+            for i in range(0, len(toks) - 1, 2):
+                k = (pkg, block, spec, body)
+                counts[k] = counts.get(k, 0) + 1
+                facts.add(k + (counts[k], toks[i] + " " + toks[i + 1]))
+    return facts
 
 
 def _stage_siblings(src_dir, work, exts):
@@ -156,7 +221,7 @@ def check_roundtrip(src, work):
     # subSystems: target -- must travel with it. Staged BEFORE the fixture, so a directory that
     # contains the fixture itself cannot clobber the copy under test.
     src_dir = os.path.dirname(os.path.abspath(src))
-    _stage_siblings(src_dir, work, (".ros2", ".rossystem"))
+    _stage_siblings(src_dir, work, STAGED_EXTS)
     staged = os.path.join(work, os.path.basename(src))
     shutil.copy(src, staged)
 
@@ -186,6 +251,19 @@ def check_roundtrip(src, work):
                             % (key, len(missing), len(before[key]), missing))
         if added:
             failures.append("%s: %d INVENTED -- %s" % (key, len(added), added))
+
+    # the companion .ros. A spec re-emitted with an empty body parses (RM080 INFO), lints clean
+    # and generates clean, so nothing above would notice that every field had been deleted.
+    for name in sorted(os.listdir(outdir)):
+        if not name.endswith(".ros") or not os.path.isfile(os.path.join(work, name)):
+            continue                       # not regenerated from a source we staged
+        rb, ra = ros_facts(os.path.join(work, name)), ros_facts(os.path.join(outdir, name))
+        missing, added = sorted(rb - ra), sorted(ra - rb)
+        if missing:
+            failures.append("%s: %d of %d message field(s)/body LOST -- %s"
+                            % (name, len(missing), len(rb), missing[:6]))
+        if added:
+            failures.append("%s: %d INVENTED -- %s" % (name, len(added), added[:6]))
     return not failures, failures
 
 
@@ -194,7 +272,7 @@ def check_orphan_gate(src, work):
     generation before anything is written -- not be dropped, and not be written out for the
     language server to reject."""
     src_dir = os.path.dirname(os.path.abspath(src))
-    staged_siblings = _stage_siblings(src_dir, work, (".ros2", ".rossystem"))
+    staged_siblings = _stage_siblings(src_dir, work, STAGED_EXTS)
     if not [f for f in staged_siblings if f.endswith(".ros2")]:
         return None, ["skipped: no sibling .ros2 to back a node"]
 
@@ -279,7 +357,7 @@ def check_fields(src, work):
     src_dir = os.path.dirname(os.path.abspath(src))
     # a project-local subSystems: target has to be reachable here too, or the planted copy loses
     # the connections the plain round-trip keeps and this check would blame `namespace:` for it.
-    ros2 = [f for f in _stage_siblings(src_dir, work, (".ros2", ".rossystem"))
+    ros2 = [f for f in _stage_siblings(src_dir, work, STAGED_EXTS)
             if f.endswith(".ros2")]
     if not ros2:
         return None, ["skipped: no sibling .ros2 to carry fromGitRepo/qos"]
@@ -404,7 +482,7 @@ def _kept(fact, after):
 def check_comments(src, work):
     """Seed, generate, and hold the result to the comment policy. Returns (ok, [lines])."""
     src_dir = os.path.dirname(os.path.abspath(src))
-    ros2 = [f for f in _stage_siblings(src_dir, work, (".ros2", ".rossystem"))
+    ros2 = [f for f in _stage_siblings(src_dir, work, STAGED_EXTS)
             if f.endswith(".ros2")]
     staged = os.path.join(work, os.path.basename(src))
     shutil.copy(src, staged)
@@ -496,6 +574,72 @@ def check_parity(work, proj_name="project.json", gen_name="generated"):
     return False, [line for line in text.splitlines() if line.strip()]
 
 
+# ---------------------------------------------------------------------------------------
+# MULTI-FILE
+# ---------------------------------------------------------------------------------------
+
+# One entry per merge hazard, with the answer written out rather than derived: the two cases
+# fail in opposite directions, so a formula that satisfied both would be describing neither.
+#   multifile/   two systems in two SUBDIRECTORIES, both labelling their node "driver". The
+#                artifacts only resolve if the index spans the tree, and one label has to be
+#                renamed or the merged file has two nodes: keys with one name (RM009).
+#   subsystems/  probe_sub REFERENCES robot_base. Merging both inline must DROP the reference
+#                and fold its shadow nodes onto the real ones, or the same node is declared
+#                twice, once under nodes: and once through the reference (RM090).
+MULTIFILE_CASES = [
+    ("multifile", "mf_merged", {"driver", "driver_mf_right"}, 4, 0, set()),
+    ("subsystems", "sub_merged", {"controller", "base_driver"}, 4, 2, set()),
+]
+
+
+def check_multifile(case, work):
+    """`init` over a DIRECTORY merges every .rossystem under it into one project. Returns
+    (True|False|None, [lines]); None means SKIP."""
+    name, sysname, want_nodes, want_exp, want_conn, want_subs = case
+    root = os.path.join(_HERE, "fixtures", name)
+    if not os.path.isdir(root):
+        return None, ["skipped: tests/fixtures/%s is missing" % name]
+
+    proj = os.path.join(work, "merged.json")
+    code, out = run(["init", root, "--out", proj, "--name", sysname])
+    if code != 0:
+        return False, ["init over the directory failed (exit %d):\n%s" % (code, out)]
+    outdir = os.path.join(work, "merged-generated")
+    code, gen_out = run(["generate", proj, "--outdir", outdir])
+    if code != 0:
+        return False, ["generate failed on the merged project (exit %d):\n%s" % (code, gen_out)]
+
+    gen = os.path.join(outdir, sysname + ".rossystem")
+    if not os.path.isfile(gen):
+        return False, ["generate wrote no %s.rossystem (%s)" % (sysname, os.listdir(outdir))]
+
+    fails = []
+    got = facts(gen)
+    if got["nodes"] != want_nodes:
+        fails.append("nodes: expected %s, got %s" % (sorted(want_nodes), sorted(got["nodes"])))
+    # facts() returns SETS, so a duplicated key would be invisible there -- count the raw lines.
+    seen = {}
+    for line in open(gen, encoding="utf-8"):
+        m = NODE_RE.match(re.sub(r"\s+#.*$", "", line.rstrip()))
+        if m:
+            seen[m.group(1)] = seen.get(m.group(1), 0) + 1
+    dups = sorted(k for k, v in seen.items() if v > 1)
+    if dups:
+        fails.append("duplicate node label(s) in the merged file: %s (RM009)" % dups)
+    if len(got["exposures"]) != want_exp:
+        fails.append("exposures: expected %d, got %d -- %s"
+                     % (want_exp, len(got["exposures"]), sorted(got["exposures"])))
+    if len(got["connections"]) != want_conn:
+        fails.append("connections: expected %d, got %d -- %s"
+                     % (want_conn, len(got["connections"]), sorted(got["connections"])))
+    if got["subSystems"] != want_subs:
+        fails.append("subSystems: expected %s, got %s"
+                     % (sorted(want_subs), sorted(got["subSystems"])))
+    if "0 error(s)" not in gen_out:
+        fails.append("rosmodel_lint did not report 0 errors on the merged output:\n%s" % gen_out)
+    return not fails, fails
+
+
 def _default_targets():
     """examples/ plus the checked-in fixtures. examples/ is gitignored demo content that other
     work rewrites under this harness; tests/fixtures/ is what a change to this repo is held to,
@@ -503,6 +647,7 @@ def _default_targets():
     out = []
     for root in (os.path.join(PLUGIN_ROOT, "examples"),
                  os.path.join(_HERE, "fixtures", "comments"),
+                 os.path.join(_HERE, "fixtures", "messages"),
                  os.path.join(_HERE, "fixtures", "subsystems")):
         if not os.path.isdir(root):
             continue
@@ -573,6 +718,28 @@ def main(argv):
                     print("    comments: %s" % line)
         finally:
             shutil.rmtree(work, ignore_errors=True)
+
+    # Merging is a whole-DIRECTORY operation, so it has no place in the per-fixture table
+    # above; it runs once, from the checked-in fixtures only, and gates the same exit code.
+    if not argv[1:]:
+        print()
+        print("%-32s %-12s" % ("MULTI-FILE", "MERGE"))
+        print("-" * 90)
+        for case in MULTIFILE_CASES:
+            work = tempfile.mkdtemp(prefix="studio-mf-")
+            try:
+                ok, why = check_multifile(case, work)
+                print("%-32s %-12s" % ("fixtures/" + case[0] + "/", verdict(ok)))
+                if ok is False:
+                    for line in why:
+                        failures += 1
+                        print("    multi-file: %s" % line)
+                elif ok is None:
+                    for line in why:
+                        print("    multi-file: %s" % line)
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+
     print()
     print("%d fixture(s), %d failure(s)" % (len(targets), failures))
     return 1 if failures else 0

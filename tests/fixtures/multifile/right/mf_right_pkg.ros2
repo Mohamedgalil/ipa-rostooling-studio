@@ -1,0 +1,10 @@
+mf_right_pkg:
+  artifacts:
+    right_planner:
+      node: right_planner
+      publishers:
+        'cmd_vel':
+          type: 'geometry_msgs/msg/Twist'
+      subscribers:
+        'odom':
+          type: 'nav_msgs/msg/Odometry'

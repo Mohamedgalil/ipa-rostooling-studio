@@ -7,13 +7,16 @@ script owns everything the browser cannot: seeding a project from existing files
 DETERMINISTIC file generation, and REAL validation against rosmodel_lint (always) and the
 language-server oracle (opt-in).
 
-    ros_studio.py init [FILE.rossystem ...] [--out project.json]
+    ros_studio.py init [FILE.rossystem | DIR ...] [--out project.json] [--name NAME]
         Build a project.json. With a .rossystem argument, seed from it: reuse ros_plot's
         extractor for the system structure and open the sibling .ros2 files (via
         rosmodel_lint's compose) to recover each interface's type and the artifacts'
-        parameters, and a line-oriented pass to recover the COMMENTS (PyYAML discards them).
-        Every comment that cannot be attached to a model element is reported. With no
-        argument, emit a blank project.
+        parameters, the sibling .ros files to recover the message FIELDS, and a line-oriented
+        pass to recover the COMMENTS (PyYAML discards them). Every comment that cannot be
+        attached to a model element is reported. Several files, or a directory, are indexed
+        across the whole tree and MERGED into one project (ids re-issued, colliding node
+        labels renamed, a subSystems: reference to a system that is itself being merged
+        collapsed onto it). With no argument, emit a blank project.
 
     ros_studio.py render project.json [--out ros-studio.html] [--open]
         Emit the self-contained editor HTML, with the three autocomplete datasets
@@ -500,6 +503,92 @@ def parse_ros2(path):
     return out, pkg_git
 
 
+# The reverse of C.TYPE_SEG_TO_ROS_BLOCK: a .ros block back to the segment a qualified type
+# name spells. RosQNP.xtend names every spec '<pkg>/msg/<Name>' (or /srv/, /action/), so the
+# project key and the file layout are two views of one identity.
+ROS_BLOCK_TO_TYPE_SEG = {v: k for k, v in C.TYPE_SEG_TO_ROS_BLOCK.items()}
+
+
+def parse_ros(path):
+    """Map a .ros PackageSet to {'<pkg>/<seg>/<Name>': {'fields': {body: [{type, name}]}}},
+    plus a list of package-level members this project has no slot for.
+
+    Not composed as YAML: `float32 x` nested under an un-colonned `Pose` folds into ONE
+    multi-line plain scalar, so PyYAML would hand back a spec with no fields -- exactly the
+    loss this function exists to stop. It reuses rosmodel_lint's indentation parser, the same
+    one check_ros() walks, so the studio and the checker agree about where a field sits.
+
+    SEVERAL top-level packages per file are legal (PackageSet is package+=Package_Impl*;
+    tests/oracle/cases/_deps/common_msgs.ros declares nine and the oracle accepts it), so this
+    keeps walking at depth 0 instead of stopping after the first.
+
+    A field is exactly two tokens, a Type then a Data (Basics.xtext:201-204), and
+    MessagePart+=MessagePart* has no line separator -- so 'time stamp string id' is TWO fields
+    on one line and is read as such (RM078 is a warning, not an error).
+    """
+    types, extras = {}, []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            lines = handle.read().splitlines()
+    except (IOError, OSError):
+        return types, extras
+
+    pkg = block = spec = body = None
+    d_block = d_spec = d_body = None
+    for node in L.parse_ros_indent(lines):
+        text, depth = node["text"], node["depth"]
+        # close every level this line dedented out of, innermost first
+        if d_body is not None and depth <= d_body:
+            body = d_body = None
+        if d_spec is not None and depth <= d_spec:
+            spec = d_spec = None
+        if d_block is not None and depth <= d_block:
+            block = d_block = None
+
+        if depth == 0:
+            pkg = text[:-1].strip() if text.endswith(":") else None
+            continue
+        if pkg is None:
+            continue
+
+        if block is None:
+            key = text[:-1].strip() if text.endswith(":") else text.split(":")[0].strip()
+            if key in L.ROS_SPEC_BLOCKS:
+                block, d_block = key, depth
+            elif key in L.ROS_PACKAGE_PREFIX_KEYS:
+                # 'fromGitRepo:' / 'dependencies:' on a .ros PACKAGE. The project models a
+                # package's fromGitRepo only for its .ros2 (project["packages"]), and the two
+                # files are different artefacts that may disagree, so this is reported rather
+                # than merged into a slot that does not mean the same thing.
+                extras.append((pkg, node["line"], text))
+            continue
+
+        if spec is None:
+            if text.endswith(":"):
+                continue                       # a spec name carries NO trailing ':' (Ros.xtext:81)
+            spec = ros_plot._strip_quotes(text.strip())
+            d_spec = depth
+            types.setdefault("%s/%s/%s" % (pkg, ROS_BLOCK_TO_TYPE_SEG[block], spec),
+                             {"fields": {b: [] for b in L.ROS_SPEC_BODIES[block]}})
+            continue
+
+        if body is None:
+            if text in L.ROS_SPEC_BODIES[block]:
+                body, d_body = text, depth
+            continue
+
+        key = "%s/%s/%s" % (pkg, ROS_BLOCK_TO_TYPE_SEG[block], spec)
+        toks = L.ros_tokenise(text)
+        for i in range(0, len(toks) - 1, 2):
+            types[key]["fields"].setdefault(body, []).append(
+                {"type": toks[i], "name": toks[i + 1]})
+        if len(toks) % 2:
+            extras.append((pkg, node["line"],
+                           "%s (odd token count -- '%s' has no name and was not read)"
+                           % (text, toks[-1])))
+    return types, extras
+
+
 def resolve_subsystem(ref, base_dir):
     """One `subSystems:` reference -> (catalogue file or None, {label: {'from', 'interfaces':
     {name: kind}}}). {} when the reference resolves to nothing.
@@ -567,17 +656,51 @@ def _subsystem_project_nodes(ref, sub_nodes, nid):
     return out
 
 
-def seed_from_rossystem(path):
-    """Build a project dict from an existing .rossystem plus its sibling .ros2 files."""
+SEED_GLOBS = ["*.ros2", "rosnodes/*.ros2", "nodes/*.ros2", "*/*.ros2"]
+SEED_ROS_GLOBS = ["*.ros", "msgs/*.ros", "rosnodes/*.ros", "nodes/*.ros", "*/*.ros"]
+
+
+def _drop_catalogued_types(types):
+    """Keep only the specs the project is allowed to (re)define, and say how many it dropped.
+
+    A .ros sitting in the tree is very often a VENDORED message package -- the same nine
+    packages `_deps/common_msgs.ros` carries. Those are already in assets/roscommonobjects and
+    collect_deps stages them for the oracle run, so copying their definitions into the project
+    would make `generate` write a second Package_Impl with the same name (RM009, "every
+    '<name>/msg/<Type>' qualified name ambiguous").
+
+    The filter is per PACKAGE, not per type: one extra spec in an otherwise catalogued package
+    still makes `generate` write a whole second <pkg>.ros. _validate_types() applies the same
+    rule to what the author types into the editor, so seeding and authoring cannot disagree
+    about which packages are this project's to own."""
+    owned = _catalogue_packages()
+    kept, dropped = {}, 0
+    for key, spec in types.items():
+        if str(key).split("/")[0] in owned:
+            dropped += 1
+        else:
+            kept[key] = spec
+    return kept, dropped
+
+
+def seed_from_rossystem(path, base_index=None):
+    """Build a project dict from an existing .rossystem plus its sibling .ros2/.ros files.
+
+    `base_index` is the multi-file seeder's shared workspace index, (ros2_index, pkg_git,
+    types); the file's OWN directory is indexed on top of it, so a sibling always beats a
+    namesake found elsewhere in the tree. Left None, the behaviour is exactly the single-file
+    one: only this file's directory and the three conventional subdirs are opened.
+    """
     model = ros_plot.extract_model(path, use_catalogue=True)
     base_dir = os.path.dirname(os.path.abspath(path))
 
+    workspace = base_index or ({}, {}, {})
+
     # index every .ros2 in the system directory and one level of common subdirs
-    ros2_index, pkg_git = {}, {}
+    ros2_index, pkg_git = dict(workspace[0]), dict(workspace[1])
     ros2_cmts, ros2_drops, dropped = {}, {}, []
     seen = set()
-    globs = ["*.ros2", "rosnodes/*.ros2", "nodes/*.ros2", "*/*.ros2"]
-    for g in globs:
+    for g in SEED_GLOBS:
         for f in glob.glob(os.path.join(base_dir, g)):
             f = os.path.abspath(f)
             if f in seen:
@@ -593,6 +716,19 @@ def seed_from_rossystem(path):
             # "dropped by us" and reporting them would be noise.
             ros2_drops[f] = (list(scanned["packages"].keys()),
                              [(os.path.basename(f),) + d for d in scanned["dropped"]])
+
+    # Message FIELDS. Without this a sibling .ros was read by nothing, so a `generate` that
+    # regenerated it wrote back the type NAMES with empty bodies -- STATUS.md sec 8 defect 2,
+    # the same silent loss the exposure label fix closed one level up.
+    ros_types = dict(workspace[2])
+    ros_extras = []
+    for g in SEED_ROS_GLOBS:
+        for f in sorted(glob.glob(os.path.join(base_dir, g))):
+            found, extras = parse_ros(os.path.abspath(f))
+            ros_types.update(found)
+            ros_extras += [(os.path.basename(f), ln, txt) for _p, ln, txt in extras]
+    ros_types, ros_catalogued = _drop_catalogued_types(ros_types)
+    ros_extras.sort()
 
     # comments live in the source TEXT, which the YAML compose path above throws away
     sys_cmts = scan_rossystem_comments(path)
@@ -827,16 +963,28 @@ def seed_from_rossystem(path):
                    if not any("endpoint '%s' matches no declared interface" % lbl in d
                               for lbl in sub_exposure)]
     diagnostics += diagnostics_extra
+    if ros_catalogued:
+        diagnostics.append(
+            "%d spec(s) in the sibling .ros file(s) belong to packages the vendored type "
+            "catalogue owns; their definitions are NOT copied into the project (redeclaring a "
+            "catalogued package is RM009). Only locally invented types are editable here."
+            % ros_catalogued)
+    for fname, line, text in ros_extras:
+        diagnostics.append(
+            "%s:%d  '%s' is a .ros package member this project has no slot for; it will NOT "
+            "be re-emitted." % (fname, line, text))
     diagnostics += _dropped_comment_diagnostics(dropped)
 
     project = {
         # 3: elements carry a `comments` object (see the comment policy above) and the system
-        # carries `subSystems`. A formatVersion-2 project simply has neither and loads
-        # unchanged -- every reader below uses .get() with an empty default.
-        "formatVersion": 3,
+        # carries `subSystems`. 4: `types` carries the message FIELDS of locally defined specs
+        # (and a merged project carries `seededFromAll`). An older project simply has none of
+        # them and loads unchanged -- every reader below uses .get() with an empty default.
+        "formatVersion": 4,
         "system": {"name": model["systemName"], "fromFile": model.get("fromFile")},
         "subSystems": sub_systems,
         "packages": packages,
+        "types": ros_types,
         "nodes": nodes,
         "connections": conns,
         "seededFrom": os.path.abspath(path),
@@ -846,6 +994,292 @@ def seed_from_rossystem(path):
     if cmt:
         project["comments"] = cmt
     return project
+
+
+# ========================================================================================
+# Multi-file seeding
+#
+# `init` used to print "init seeds from the first file only; ignoring N more", so a system
+# whose nodes live across directories could not be seeded at all. Everything below turns N
+# .rossystem files (and/or a directory holding them) into ONE project.
+#
+# Three things make that more than a concatenation:
+#   * ids are per-seed counters (n1, i1, ...), so two seeds collide on every one of them;
+#   * a node LABEL is a key in the emitted nodes: block -- two of them is RM009, an ERROR;
+#   * a system listed on the command line may ALSO be reached through another's subSystems:,
+#     and declaring the same node both inline and by reference is RM090.
+# ========================================================================================
+
+def _iter_seed_sources(paths):
+    """Expand init's arguments into (rossystem files, roots to index, missing arguments).
+
+    A directory contributes every .rossystem beneath it; a plain file contributes itself. The
+    result is sorted, so the merge order -- and therefore every disambiguated label the merge
+    derives -- is the same on every machine and in every shell."""
+    files, roots, missing = [], [], []
+    for raw in paths:
+        p = os.path.abspath(raw)
+        if os.path.isdir(p):
+            roots.append(p)
+            for base, _dirs, names in os.walk(p):
+                files += [os.path.join(base, n) for n in names if n.endswith(".rossystem")]
+        elif os.path.isfile(p):
+            files.append(p)
+            roots.append(os.path.dirname(p))
+        else:
+            missing.append(raw)
+    seen, uniq = set(), []
+    for f in sorted(files):
+        if f not in seen:
+            seen.add(f)
+            uniq.append(f)
+    return uniq, sorted(set(roots)), missing
+
+
+def _index_workspace(roots):
+    """(ros2_index, pkg_git, types) over whole directory TREES.
+
+    seed_from_rossystem() only ever opened the seeded file's own directory plus rosnodes/,
+    nodes/ and one level of '*/'. That is the reason a system whose artifacts sit in a sibling
+    tree seeded every node as catalogue-backed or not at all. Walked in sorted order so a name
+    that genuinely appears twice resolves the same way every run; the file's OWN directory is
+    indexed on top of this afterwards, so a sibling always wins."""
+    ros2_index, pkg_git, types = {}, {}, {}
+    for root in roots:
+        for base, dirs, names in os.walk(root):
+            dirs.sort()
+            for name in sorted(names):
+                path = os.path.join(base, name)
+                if name.endswith(".ros2"):
+                    idx, git = parse_ros2(path)
+                    ros2_index.update(idx)
+                    pkg_git.update(git)
+                elif name.endswith(".ros"):
+                    found, _extras = parse_ros(path)
+                    types.update(found)
+    types, _dropped = _drop_catalogued_types(types)
+    return ros2_index, pkg_git, types
+
+
+def _unique_label(label, used, hint):
+    """A node label that is free, derived from `label` and the system it came from. RM009 is an
+    ERROR -- two nodes: keys with one name are two distinct RosNode objects answering to it --
+    so a collision has to be renamed rather than reported and left."""
+    if label not in used:
+        return label
+    cand = "%s_%s" % (label, _sanitise(hint))
+    n = 2
+    while cand in used:
+        cand = "%s_%s_%d" % (label, _sanitise(hint), n)
+        n += 1
+    return cand
+
+
+def _system_keys(project, path):
+    """The names a `subSystems:` entry could use to reach this source: its system name and its
+    file's basename. resolve_subsystem() accepts either, so the merge has to match on both or
+    it collapses one spelling and not the other."""
+    keys = {os.path.splitext(os.path.basename(path))[0]}
+    name = (project.get("system") or {}).get("name")
+    if name:
+        keys.add(name)
+    return keys
+
+
+def seed_from_many(paths, roots=None, name=None):
+    """Seed ONE project from several .rossystem files. `paths` is already expanded and sorted.
+
+    The first source decides the system name (unless --name overrides), its fromFile and its
+    file header: those are single-valued in a .rossystem, and inventing a fourth answer would
+    be worse than adopting one and saying so. Everything dropped is reported, never silently
+    discarded (SKILL.md rule 12).
+    """
+    workspace = _index_workspace(roots or sorted({os.path.dirname(p) for p in paths}))
+    seeds = [(p, seed_from_rossystem(p, workspace)) for p in paths]
+
+    uid = [0]
+
+    def nid(prefix):
+        uid[0] += 1
+        return "%s%d" % (prefix, uid[0])
+
+    first = seeds[0][1]
+    merged = blank_project(name or first["system"].get("name") or "merged_system")
+    merged["system"]["fromFile"] = first["system"].get("fromFile")
+    if first.get("comments"):
+        merged["comments"] = first["comments"]
+    diags = []
+    for path, project in seeds:
+        base = os.path.basename(path)
+        for d in project.get("diagnostics", {}).get("global", []):
+            diags.append("%s: %s" % (base, d))
+
+    # --- pass A: every real node, re-identified and de-duplicated by label ----------------
+    label_used = set()
+    node_map = {}          # (source index, old node id) -> merged node
+    iface_map = {}         # (source index, old node id, old iface id) -> merged iface
+    real_index = {}        # system key -> {label: merged node}
+    for si, (path, project) in enumerate(seeds):
+        sysname = project["system"].get("name") or os.path.basename(path)
+        for n in project["nodes"]:
+            if n.get("backing") == "sub":
+                continue
+            new = dict(n)
+            new["id"] = nid("n")
+            label = _unique_label(n["label"], label_used, sysname)
+            if label != n["label"]:
+                diags.append("%s: node '%s' collides with one already merged and was renamed "
+                             "to '%s' (two nodes: keys with one name is RM009). Its "
+                             "connections follow the rename."
+                             % (os.path.basename(path), n["label"], label))
+            label_used.add(label)
+            new["label"] = label
+            new["ifaces"] = []
+            for f in n.get("ifaces") or []:
+                nf = dict(f)
+                nf["id"] = nid("i")
+                new["ifaces"].append(nf)
+                iface_map[(si, n["id"], f["id"])] = nf
+            new["params"] = [dict(p, id=nid("p")) for p in n.get("params") or []]
+            merged["nodes"].append(new)
+            node_map[(si, n["id"])] = new
+            for key in _system_keys(project, path):
+                real_index.setdefault(key, {})[n["label"]] = new
+
+    # --- pass B: subSystems: shadows -----------------------------------------------------
+    # A shadow is a read-only stand-in (backing "sub") for a node the referenced file declares,
+    # and emit_rossystem deliberately writes none of them: the referenced file provides them.
+    # So if a source on the command line IS that referenced file, the same node would be
+    # declared twice -- RM090 -- and the fix is to keep the real node, drop the reference, and
+    # re-point every endpoint that named the shadow.
+    #
+    # Decided per REF before any folding: collapsing a reference whose nodes only PARTLY
+    # resolve would drop the entry and leave an unemittable shadow behind.
+    resolvable, unresolved = {}, set()
+    for si, (path, project) in enumerate(seeds):
+        for n in project["nodes"]:
+            if n.get("backing") != "sub":
+                continue
+            ref = n.get("subRef") or ""
+            hit = None
+            for key in (ref, os.path.splitext(os.path.basename(ref))[0]):
+                hit = (real_index.get(key) or {}).get(n["label"])
+                if hit is not None:
+                    break
+            if hit is None:
+                unresolved.add(ref)
+            else:
+                resolvable[(ref, n["label"])] = hit
+    collapsed = {ref for ref, _lbl in resolvable if ref not in unresolved}
+
+    shadow = {}
+    for si, (path, project) in enumerate(seeds):
+        for n in project["nodes"]:
+            if n.get("backing") != "sub":
+                continue
+            ref = n.get("subRef") or ""
+            target = resolvable.get((ref, n["label"])) if ref in collapsed else None
+            if target is None:
+                target = shadow.get((ref, n["label"]))
+            if target is None:
+                new = dict(n)
+                new["id"] = nid("n")
+                label = _unique_label(n["label"], label_used, ref)
+                label_used.add(label)
+                new["label"] = label
+                new["ifaces"] = []
+                for f in n.get("ifaces") or []:
+                    nf = dict(f)
+                    nf["id"] = nid("i")
+                    new["ifaces"].append(nf)
+                    iface_map[(si, n["id"], f["id"])] = nf
+                new["params"] = []
+                merged["nodes"].append(new)
+                node_map[(si, n["id"])] = new
+                shadow[(ref, n["label"])] = new
+                continue
+            # fold: bind this shadow's interfaces to the target's by NAME, which is the only
+            # identity a connections: endpoint has (there is no artifact-qualified form).
+            node_map[(si, n["id"])] = target
+            by_name = {}
+            for tf in target["ifaces"]:
+                by_name.setdefault(tf["name"], tf)
+            for f in n.get("ifaces") or []:
+                tf = by_name.get(f["name"])
+                if tf is not None:
+                    iface_map[(si, n["id"], f["id"])] = tf
+
+    # --- pass C: connections --------------------------------------------------------------
+    seen_conn = set()
+    for si, (path, project) in enumerate(seeds):
+        for c in project.get("connections") or []:
+            fn = node_map.get((si, c["from"]["n"]))
+            tn = node_map.get((si, c["to"]["n"]))
+            ff = iface_map.get((si, c["from"]["n"], c["from"]["i"]))
+            tf = iface_map.get((si, c["to"]["n"], c["to"]["i"]))
+            if not (fn and tn and ff and tf):
+                diags.append("%s: a connection could not be re-linked after the merge and was "
+                             "NOT carried over (an endpoint's node or interface did not "
+                             "survive)." % os.path.basename(path))
+                continue
+            key = (fn["id"], ff["id"], tn["id"], tf["id"])
+            if key in seen_conn:
+                continue                      # the same edge reached through two sources
+            seen_conn.add(key)
+            new = dict(c)
+            new["id"] = nid("c")
+            new["from"] = {"n": fn["id"], "i": ff["id"]}
+            new["to"] = {"n": tn["id"], "i": tf["id"]}
+            merged["connections"].append(new)
+
+    # --- pass D: subSystems entries, packages, types ---------------------------------------
+    seen_ref = set()
+    for path, project in seeds:
+        for s in project.get("subSystems") or []:
+            if s["ref"] in collapsed:
+                diags.append("%s: subSystems: '%s' names a system this merge also carries "
+                             "inline, so the reference was DROPPED and its endpoints re-linked "
+                             "onto the merged nodes — declaring a node both here and by "
+                             "reference is RM090." % (os.path.basename(path), s["ref"]))
+                continue
+            if s["ref"] in seen_ref:
+                continue
+            seen_ref.add(s["ref"])
+            merged["subSystems"].append(s)
+        for pkg, entry in sorted((project.get("packages") or {}).items()):
+            if pkg not in merged["packages"]:
+                merged["packages"][pkg] = entry
+            elif merged["packages"][pkg] != entry:
+                diags.append("%s: package '%s' is described differently by two sources; the "
+                             "first one merged wins (fromGitRepo %r)."
+                             % (os.path.basename(path), pkg,
+                                merged["packages"][pkg].get("fromGitRepo")))
+        for key, spec in sorted((project.get("types") or {}).items()):
+            if key not in merged["types"]:
+                merged["types"][key] = spec
+            elif merged["types"][key] != spec:
+                diags.append("%s: message type '%s' is defined differently by two sources; the "
+                             "first one merged wins." % (os.path.basename(path), key))
+
+    for path, project in seeds[1:]:
+        if project["system"].get("fromFile") and (project["system"]["fromFile"]
+                                                  != merged["system"]["fromFile"]):
+            diags.append("%s: fromFile %r was dropped — a .rossystem has exactly one, and the "
+                         "merge adopted the first source's."
+                         % (os.path.basename(path), project["system"]["fromFile"]))
+        if project.get("comments"):
+            diags.append("%s: its file header comment was dropped — the merged file carries "
+                         "the first source's." % os.path.basename(path))
+
+    _grid_layout(merged["nodes"])
+    merged["seededFrom"] = os.path.abspath(paths[0])
+    merged["seededFromAll"] = [os.path.abspath(p) for p in paths]
+    merged["diagnostics"] = {"global": [
+        "merged %d .rossystem file(s) into one project: %s. The system is named '%s' (%s)."
+        % (len(paths), ", ".join(os.path.basename(p) for p in paths),
+           merged["system"]["name"],
+           "--name" if name else "adopted from the first source")] + diags, "byNode": {}}
+    return merged
 
 
 def _dropped_comment_diagnostics(dropped, limit=12):
@@ -900,10 +1334,11 @@ def _grid_layout(nodes):
 
 def blank_project(name="new_system"):
     return {
-        "formatVersion": 3,
+        "formatVersion": 4,
         "system": {"name": name, "fromFile": None},
         "subSystems": [],
         "packages": {},
+        "types": {},
         "nodes": [],
         "connections": [],
         "diagnostics": {"global": [], "byNode": {}},
@@ -938,9 +1373,33 @@ def _type_catalogue_file(typ):
     return entry.get("file") if entry else None
 
 
+def _catalogue_packages():
+    """Package names the vendored type catalogue owns. A locally DEFINED type in one of them
+    would be written into a <pkg>.ros that collect_deps also stages from
+    assets/roscommonobjects/ for the oracle run: two Package_Impl entries with one name, which
+    makes every '<name>/msg/<Type>' qualified name ambiguous (RM009).
+
+    Read off the entries that carry a `file`, which is exactly the map render_editor embeds as
+    DATA.typeFiles -- so the page's companionTypes() cannot disagree with this about which
+    packages the project owns."""
+    idx = L.load_type_index() or {}
+    return {k.split("/")[0] for k in idx if "/" in k and (idx[k] or {}).get("file")}
+
+
 def _local_type_packages(project):
-    """Packages that hand-authored nodes declare (candidates for a companion .ros)."""
-    return {n["pkg"] for n in project["nodes"] if n["backing"] == "hand" and n["pkg"]}
+    """Packages a companion .ros may be written for: every hand-authored node's package, plus
+    every package a locally DEFINED type names.
+
+    The second half is what makes a type invented in the editor emittable at all. A definition
+    is reached through project["types"], not through an interface, so a spec no interface
+    happens to reference -- the inner type of a self-referencing message, say -- was collected
+    by nothing and written nowhere."""
+    pkgs = {n["pkg"] for n in project["nodes"] if n["backing"] == "hand" and n["pkg"]}
+    for key in project.get("types") or {}:
+        parts = str(key).split("/")
+        if len(parts) == 3 and parts[0] and _type_catalogue_file(key) is None:
+            pkgs.add(parts[0])
+    return pkgs
 
 
 def _companion_types(project):
@@ -948,6 +1407,14 @@ def _companion_types(project):
     they need a companion .ros. Returns {package: {(block, TypeName)}}."""
     local_pkgs = _local_type_packages(project)
     out = {}
+    for key in project.get("types") or {}:
+        parts = str(key).split("/")
+        if len(parts) != 3:
+            continue
+        pkg, seg, name = parts
+        block = C.TYPE_SEG_TO_ROS_BLOCK.get(seg)
+        if pkg in local_pkgs and block and _type_catalogue_file(key) is None:
+            out.setdefault(pkg, set()).add((block, name))
     for n in project["nodes"]:
         if n["backing"] != "hand":
             continue
@@ -1048,8 +1515,20 @@ def _emit_qos(lines, qos, indent):
         lines.extend(body)
 
 
-def _companion_ros(package, blocks):
-    """A minimal .ros for locally-invented types: bodiless spec entries (legal; RM080 INFO)."""
+def _companion_ros(package, blocks, types=None):
+    """A .ros for locally-invented types, WITH the message fields the project defines.
+
+    A bodiless spec is legal -- '(BEGIN message=MessageDefinition END)?' is optional, hence
+    RM080 INFO and not an error -- but when the source defined fields it is silent data loss
+    (STATUS.md sec 8 defect 2: a regenerated .ros came back with type names and no fields).
+    The emitted form with its fields is oracle-ACCEPTED, 0 errors (case 10, ours-turtlesim-msgs).
+
+    Layout is the four-BEGIN ladder of ros2-syntax.md 11: package 0 / block 2 / spec name 4
+    (no trailing ':' -- the one named element in the language without one) / body keyword 6 /
+    field 8. Every body keyword of the block is written even when it has no fields, because
+    Ros.xtext:81-104 makes the keyword itself mandatory and only its indented body optional
+    (a bodiless `response` is the normal shape, RM073)."""
+    types = types or {}
     lines = [package + ":"]
     by_block = {}
     for block, name in sorted(blocks):
@@ -1058,10 +1537,21 @@ def _companion_ros(package, blocks):
         if block not in by_block:
             continue
         lines.append("  " + block + ":")
+        seg = ROS_BLOCK_TO_TYPE_SEG[block]
         for name in sorted(by_block[block]):
             lines.append("    " + name)
+            fields = ((types.get("%s/%s/%s" % (package, seg, name)) or {}).get("fields")) or {}
             for body in L.ROS_SPEC_BODIES[block]:   # message / request+response / goal...
                 lines.append("      " + body)
+                for f in fields.get(body) or []:
+                    typ = str(f.get("type") or "").strip()
+                    fname = str(f.get("name") or "").strip()
+                    # One field per line. MessagePart+=MessagePart* has no line separator so
+                    # several per line PARSE (RM078 is a warning), but emission-profile rule 2
+                    # says readable; a half-filled row is blocked by validate_project, never
+                    # dropped here.
+                    if typ and fname:
+                        lines.append("        " + typ + " " + fname)
     return "\n".join(lines) + "\n"
 
 
@@ -1313,7 +1803,104 @@ def validate_project(project):
             flag(fn["id"], m)
             flag(tn["id"], m)
 
+    # A hand-authored interface whose type resolves NOWHERE -- not in the vendored catalogue and
+    # not in a companion .ros this run writes. rosmodel_lint only warns (RM081/RM076: linking is
+    # cross-file and it sees one file at a time), but the server answers "Couldn't resolve
+    # reference to TopicSpec" and REJECTS. Reachable whenever the type's package differs from
+    # the node's own -- 'foo_pkg' node publishing 'foo_msgs/msg/Bar' writes no foo_msgs.ros --
+    # so the fix is to define the spec, which the message-types panel now allows.
+    emitted = _emitted_type_names(project)
+    for n in project.get("nodes", []):
+        if n.get("backing") != "hand":
+            continue
+        for f in n.get("ifaces", []):
+            typ = (f.get("type") or "").strip()
+            if not typ or typ.startswith("TODO") or "/" not in typ:
+                continue                      # already flagged above, or not a reference
+            if typ in emitted or _type_catalogue_file(typ) is not None:
+                continue
+            flag(n["id"], "interface '%s' (%s) has type '%s', which neither the vendored "
+                          "catalogue nor this project defines — the server cannot resolve it. "
+                          "Define it under 'message types (.ros)', or use a catalogued type."
+                          % (f.get("name", "?"), f.get("kind", "?"), typ))
+
+    glob_errs += _validate_types(project)
     return {"global": glob_errs, "byNode": by_node}
+
+
+def _emitted_type_names(project):
+    """The qualified names of every spec a companion .ros this run writes will declare."""
+    out = set()
+    for pkg, blocks in _companion_types(project).items():
+        for block, name in blocks:
+            out.add("%s/%s/%s" % (pkg, ROS_BLOCK_TO_TYPE_SEG[block], name))
+    return out
+
+
+def _validate_types(project):
+    """Pre-write gate for the locally DEFINED message specs (project["types"]).
+
+    Everything rosmodel_lint checks about a .ros field line (RM074-RM077) is left to it -- it
+    runs over the written file and `generate` refuses on its errors. Only the three the linter
+    cannot decide from one file are enforced here, because each one ships a file the real
+    language server rejects:
+
+      * a half-filled row would simply not be emitted -> silent loss, the defect class this
+        whole model exists to close;
+      * a quoted SpecBaseRef that resolves neither in the catalogue nor in a companion this
+        run writes is RM076, a WARNING (linking is cross-file, so the linter cannot see it) --
+        but the oracle reports "Couldn't resolve reference to TopicSpec" as an ERROR, verified
+        on a bare same-package name in ros2-syntax.md 11;
+      * a definition in a package the catalogue also owns collides with the file collect_deps
+        stages next to it (RM009).
+    """
+    out = []
+    declared = project.get("types") or {}
+    if not declared:
+        return out
+    local_pkgs = _local_type_packages(project)
+    cat_pkgs = _catalogue_packages()
+    emitted = _emitted_type_names(project)
+
+    for key in sorted(declared):
+        parts = str(key).split("/")
+        if len(parts) != 3 or parts[1] not in C.TYPE_SEG_TO_ROS_BLOCK or not parts[0]:
+            out.append("message type '%s' is not '<package>/<msg|srv|action>/<Name>' — "
+                       "RosQNP.xtend qualifies every spec that way and no other shape can "
+                       "ever link." % key)
+            continue
+        pkg, seg, name = parts
+        if pkg in cat_pkgs:
+            out.append("message type '%s' defines a spec in '%s', a package the vendored "
+                       "catalogue owns — the generated %s.ros and the staged catalogue file "
+                       "would both declare it (RM009). Use a package name of your own."
+                       % (key, pkg, pkg))
+            continue
+        block = C.TYPE_SEG_TO_ROS_BLOCK[seg]
+        for body in L.ROS_SPEC_BODIES[block]:
+            for f in (declared[key].get("fields") or {}).get(body) or []:
+                typ = str(f.get("type") or "").strip()
+                fname = str(f.get("name") or "").strip()
+                if not typ or not fname:
+                    out.append("%s / %s: a field row is half-filled (type %r, name %r) — a "
+                               "MessagePart is exactly two tokens, a Type then a Data "
+                               "(Basics.xtext:201-204). Complete it or remove it; it would "
+                               "not be written."
+                               % (key, body, typ or "", fname or ""))
+                    continue
+                ref = typ[:-2] if typ.endswith("[]") else typ
+                if not (len(ref) >= 2 and ref[0] == ref[-1] and ref[0] in "\"'"):
+                    continue                     # primitive or malformed -> RM074/075, linter's
+                inner = ref[1:-1]
+                if inner in emitted or _type_catalogue_file(inner) is not None:
+                    continue
+                out.append("%s / %s: field '%s' references '%s', which neither the vendored "
+                           "catalogue nor this project defines — the server answers "
+                           "\"Couldn't resolve reference to TopicSpec\". Define it (its "
+                           "package must be one of: %s) or point the field elsewhere."
+                           % (key, body, fname, inner,
+                              ", ".join(sorted(local_pkgs)) or "none yet"))
+    return out
 
 
 def generate_files(project):
@@ -1333,7 +1920,7 @@ def generate_files(project):
                                          entry.get("comments"))
 
     for pkg, blocks in sorted(companions.items()):
-        files[pkg + ".ros"] = _companion_ros(pkg, blocks)
+        files[pkg + ".ros"] = _companion_ros(pkg, blocks, project.get("types"))
 
     files[project["system"].get("name", "system") + ".rossystem"] = emit_rossystem(project)
     return files
@@ -1501,6 +2088,18 @@ def render_editor(project, diagnostics=None, banner=None):
             "int32Max": L.INT32_MAX,
         },
         "typeSegBlocks": C.TYPE_SEG_TO_ROS_BLOCK,
+        # The .ros vocabulary, again taken from the LINTER's tables rather than hand-copied
+        # into the page: the field editor can then never offer a type rosmodel_lint would
+        # reject, and its inline severities mirror RM074/RM075/RM077 directly. `arrays` is
+        # NOT derived from `scalars` -- time, duration and Header have no array rule, so
+        # 'time[]' is a parse error (Basics.xtext:212 lists exactly fourteen).
+        "ros": {
+            "blocks": L.ROS_SPEC_BLOCKS,
+            "bodies": L.ROS_SPEC_BODIES,
+            "scalars": L.ROS_SCALAR_TYPES,
+            "arrays": L.ROS_ARRAY_TYPES,
+            "nameKeywords": sorted(L.ROS_FIELD_NAME_KEYWORDS),
+        },
         "banner": banner,
         "acWarnings": ac["warnings"],
     }
@@ -1525,19 +2124,31 @@ def _load_project(path):
 
 
 def cmd_init(args):
-    seed_failed = False
+    seed_failed = None
     if args.files:
-        src = args.files[0]
-        if not os.path.isfile(src):
-            print("ros_studio: init source not found: %s" % src, file=sys.stderr)
+        sources, roots, missing = _iter_seed_sources(args.files)
+        if missing:
+            for m in missing:
+                print("ros_studio: init source not found: %s" % m, file=sys.stderr)
             return 1
-        project = seed_from_rossystem(src)
-        if len(args.files) > 1:
-            print("ros_studio: init seeds from the first file only; ignoring %d more."
-                  % (len(args.files) - 1), file=sys.stderr)
+        if not sources:
+            print("ros_studio: no .rossystem found under: %s" % ", ".join(args.files),
+                  file=sys.stderr)
+            return 1
+        if len(sources) == 1:
+            # ONE source keeps the original path exactly, workspace index and all: a directory
+            # argument is what asks for the tree-wide index, a plain file is not.
+            single_file = os.path.isfile(os.path.abspath(args.files[0]))
+            project = seed_from_rossystem(
+                sources[0], None if single_file and len(args.files) == 1
+                else _index_workspace(roots))
+            if args.name:
+                project["system"]["name"] = args.name
+        else:
+            project = seed_from_many(sources, roots, args.name)
         if not project.get("nodes"):
             # a real path was given but nothing was recovered -- surface it, don't pretend
-            seed_failed = True
+            seed_failed = os.path.basename(sources[0])
     else:
         project = blank_project()
     out = os.path.abspath(args.out or "project.json")
@@ -1548,8 +2159,7 @@ def cmd_init(args):
         print("  seed diag: %s" % d, file=sys.stderr)
     if seed_failed:
         print("ros_studio: seeding %s recovered ZERO nodes — the file may be malformed or "
-              "empty. Wrote a project with no nodes." % os.path.basename(args.files[0]),
-              file=sys.stderr)
+              "empty. Wrote a project with no nodes." % seed_failed, file=sys.stderr)
         return 1
     return 0
 
@@ -1588,11 +2198,17 @@ def _stage_local_subsystems(project, outdir):
     Copied, never rewritten: it is a different model with its own author. A name the studio
     itself generated always wins, so staging can never overwrite this project's own output.
     Returns what it wrote."""
-    seeded = project.get("seededFrom")
+    seeded = project.get("seededFromAll") or (
+        [project["seededFrom"]] if project.get("seededFrom") else [])
     if not seeded:
         return []
-    base = os.path.dirname(os.path.abspath(seeded))
-    out = []
+    # a merged project was seeded from several directories, and a reference kept by one source
+    # can only resolve next to THAT source.
+    bases, out = [], []
+    for s in seeded:
+        d = os.path.dirname(os.path.abspath(s))
+        if d not in bases:
+            bases.append(d)
 
     def stage(src):
         dst = os.path.join(outdir, os.path.basename(src))
@@ -1606,14 +2222,19 @@ def _stage_local_subsystems(project, outdir):
     for s in project.get("subSystems") or []:
         if s.get("file"):
             continue                      # catalogued: assets/ resolves it, nothing to stage
-        for cand in (s.get("ref") or "", os.path.basename(s.get("ref") or "")):
-            src = os.path.join(base, os.path.splitext(cand)[0] + ".rossystem")
-            if not stage(src):
-                continue
-            for mn in ros_plot.extract_model(src, use_catalogue=False)["nodes"]:
-                if mn.get("package"):
-                    stage(os.path.join(base, mn["package"] + ".ros2"))
-            break
+        done = False
+        for base in bases:
+            if done:
+                break
+            for cand in (s.get("ref") or "", os.path.basename(s.get("ref") or "")):
+                src = os.path.join(base, os.path.splitext(cand)[0] + ".rossystem")
+                if not stage(src):
+                    continue
+                for mn in ros_plot.extract_model(src, use_catalogue=False)["nodes"]:
+                    if mn.get("package"):
+                        stage(os.path.join(base, mn["package"] + ".ros2"))
+                done = True
+                break
     return out
 
 
@@ -1729,8 +2350,13 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd")
 
     p_init = sub.add_parser("init", help="build project.json (seed from .rossystem or blank)")
-    p_init.add_argument("files", nargs="*")
+    p_init.add_argument("files", nargs="*",
+                        help=".rossystem file(s) and/or directories to seed from; several are "
+                             "merged into one project")
     p_init.add_argument("--out", default=None)
+    p_init.add_argument("--name", default=None,
+                        help="system name for the seeded project (a merge otherwise adopts "
+                             "the first source's)")
     p_init.set_defaults(func=cmd_init)
 
     p_render = sub.add_parser("render", help="emit the self-contained editor HTML")

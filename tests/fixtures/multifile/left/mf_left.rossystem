@@ -1,0 +1,12 @@
+# mf_left -- half of the MULTI-FILE seeding witness. Its node is deliberately labelled
+# "driver", the same label mf_right uses, and its .ros2 sits in this directory only: seeding
+# used to stop after the first file and index only that file's own directory, so neither the
+# collision nor the cross-directory artifact could arise at all.
+mf_left:
+  fromFile: "mf_left_pkg/launch/left.launch.py"
+  nodes:
+    "driver":
+      from: "mf_left_pkg.left_driver"
+      interfaces:
+        - "left_odom_pub": pub-> "left_driver::odom"
+        - "left_cmd_sub": sub-> "left_driver::cmd_vel"

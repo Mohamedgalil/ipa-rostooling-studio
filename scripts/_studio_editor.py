@@ -149,6 +149,12 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .cmtbox .crow input,.cmtbox .crow textarea{width:100%;font-family:var(--mono);font-size:.66rem;line-height:1.4;background:var(--surface-2);border:1px solid var(--rule);border-radius:4px;padding:.15rem .25rem;color:var(--ink);resize:vertical}
   .syspanel .pkgrow{margin-bottom:.5rem}
   .syspanel .pkgrow .pn{font-family:var(--mono);font-size:.7rem;font-weight:600;margin-bottom:.15rem}
+  .syspanel .frow{display:flex;align-items:center;gap:.3rem;margin-bottom:.15rem}
+  .syspanel .frow input{flex:1;min-width:0;font-family:var(--mono);font-size:.68rem;background:var(--surface-2);border:1px solid var(--rule);border-radius:4px;padding:.15rem .25rem;color:var(--ink)}
+  .syspanel .frow button{flex:0 0 auto;font-family:var(--mono);font-size:.58rem;color:var(--ink-3);background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.18rem .35rem;cursor:pointer}
+  .syspanel .fnote{font-size:.6rem;line-height:1.35;margin:0 0 .28rem .2rem;color:var(--ink-3)}
+  .syspanel .fnote.w{color:var(--warn)} .syspanel .fnote.e{color:var(--dead);font-weight:600}
+  .syspanel .fnote:empty{display:none}
   .hint{font-size:.66rem;line-height:1.4;color:var(--ink-3);margin-top:.15rem}
   .hint.w{color:var(--warn)}
   .addform{display:flex;flex-direction:column;gap:.35rem;padding:.5rem;border:1px dashed var(--rule);border-radius:6px;margin-top:.35rem}
@@ -244,6 +250,7 @@ EDITOR_TEMPLATE = r'''<!doctype html>
 
 <datalist id="typelist"></datalist>
 <datalist id="pkglist"></datalist>
+<datalist id="ftypelist"></datalist>
 
 <div class="scrim" id="catScrim">
   <div class="modal">
@@ -306,6 +313,15 @@ var DATA = /*__DATA__*/null;
   var TYPES=DATA.types||[], TYPESET={}; TYPES.forEach(function(t){TYPESET[t]=1;});
   var TYPEFILES=DATA.typeFiles||{};       // {type: relative .ros file} -- drives the RM089 comment
   var SEGBLOCK=DATA.typeSegBlocks||{};    // msg/srv/action -> msgs/srvs/actions
+  // .ros vocabulary (rosmodel_lint's own tables). ROSSEG is the inverse of SEGBLOCK: a spec's
+  // qualified name spells the SEGMENT ('pkg/msg/Type') while the file spells the BLOCK
+  // ('msgs:'), and _companion_ros() crosses between them for every line it writes.
+  var ROS=DATA.ros||{blocks:[],bodies:{},scalars:[],arrays:[],nameKeywords:[]};
+  var ROSSEG={}; Object.keys(SEGBLOCK).forEach(function(s){ROSSEG[SEGBLOCK[s]]=s;});
+  var ROSPRIM={}; (ROS.scalars||[]).concat(ROS.arrays||[]).forEach(function(t){ROSPRIM[t]=1;});
+  var ROSKW={}; (ROS.nameKeywords||[]).forEach(function(k){ROSKW[k]=1;});
+  // packages the vendored catalogue owns -- _catalogue_packages(), off the same embedded map.
+  var CATPKG={}; Object.keys(TYPEFILES).forEach(function(t){CATPKG[t.split("/")[0]]=1;});
   var QOS=DATA.qos||{fields:[],enums:{},newer:[],discouraged:[],durations:[]};
   var QOS_NEW={}, QOS_DISC={}, QOS_DUR={};
   (QOS.newer||[]).forEach(function(k){QOS_NEW[k]=1;});
@@ -319,6 +335,7 @@ var DATA = /*__DATA__*/null;
   project.nodes=project.nodes||[];
   project.connections=project.connections||[];
   project.packages=project.packages||{};
+  project.types=project.types||{};        // formatVersion 4: locally defined message specs
   project.system=project.system||{};
   var DIAG=(project.diagnostics&&project.diagnostics.byNode)||{};
   var uid=1000; function nid(){return "x"+(++uid);}
@@ -347,6 +364,11 @@ var DATA = /*__DATA__*/null;
     TYPES.forEach(function(t){var o=document.createElement("option");o.value=t;tl.appendChild(o);});
     var pl=document.getElementById("pkglist");
     PACKAGES.forEach(function(p){var o=document.createElement("option");o.value=p;pl.appendChild(o);});
+    // .ros field types: the primitives only. A spec reference is quoted and fully qualified,
+    // which no list can enumerate for types the author has not written yet.
+    var fl=document.getElementById("ftypelist");
+    (ROS.scalars||[]).concat(ROS.arrays||[]).forEach(function(t){
+      var o=document.createElement("option");o.value=t;fl.appendChild(o);});
   })();
 
   function nodeById(id){for(var i=0;i<project.nodes.length;i++)if(project.nodes[i].id===id)return project.nodes[i];return null;}
@@ -883,6 +905,186 @@ var DATA = /*__DATA__*/null;
     });
     return out.sort();
   }
+  // ============================ .ros message types ============================
+  // A companion .ros used to be generated from type NAMES alone, so a type invented here came
+  // out as a spec with an empty body -- legal (RM080 INFO) but silent data loss whenever the
+  // author knew the fields. These are the entry-time notes for a field row, mirroring
+  // rosmodel_lint's check_ros_field_type / check_ros_field_name. Advisory only: nothing here
+  // is ever emitted, so it needs no byte-parity with Python -- what it must not do is disagree
+  // with the checker about which value is legal.
+  var RE_MA_ATOM='(?:[A-Za-z_][A-Za-z_0-9]*|"[^"]*"|\'[^\']*\')';
+  var RE_MSG_ASSIGN=new RegExp("^"+RE_MA_ATOM+"=(?:"+RE_MA_ATOM+"|-?[0-9]+)$");
+  var RE_XID=/^[A-Za-z_][A-Za-z_0-9]*$/;
+  var RE_QNAME=/^[A-Za-z_][A-Za-z_0-9]*\/(msg|srv|action)\/[A-Za-z_][A-Za-z_0-9]*$/;
+
+  function trim(s){ return String(s==null?"":s).replace(/^\s+|\s+$/g,""); }
+
+  function rosTypeNote(tok,known){
+    tok=trim(tok);
+    if(!tok) return ["e","a MessagePart is exactly two tokens, a Type then a name."];
+    if(ROSPRIM[tok]) return ["",""];
+    if(/\[\s*[0-9]+\s*\]$/.test(tok)||/<=[0-9]+$/.test(tok))
+      return ["e","fixed- and bounded-size arrays have no production at all (RM075) — the "
+        +"grammar hard-codes the literal '[]'. The oracle fails to LEX 'float32[3]', so the "
+        +"whole file stops parsing. Emit the unbounded form and note the lost bound."];
+    if(/^(time|duration|Header)\[\]$/.test(tok))
+      return ["e","'"+tok+"' has no array form (RM074) — AbstractType lists exactly fourteen "
+        +"*Array rules and this is not among them. Only these take '[]': "
+        +(ROS.arrays||[]).map(function(t){return t.slice(0,-2);}).join(", ")+"."];
+    var base=/\[\]$/.test(tok)?tok.slice(0,-2):tok;
+    var q=base.length>=2&&base.charAt(0)===base.charAt(base.length-1)
+          &&(base.charAt(0)==='"'||base.charAt(0)==="'");
+    if(!q)
+      return ["e","unknown type '"+tok+"' (RM074). A bare name can NEVER resolve — every spec "
+        +"is qualified '<pkg>/msg/<Name>', which contains '/' and no Xtext ID can spell it, "
+        +"even for a type in the same package. Write '\""+tok+"\"' fully qualified, or use a "
+        +"primitive: "+(ROS.scalars||[]).join(", ")+"."];
+    var inner=base.slice(1,-1);
+    if(!RE_QNAME.test(inner))
+      return ["w","'"+inner+"' is not '<package>/<msg|srv|action>/<Type>' (RM076) — RosQNP "
+        +"names every spec that way and nothing else links."];
+    if(TYPEFILES[inner]) return ["","assets/roscommonobjects/"+TYPEFILES[inner]];
+    if(known[inner]) return ["","defined in this project"];
+    return ["w","'"+inner+"' is defined neither here nor in the vendored catalogue — "
+      +"generation is refused until it is (\"Couldn't resolve reference to TopicSpec\")."];
+  }
+
+  function rosNameNote(tok){
+    tok=trim(tok);
+    if(!tok) return ["e","a MessagePart is exactly two tokens, a Type then a name."];
+    if(ROSKW[tok]||RE_MSG_ASSIGN.test(tok)||RE_XID.test(tok)) return ["",""];
+    if(tok.indexOf("=")>=0)
+      return ["e","a constant is ONE token: no whitespace around '=' (MESSAGE_ASIGMENT, "
+        +"Basics.xtext:206-208). Write 'FAN_OFF=0'; 'FAN_OFF = 0' lexes as three tokens."];
+    return ["e","'"+tok+"' is not a legal Data token (RM077) — an unquoted name must be an "
+      +"Xtext ID ([A-Za-z_][A-Za-z_0-9]*); '.', '-' and '/' need quoting."];
+  }
+
+  // every spec a companion .ros will declare, as its qualified name -- the set a field's spec
+  // reference can resolve against without the catalogue.
+  function definedTypeKeys(){
+    var out={}, ct=companionTypes();
+    Object.keys(ct).forEach(function(p){
+      Object.keys(ct[p]).forEach(function(b){
+        Object.keys(ct[p][b]).forEach(function(n){ out[p+"/"+ROSSEG[b]+"/"+n]=1; });
+      });
+    });
+    return out;
+  }
+  function fieldList(key,body){
+    var t=project.types[key]=(project.types[key]||{fields:{}});
+    t.fields=t.fields||{};
+    t.fields[body]=t.fields[body]||[];
+    return t.fields[body];
+  }
+
+  function typesSection(edit){
+    var known=definedTypeKeys(), ct=companionTypes();
+    var files=Object.keys(ct).sort(), keys=Object.keys(project.types||{}).sort();
+    var h='<div class="insec"><h4>message types (.ros)</h4>';
+    h+='<div class="roinfo">'+(files.length
+        ? esc(files.map(function(p){return p+".ros";}).join(", "))
+        : "no companion .ros — every referenced type resolves in the vendored catalogue")
+      +'</div>';
+    var bodiless=[];
+    Object.keys(known).forEach(function(k){ if(!project.types[k]) bodiless.push(k); });
+    if(bodiless.length)
+      h+='<div class="hint w">'+bodiless.length+' referenced type(s) carry no field definition '
+        +'and are written with an empty body — legal (RM080) but silent loss if you know the '
+        +'fields: '+esc(bodiless.sort().join(", "))+'</div>';
+    keys.forEach(function(key){
+      var p=String(key).split("/"), block=(p.length===3)?SEGBLOCK[p[1]]:null;
+      h+='<div class="pkgrow"><div class="pn">'+esc(key)+'</div>';
+      if(!block){
+        h+='<div class="hint w">not &lt;package&gt;/&lt;msg|srv|action&gt;/&lt;Name&gt; — the '
+          +'only shape a spec\'s qualified name takes; generation is refused.</div></div>';
+        return;
+      }
+      if(CATPKG[p[0]])
+        h+='<div class="hint w">\''+esc(p[0])+'\' is a package the vendored catalogue owns, so '
+          +'this .ros and the staged catalogue file would both declare it (RM009). Generation '
+          +'is refused — rename the package.</div>';
+      (ROS.bodies[block]||[]).forEach(function(body){
+        var rows=((project.types[key]||{}).fields||{})[body]||[];
+        h+='<div class="fld"><label>'+esc(body)+(rows.length?"":" (no fields)")+'</label>';
+        rows.forEach(function(f,i){
+          if(!edit){
+            h+='<div class="derived">'+esc(trim(f.type)+" "+trim(f.name))+'</div>';
+            return;
+          }
+          var tn=rosTypeNote(f.type,known), nn=rosNameNote(f.name);
+          var tag=esc(key)+"|"+body+"|"+i;
+          h+='<div class="frow">'
+            +'<input data-ft="'+tag+'" data-undo="1" list="ftypelist" placeholder="float32" '
+            +'value="'+esc(f.type||"")+'">'
+            +'<input data-fn="'+tag+'" data-undo="1" placeholder="x — or FAN_OFF=0" '
+            +'value="'+esc(f.name||"")+'">'
+            +'<button data-fdel="'+tag+'" title="remove this field">×</button></div>'
+            +'<div class="fnote '+(tn[0]||nn[0])+'">'+esc(tn[1]||nn[1])+'</div>';
+        });
+        if(edit) h+='<button class="minibtn" data-fadd="'+esc(key)+'|'+body+'">+ field</button>';
+        h+='</div>';
+      });
+      if(edit) h+='<button class="delnode" data-tdel="'+esc(key)+'">Delete '+esc(key)+'</button>';
+      h+='</div>';
+    });
+    if(edit)
+      h+='<div class="addform"><input id="nt_key" placeholder="my_msgs/msg/Reading">'
+        +'<button class="minibtn" id="ntAdd">Define message type</button>'
+        +'<div class="hint" id="nt_msg">A srv gets request + response, an action goal + result '
+        +'+ feedback — the keyword is mandatory even with no fields. Reference another spec by '
+        +'its QUOTED qualified name, "my_msgs/msg/Reading", including one in this same package: '
+        +'there is no short form.</div></div>';
+    return h+'</div>';
+  }
+
+  function wireTypes(){
+    inspector.querySelectorAll("[data-ft],[data-fn]").forEach(function(x){
+      var isType=!!x.dataset.ft, ref=(x.dataset.ft||x.dataset.fn).split("|");
+      x.oninput=function(){
+        // text coalesces on a per-field tag, so a typed word is one undo entry
+        pushUndo("rosfield:"+(x.dataset.ft||x.dataset.fn)+(isType?":t":":n"));
+        var row=fieldList(ref[0],ref[1])[+ref[2]];
+        if(!row) return;
+        row[isType?"type":"name"]=x.value;
+        // the note sits immediately after the row; updating it in place rather than
+        // re-rendering the panel is what keeps the caret where the author put it
+        var note=x.parentNode.nextElementSibling, known=definedTypeKeys();
+        if(note&&/(^|\s)fnote(\s|$)/.test(note.className)){
+          var tn=rosTypeNote(row.type,known), nn=rosNameNote(row.name);
+          note.className="fnote "+(tn[0]||nn[0]);
+          note.textContent=tn[1]||nn[1];
+        }
+        runIssues();
+      };
+    });
+    inspector.querySelectorAll("[data-fadd]").forEach(function(x){x.onclick=function(){
+      var p=x.dataset.fadd.split("|");
+      pushUndo(); fieldList(p[0],p[1]).push({type:"",name:""}); fillSystemInspector();};});
+    inspector.querySelectorAll("[data-fdel]").forEach(function(x){x.onclick=function(){
+      var p=x.dataset.fdel.split("|");
+      pushUndo(); fieldList(p[0],p[1]).splice(+p[2],1); fillSystemInspector(); runIssues();};});
+    inspector.querySelectorAll("[data-tdel]").forEach(function(x){x.onclick=function(){
+      pushUndo(); delete project.types[x.dataset.tdel]; fillSystemInspector(); runIssues();};});
+    var add=document.getElementById("ntAdd");
+    if(add) add.onclick=function(){
+      var msg=document.getElementById("nt_msg");
+      var key=trim(document.getElementById("nt_key").value), p=key.split("/");
+      var block=(p.length===3&&p[0]&&p[2])?SEGBLOCK[p[1]]:null;
+      function refuse(text){ msg.className="hint w"; msg.textContent=text; }
+      if(!block) return refuse("Write it as <package>/<msg|srv|action>/<Name> — RosQNP.xtend "
+        +"qualifies every spec that way and no other shape can link.");
+      if(CATPKG[p[0]]) return refuse("'"+p[0]+"' is a package the vendored catalogue owns; "
+        +"defining a spec there would collide with the staged catalogue file (RM009).");
+      if(TYPEFILES[key]) return refuse("'"+key+"' is already defined by the vendored catalogue "
+        +"(assets/roscommonobjects/"+TYPEFILES[key]+") — reference it, do not redefine it.");
+      if(project.types[key]) return refuse("'"+key+"' is already defined in this project.");
+      pushUndo();
+      (ROS.bodies[block]||[]).forEach(function(b){ fieldList(key,b); });
+      fillSystemInspector(); runIssues();
+    };
+  }
+
   function fillSystemInspector(){
     inspector.className="inspector syspanel";
     var ff=(project.system&&project.system.fromFile)||"", pkgs=handPackages(), edit=(mode==="edit");
@@ -944,7 +1146,8 @@ var DATA = /*__DATA__*/null;
               :'<div class="derived">'+esc(git||"(no fromGitRepo)")+'</div>')
         +'</div>';
     });
-    h+='</div><div class="insec"><h4>selection</h4><div class="roinfo">Select a node to '
+    h+='</div>'+typesSection(edit)
+      +'<div class="insec"><h4>selection</h4><div class="roinfo">Select a node to '
       +(edit?'edit it, or add one from the rail':'inspect it')+'.</div></div>';
     inspector.innerHTML=h;
 
@@ -958,6 +1161,7 @@ var DATA = /*__DATA__*/null;
       pushUndo("git:"+p);
       if(!project.packages[p]) project.packages[p]={};
       project.packages[p].fromGitRepo=x.value.trim()||null;};});
+    wireTypes();
     wireComments();
   }
   // A node reached through subSystems:. Read-only by construction -- what it exposes is decided
@@ -1191,6 +1395,38 @@ var DATA = /*__DATA__*/null;
       if(DIAG[n.id]) DIAG[n.id].forEach(function(m){issues.push(["e",m]);});
     }
     for(var l in labels) if(labels[l]>1) issues.push(["e",'duplicate node label "'+l+'" (RM009)']);
+    // .ros field rows. _validate_types() blocks generation on exactly these, so the counter
+    // has to see them too -- otherwise the page reads "no issues" for a project `generate`
+    // then refuses.
+    (function(){
+      var known=definedTypeKeys();
+      // a hand-authored interface whose type resolves nowhere. RM081 is only a WARNING (linking
+      // is cross-file), but the server REJECTS with "Couldn't resolve reference to TopicSpec",
+      // so validate_project blocks generation on it and this has to say so first.
+      project.nodes.forEach(function(n){
+        if(n.backing!=="hand") return;
+        (n.ifaces||[]).forEach(function(f){
+          var typ=String(f.type||"").replace(/^\s+|\s+$/g,"");
+          if(!typ||typ.indexOf("TODO")===0||typ.indexOf("/")<0) return;
+          if(known[typ]||TYPEFILES[typ]) return;
+          issues.push(["e",n.label+": "+f.name+" type '"+typ+"' is defined neither here nor in "
+            +"the catalogue — define it under 'message types (.ros)'"]);
+        });
+      });
+      Object.keys(project.types||{}).sort().forEach(function(key){
+        var p=String(key).split("/"), block=(p.length===3)?SEGBLOCK[p[1]]:null;
+        if(!block){issues.push(["e",key+" is not <package>/<msg|srv|action>/<Name>"]);return;}
+        if(CATPKG[p[0]]){issues.push(["e",key+": '"+p[0]+"' is a catalogue package — "
+          +"redeclaring it is RM009"]);return;}
+        (ROS.bodies[block]||[]).forEach(function(body){
+          (((project.types[key]||{}).fields||{})[body]||[]).forEach(function(f){
+            var tn=rosTypeNote(f.type,known), nn=rosNameNote(f.name);
+            if(tn[0]) issues.push([tn[0],key+" / "+body+": "+tn[1]]);
+            else if(nn[0]) issues.push([nn[0],key+" / "+body+": "+nn[1]]);
+          });
+        });
+      });
+    })();
     if(!project.nodes.length) issues.push(["e","system has no nodes — add one before generating (the server rejects an empty nodes: block)"]);
     // RM053. A warning, not an error: the current server ACCEPTS a system with no fromFile
     // (re-probed 2026-08-13, 0 errors / 0 warnings), so this must not be dressed up as a crash.
@@ -1328,22 +1564,51 @@ var DATA = /*__DATA__*/null;
     order.sort();
     return {by:by,order:order};
   }
-  // _companion_types(): a type whose package is authored locally and that the type catalogue
-  // does not define gets a generated companion .ros -- and its reference then carries NO
-  // "# assets/roscommonobjects/..." disclosure comment.
-  function companionPkgs(){
-    var local={}, out={};
-    project.nodes.forEach(function(n){ if(n.backing==="hand"&&n.pkg) local[n.pkg]=1; });
+  // _local_type_packages(): the packages a companion .ros may be written for -- every
+  // hand-authored node's package, PLUS every package a locally defined spec names. The second
+  // half is what makes a type invented here emittable when no interface references it (the
+  // inner type of a self-referencing message, say).
+  function localTypePkgs(){
+    var out={};
+    project.nodes.forEach(function(n){ if(n.backing==="hand"&&n.pkg) out[n.pkg]=1; });
+    Object.keys(project.types||{}).forEach(function(key){
+      var p=String(key).split("/");
+      if(p.length===3&&p[0]&&!TYPEFILES[key]) out[p[0]]=1;
+    });
+    return out;
+  }
+  // _companion_types(): the specs each companion .ros must declare, {pkg:{block:{Name:1}}}.
+  // A type reached only through an interface still counts -- that is the bodiless case -- and
+  // its reference then carries NO "# assets/roscommonobjects/..." disclosure comment.
+  function companionTypes(){
+    var local=localTypePkgs(), out={};
+    function add(pkg,block,name){
+      if(!out[pkg]) out[pkg]={};
+      if(!out[pkg][block]) out[pkg][block]={};
+      out[pkg][block][name]=1;
+    }
+    Object.keys(project.types||{}).forEach(function(key){
+      var p=String(key).split("/");
+      if(p.length!==3) return;
+      var block=SEGBLOCK[p[1]];
+      if(local[p[0]]&&block&&!TYPEFILES[key]) add(p[0],block,p[2]);
+    });
     project.nodes.forEach(function(n){
       if(n.backing!=="hand") return;
       (n.ifaces||[]).forEach(function(f){
         var typ=f.type;
         if(!typ||String(typ).indexOf("/")<0) return;
-        var parts=String(typ).split("/");
-        if(parts.length!==3) return;
-        if(local[parts[0]]&&!TYPEFILES[typ]&&SEGBLOCK[parts[1]]) out[parts[0]]=1;
+        var p=String(typ).split("/");
+        if(p.length!==3) return;
+        var block=SEGBLOCK[p[1]];
+        if(local[p[0]]&&block&&!TYPEFILES[typ]) add(p[0],block,p[2]);
       });
     });
+    return out;
+  }
+  function companionPkgs(){
+    var out={}, ct=companionTypes();
+    Object.keys(ct).forEach(function(p){ out[p]=1; });
     return out;
   }
   // the RM089 disclosure BODY (no "# "); noteSuffix() merges it with whatever the author wrote
@@ -1443,6 +1708,34 @@ var DATA = /*__DATA__*/null;
     });
     return o;
   }
+  // _companion_ros(). The four-BEGIN ladder: package 0 / block 2 / spec name 4 (the one named
+  // element in the language with NO trailing ':') / body keyword 6 / field 8. Every body
+  // keyword is written even when empty -- Ros.xtext:81-104 makes the keyword mandatory and
+  // only its indented body optional, which is why a bodiless `response` is the normal shape.
+  function genRos(pkg){
+    var specs=companionTypes()[pkg]||{}, o=pkg+":\n";
+    (ROS.blocks||[]).forEach(function(block){
+      var names=Object.keys(specs[block]||{}).sort();
+      if(!names.length) return;
+      o+="  "+block+":\n";
+      var seg=ROSSEG[block];
+      names.forEach(function(name){
+        o+="    "+name+"\n";
+        var fields=((project.types||{})[pkg+"/"+seg+"/"+name]||{}).fields||{};
+        (ROS.bodies[block]||[]).forEach(function(body){
+          o+="      "+body+"\n";
+          (fields[body]||[]).forEach(function(f){
+            var t=String(f.type==null?"":f.type).replace(/^\s+|\s+$/g,"");
+            var n=String(f.name==null?"":f.name).replace(/^\s+|\s+$/g,"");
+            // a half-filled row is blocked by validate_project before anything is written, so
+            // skipping it here matches the emitter rather than inventing a broken line.
+            if(t&&n) o+="        "+t+" "+n+"\n";
+          });
+        });
+      });
+    });
+    return o;
+  }
   function genProjectJson(){
     project.system=project.system||{}; project.system.name=document.getElementById("sysname").value;
     return JSON.stringify(project,null,2);
@@ -1450,7 +1743,8 @@ var DATA = /*__DATA__*/null;
   var commitScrim=document.getElementById("commitScrim");
   document.getElementById("commit").onclick=function(){commitScrim.classList.add("on");document.getElementById("copyBox").value=genProjectJson();showGen("system");};
   function showGen(tab){
-    var tabs=[["system",".rossystem"],["ros2",".ros2 (per package)"],["json","project.json"]];
+    var tabs=[["system",".rossystem"],["ros2",".ros2 (per package)"],
+              ["ros",".ros (message types)"],["json","project.json"]];
     var tb=document.getElementById("genTabs"); tb.innerHTML="";
     tabs.forEach(function(t){var bt=document.createElement("button");bt.textContent=t[1];bt.className=t[0]===tab?"on":"";bt.onclick=function(){showGen(t[0]);};tb.appendChild(bt);});
     var out="";
@@ -1460,6 +1754,13 @@ var DATA = /*__DATA__*/null;
       out=order.length
         ? order.map(function(p){return "# "+p+".ros2\n"+genRos2(p);}).join("\n")
         : "(no hand-authored package — catalogue-only systems generate no .ros2)";
+    }
+    else if(tab==="ros"){
+      var pk=Object.keys(companionTypes()).sort();
+      out=pk.length
+        ? pk.map(function(p){return "# "+p+".ros\n"+genRos(p);}).join("\n")
+        : "(every type this project references resolves in the vendored catalogue — no "
+          +"companion .ros is generated)";
     }
     else out=genProjectJson();
     document.getElementById("genOut").textContent=out;

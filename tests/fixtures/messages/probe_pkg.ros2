@@ -1,0 +1,13 @@
+# msg_probe's artifact. Its two interfaces reference specs that live in probe_msgs.ros, a
+# LOCAL package the vendored catalogue does not know -- so `generate` writes a companion .ros
+# and the fields have to come back out of it.
+probe_pkg:
+  artifacts:
+    probe_driver:
+      node: probe_driver
+      publishers:
+        'reading':
+          type: 'probe_msgs/msg/Reading'
+      serviceservers:
+        'calibrate':
+          type: 'probe_msgs/srv/Calibrate'
