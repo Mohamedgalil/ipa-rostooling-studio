@@ -686,7 +686,8 @@ def _default_targets():
                  os.path.join(_HERE, "fixtures", "comments"),
                  os.path.join(_HERE, "fixtures", "messages"),
                  os.path.join(_HERE, "fixtures", "subsystems"),
-                 os.path.join(_HERE, "fixtures", "sublabels")):
+                 os.path.join(_HERE, "fixtures", "sublabels"),
+                 os.path.join(_HERE, "fixtures", "hazards")):
         if not os.path.isdir(root):
             continue
         out += sorted(os.path.join(root, f) for f in os.listdir(root)

@@ -1,0 +1,28 @@
+# name_hazards -- three name collisions that each produced a WRONG model with exit 0.
+#
+# 1. `relay` declares 'scan' as a publisher AND a subscriber, and exposes only the publisher.
+#    The subscriber must NOT come back exposed: an invented exposure enlarges the system's
+#    public surface with something the author withheld, and makes any endpoint naming it
+#    RM065-ambiguous.
+# 2. `sensor_a` and `sensor_b` both expose the label "reading". An exposure label's scope is
+#    its node (RM065: "Declaring the same local name in different nodes is fine on its own"),
+#    so BOTH must come back verbatim -- renaming the second to "reading_pub" was a silent edit
+#    of the author's model, visible only under --diff.
+# 3. Both of those nodes point at artifacts that declare the same `node: driver`. The arrow
+#    target is the ARTIFACT, so sensor_a must stay on driver_a: resolving by node name instead
+#    re-pointed it at driver_b, whose 'reading' is a different message type.
+name_hazards:
+  fromFile: "name_hazards/launch/hazards.launch.py"
+  nodes:
+    "relay":
+      from: "hazard_pkg.relay"
+      interfaces:
+        - "scan_out": pub-> "relay::scan"
+    "sensor_a":
+      from: "hazard_pkg.driver"
+      interfaces:
+        - "reading": pub-> "driver_a::reading"
+    "sensor_b":
+      from: "hazard_pkg.driver"
+      interfaces:
+        - "reading": pub-> "driver_b::reading"

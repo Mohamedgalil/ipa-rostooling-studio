@@ -1,0 +1,27 @@
+hazard_pkg:
+  artifacts:
+    # 'scan' exists as BOTH a publisher and a subscriber on one artifact. The corpus does this
+    # routinely (a relay), and the seeder's name-only exposure fallback matched the subscriber
+    # against the publisher's exposure record: the subscriber came back `exposed` and the
+    # system grew an interface its author never declared.
+    relay:
+      node: relay
+      publishers:
+        'scan':
+          type: 'sensor_msgs/msg/LaserScan'
+      subscribers:
+        'scan':
+          type: 'sensor_msgs/msg/LaserScan'
+    # driver_a and driver_b declare the SAME `node:`. That is legal and the oracle accepts it.
+    # Keying the index on the node name let the last one win, which deleted driver_a from the
+    # regenerated .ros2 and re-pointed its arrow at driver_b's differently-typed 'reading'.
+    driver_a:
+      node: driver
+      publishers:
+        'reading':
+          type: 'sensor_msgs/msg/LaserScan'
+    driver_b:
+      node: driver
+      publishers:
+        'reading':
+          type: 'sensor_msgs/msg/PointCloud2'
