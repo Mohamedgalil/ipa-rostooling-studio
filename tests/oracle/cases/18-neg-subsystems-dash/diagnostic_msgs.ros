@@ -1,0 +1,33 @@
+diagnostic_msgs:
+  msgs:
+    DiagnosticStatus
+      message
+        byte level
+        string name
+        string message
+        string hardware_id
+        'diagnostic_msgs/msg/KeyValue'[] values
+    DiagnosticArray
+      message
+        'std_msgs/msg/Header'[] header
+        'diagnostic_msgs/msg/DiagnosticStatus'[] status
+    KeyValue
+      message
+        string key
+        string value
+    
+  srvs:
+    AddDiagnostics
+      request
+        string load_namespace
+      response
+        bool success
+        string message
+    SelfTest
+      request
+      response
+        string id
+        byte passed
+        'diagnostic_msgs/msg/DiagnosticStatus'[] status
+    
+  

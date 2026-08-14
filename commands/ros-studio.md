@@ -44,7 +44,12 @@ The subcommands form the authoring loop:
   a `subSystems:` reference whose target is *itself* being merged onto the real nodes — declaring
   the same node inline and by reference is RM090. The system name comes from the first source
   unless `--name` overrides it; everything the merge cannot carry (a second `fromFile:`, a second
-  file header, a conflicting package entry) is **reported**, never silently dropped.
+  file header, a conflicting package entry) is **reported**, never silently dropped. Two nodes
+  that share one `from: pkg.ARTIFACT` — two instances of a node type, or two merged systems
+  reusing one package — emit that artifact **once**, carrying the union of what each exposes;
+  emitting it per referring node was a duplicate key (RM009). If they disagree about it (a
+  different ROS node name, or one interface typed two ways) `generate` refuses and names both
+  sides, because folding would otherwise change one node's interface type silently.
   `tests/studio_roundtrip.py`'s **MULTI-FILE** section pins both hazards against
   `tests/fixtures/multifile/` (same label, two directories) and `tests/fixtures/subsystems/`
   (one system references the other).
@@ -74,6 +79,14 @@ The subcommands form the authoring loop:
   editor — their labels belong to the referenced file and are the exact strings a `connections:`
   endpoint has to spell — and `emit_rossystem` writes the `subSystems:` block instead of
   re-declaring them under `nodes:`, which would be RM090.
+
+  **Several entries work too, and used to not.** `components+=SubSystem*` is a repetition, so N
+  references are N bare lines — the real server accepts that and rejects the `- entry` form
+  outright (oracle cases `17-subsystems-multi` / `18-neg-subsystems-dash`). PyYAML reads neither:
+  quoted lines refuse to compose, and *unquoted* ones — what the corpus writes — fold into a
+  single scalar, so three references were silently read as one subsystem with a three-word name.
+  `init` now normalises the block before parsing, so a model reusing two compositions round-trips
+  like any other. What lands on disk is unchanged: `generate` still writes bare lines.
 
   A subsystem's connectable interfaces are exactly what the referenced file's own `interfaces:`
   block declares, never what the `.ros2` behind its `from:` declares (`checkIfInterfaceInSystem`,

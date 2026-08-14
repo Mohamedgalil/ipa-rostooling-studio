@@ -35,7 +35,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rosmodel_lint import (  # noqa: E402
     ARROW_ALL, HAVE_YAML, is_mapping, is_scalar, is_sequence, mapping_items, mapping_keys,
-    mapping_get, yaml,
+    mapping_get, normalise_bare_subsystems, yaml,
 )
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -54,6 +54,11 @@ INTERFACE_BLOCKS = {
 def compose_yaml(path):
     with open(path, encoding="utf-8", errors="replace") as f:
         text = f.read()
+    # A multi-entry `subSystems:` block is legal RosSystem and uncomposable YAML; without
+    # this the whole file silently returns None, so a catalogued system would vanish from
+    # the index and load_local_system would report the reference unresolved. Same normaliser
+    # the linter uses, so the two cannot disagree about what parses.
+    text, _ = normalise_bare_subsystems(text)
     try:
         return yaml.compose(text)
     except Exception:

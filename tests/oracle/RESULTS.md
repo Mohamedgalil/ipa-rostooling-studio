@@ -232,6 +232,43 @@ rather than by source-reading alone.
 |---|---|---|
 | `15-subsystems-fixture` | `subSystems: "turtlebot"` + a connection into a subsystem-owned interface (`odom` → a local sink of the same type), no local re-declaration | **ACCEPTED** 0E/0W |
 | `16-subsystems-tf-ambiguity` | a connection naming `tf`, a label `turtlebot.rossystem` declares on BOTH `turtlebot_node` and `robot_state_publisher` | **ACCEPTED** 0E/0W — resolves silently to one of the two, unspecified which |
+| `17-subsystems-multi` | **two** `subSystems:` entries as two bare lines, with a connection reaching each | **ACCEPTED** 0E/0W |
+| `18-neg-subsystems-dash` | the same file with the entries written as a `- item` block sequence | **REJECTED** — line 4, `mismatched input '-' expecting RULE_END` |
+
+### Settled 2026-08-14: how a MULTI-entry `subSystems:` block is written
+
+Cases 17 and 18 are a controlled pair — identical but for the two subsystem lines — and they
+answer the question `RM093`'s hint had been carrying as open since the rule was written. **N
+entries are N bare lines; the dash form is a syntax error.** There is no third option: the
+grammar has no bracket or list wrapper for this production at all.
+
+That makes the one legal form the one form a YAML parser cannot read. Two consecutive scalars
+are not composable (`expected <block end>, but found '<scalar>'`), so every reader in this
+plugin — `rosmodel_lint`, `/ros-plot`, `/ros-studio` — used to reject case 17's file outright
+with an `RM008` ERROR while the real server accepted it clean. `rosmodel_lint.normalise_bare_subsystems`
+now rewrites the block in memory, line for line, so composition succeeds and diagnostics still
+point at the author's own lines. Nothing on disk changes and the emitter still writes bare
+lines, because that is what the grammar takes.
+
+Worth recording as an upstream conflict rather than a model-authoring mistake: a multi-entry
+`subSystems:` model cannot be read by `yaml.safe_load` **in any form the grammar accepts**, so
+a YAML-based consumer such as `rossdl` cannot consume one at all. No author can write their way
+out of that; it needs a grammar or a tooling decision upstream.
+
+**The quiet half of this defect is worse than the loud one.** Whether the entries are quoted
+decides which way it fails:
+
+| Source | PyYAML | What we reported before |
+|---|---|---|
+| `"turtlebot"` / `"extra"` (quoted) | compose error | `RM008` ERROR — loud, and wrong |
+| `cob4_bringup` / `launch_visual` (bare) | folds into ONE plain scalar | **one subsystem named `'cob4_bringup launch_visual cob_nav2'`** — no error at all |
+
+The second row is not hypothetical: it is `cob/MOBI02/cob_navi_robot_nhg.rossystem` and
+`cob_navi_robot.rossystem` in `ros-model-examples`, where YAML's multi-line plain scalar folding
+turned three references into one nonsense name and every check downstream believed it. The
+catalogued corpus sweep moves `RM091` from 23 to 26 warnings for exactly that reason — three
+references that had been invisible are now each reported on their own line. No other rule
+changes, and no ERROR moves.
 
 ### Settled: `subSystems:` syntax and connection scope
 

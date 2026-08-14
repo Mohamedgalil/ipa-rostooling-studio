@@ -8,3 +8,5 @@ sub_probe_ctrl:
       subscribers:
         'odom':
           type: 'nav_msgs/msg/Odometry'
+        'scan':
+          type: 'sensor_msgs/msg/LaserScan'

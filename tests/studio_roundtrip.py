@@ -71,6 +71,17 @@ import tempfile
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_ROOT = os.path.dirname(_HERE)
+
+# A failure message quotes the tool's own output, which carries em dashes and arrows. On
+# Windows this script's stdout defaults to cp1252, so printing one raised UnicodeEncodeError
+# and killed the run *while reporting a failure* -- the diagnosis was lost and the exit code
+# came from the crash rather than the check. Report in UTF-8, and never let an unencodable
+# character outrank the finding it describes.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):     # pre-3.7, or a stream that cannot be reconfigured
+    pass
 SCRIPTS = os.path.join(PLUGIN_ROOT, "scripts")
 STUDIO = os.path.join(SCRIPTS, "ros_studio.py")
 PARITY_JS = os.path.join(_HERE, "studio_parity.js")
@@ -583,12 +594,18 @@ def check_parity(work, proj_name="project.json", gen_name="generated"):
 #   multifile/   two systems in two SUBDIRECTORIES, both labelling their node "driver". The
 #                artifacts only resolve if the index spans the tree, and one label has to be
 #                renamed or the merged file has two nodes: keys with one name (RM009).
-#   subsystems/  probe_sub REFERENCES robot_base. Merging both inline must DROP the reference
-#                and fold its shadow nodes onto the real ones, or the same node is declared
-#                twice, once under nodes: and once through the reference (RM090).
+#   subsystems/  probe_sub REFERENCES robot_base, and probe_sub_multi references robot_base AND
+#                sensor_base. Merging them all inline must DROP every reference and fold the
+#                shadow nodes onto the real ones, or the same node is declared twice, once
+#                under nodes: and once through the reference (RM090). It is also the case where
+#                two merged systems share one `from: pkg.ARTIFACT` (probe_sub's "controller"
+#                and probe_sub_multi's "navigator" are both sub_probe_ctrl.controller): the
+#                emitted .ros2 has to carry that artifact ONCE, with the union of what both
+#                expose, or it is a duplicate key (RM009) -- see ros_studio._fold_artifacts.
 MULTIFILE_CASES = [
     ("multifile", "mf_merged", {"driver", "driver_mf_right"}, 4, 0, set()),
-    ("subsystems", "sub_merged", {"controller", "base_driver"}, 4, 2, set()),
+    ("subsystems", "sub_merged",
+     {"controller", "navigator", "base_driver", "lidar_driver"}, 8, 5, set()),
 ]
 
 

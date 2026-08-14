@@ -1454,6 +1454,40 @@ def _type_auto_note(typ, companion_pkgs):
     return "assets/roscommonobjects/%s" % rel if rel else ""
 
 
+def _fold_artifacts(recs):
+    """Collapse node records that name the SAME artifact into one artifact block.
+
+    Two `.rossystem` nodes may legitimately share a `from: pkg.ARTIFACT` -- two instances of
+    one node type, and after a multi-file merge two systems reusing the same package almost
+    always do. The artifact is one definition either way, so emitting it once per referring
+    node produced a duplicate key: RM009, and a file the language server rejects.
+
+    Interfaces and parameters are UNIONED, keyed by (kind, name) and name, because each
+    referring node exposes only the subset it wires and the artifact must declare all of
+    them. First writer wins on a collision, and validate_project reports the disagreement
+    before anything is written -- see the artifact-conflict gate."""
+    folded, order = {}, []
+    for rec in recs:
+        key = rec["artifact"]
+        if key not in folded:
+            folded[key] = dict(rec, ifaces=list(rec.get("ifaces") or []),
+                               params=list(rec.get("params") or []))
+            order.append(key)
+            continue
+        into = folded[key]
+        have = {(f["kind"], f["name"]) for f in into["ifaces"]}
+        for f in rec.get("ifaces") or []:
+            if (f["kind"], f["name"]) not in have:
+                have.add((f["kind"], f["name"]))
+                into["ifaces"].append(f)
+        have_p = {p["name"] for p in into["params"]}
+        for p in rec.get("params") or []:
+            if p["name"] not in have_p:
+                have_p.add(p["name"])
+                into["params"].append(p)
+    return [folded[k] for k in order]
+
+
 def emit_ros2(package, git, art_records, companion_pkgs, pkg_comments=None):
     """One AmentPackage block with N artifacts (sorted). art_records: list of node dicts."""
     lines = _comment_block((pkg_comments or {}).get("header"), "")
@@ -1779,6 +1813,33 @@ def validate_project(project):
                               "generating (the server cannot resolve a placeholder)."
                               % (f.get("name", "?"), f.get("kind", "?")))
 
+    # Two nodes may share one `from: pkg.ARTIFACT` (see _fold_artifacts), and the .ros2 then
+    # carries one artifact block for both. That is only safe while they agree about it: if one
+    # says 'scan' is a LaserScan and the other says Odometry, folding silently keeps the first
+    # and the second node's interface quietly changes type. Report instead.
+    seen_art = {}
+    for n in project.get("nodes", []):
+        if n.get("backing") != "hand" or not n.get("pkg"):
+            continue
+        key = (n["pkg"], n.get("artifact"))
+        first = seen_art.setdefault(key, n)
+        if first is n:
+            continue
+        if first.get("node") != n.get("node"):
+            flag(n["id"], "node '%s' and '%s' both declare artifact '%s.%s' but name different "
+                          "ROS nodes (%r vs %r) — one artifact cannot be both."
+                 % (first.get("label", "?"), n.get("label", "?"), n["pkg"], n.get("artifact"),
+                    first.get("node"), n.get("node")))
+        types = {(f["kind"], f["name"]): f.get("type") for f in first.get("ifaces") or []}
+        for f in n.get("ifaces") or []:
+            other = types.get((f["kind"], f["name"]))
+            if other is not None and f.get("type") and other != f.get("type"):
+                flag(n["id"], "interface '%s' (%s) is %s here but %s on node '%s', which shares "
+                              "artifact '%s.%s' — the generated .ros2 declares it once, so the "
+                              "two must agree."
+                     % (f.get("name", "?"), f.get("kind", "?"), f.get("type"), other,
+                        first.get("label", "?"), n["pkg"], n.get("artifact")))
+
     # Seeding kept an exposure whose target the backing artifact does not declare. Emitting it
     # would produce "Couldn't resolve reference to <Kind>" from the server, so block here —
     # the alternative (dropping it at seed time) loses the author's model without saying so.
@@ -1924,8 +1985,8 @@ def generate_files(project):
             by_pkg.setdefault(n["pkg"], []).append(n)
     for pkg, recs in sorted(by_pkg.items()):
         entry = project.get("packages", {}).get(pkg) or {}
-        files[pkg + ".ros2"] = emit_ros2(pkg, entry.get("fromGitRepo"), recs, companion_pkgs,
-                                         entry.get("comments"))
+        files[pkg + ".ros2"] = emit_ros2(pkg, entry.get("fromGitRepo"), _fold_artifacts(recs),
+                                         companion_pkgs, entry.get("comments"))
 
     for pkg, blocks in sorted(companions.items()):
         files[pkg + ".ros"] = _companion_ros(pkg, blocks, project.get("types"))

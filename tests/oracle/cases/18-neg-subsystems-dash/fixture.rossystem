@@ -1,0 +1,13 @@
+fixture:
+  fromFile: "fixture_pkg/launch/fixture.launch.py"
+  subSystems:
+    - "turtlebot"
+    - "extra"
+  nodes:
+    "odom_sink":
+      from: "odom_sink.odom_sink"
+      interfaces:
+        - "odom_in": sub-> "odom_sink::odom_in"
+  connections:
+    - [odom, odom_in]
+    - [odom, extra_in]

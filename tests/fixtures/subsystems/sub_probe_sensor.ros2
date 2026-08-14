@@ -1,0 +1,7 @@
+sub_probe_sensor:
+  artifacts:
+    lidar_driver:
+      node: lidar_driver
+      publishers:
+        'scan':
+          type: 'sensor_msgs/msg/LaserScan'

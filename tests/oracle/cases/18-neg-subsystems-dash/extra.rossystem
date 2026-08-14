@@ -1,0 +1,7 @@
+extra:
+  fromFile: "extra_pkg/launch/extra.launch.py"
+  nodes:
+    "extra_sink":
+      from: "extra_sink.extra_sink"
+      interfaces:
+        - "extra_in": sub-> "extra_sink::extra_in"

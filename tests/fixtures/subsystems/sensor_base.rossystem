@@ -1,0 +1,11 @@
+# sensor_base -- the SECOND target, so probe_sub_multi.rossystem can reference two systems.
+#
+# One target was enough to prove reuse resolves; it was not enough to reach the multi-entry
+# `subSystems:` block, which is a different code path in every reader (see probe_sub_multi).
+sensor_base:
+  fromFile: "sensor_base/launch/sensor.launch.py"
+  nodes:
+    "lidar_driver":
+      from: "sub_probe_sensor.lidar_driver"
+      interfaces:
+        - "scan": pub-> "lidar_driver::scan"

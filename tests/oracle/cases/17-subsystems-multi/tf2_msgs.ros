@@ -1,0 +1,31 @@
+tf2_msgs:
+  msgs:
+    TFMessage
+      message
+        'geometry_msgs/msg/TransformStamped'[] transforms
+    TF2Error
+      message
+        uint8 error
+        string error_string
+    
+  srvs:
+    FrameGraph
+      request
+      response
+        string frame_yaml
+    
+  actions:
+    LookupTransform
+      goal
+        string target_frame
+        string source_frame
+        'builtin_interfaces/msg/Time'[] source_time
+        'builtin_interfaces/msg/Duration'[] timeout
+        'builtin_interfaces/msg/Time'[] target_time
+        string fixed_frame
+        bool advanced
+      result
+        'geometry_msgs/msg/TransformStamped'[] transform
+        'tf2_msgs/msg/TF2Error'[] error
+      feedback
+    

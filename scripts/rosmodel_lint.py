@@ -478,6 +478,83 @@ def node_line(node):
     return node.start_mark.line + 1 if node is not None else 0
 
 
+SUBSYSTEMS_KEY_RE = re.compile(r"^(?P<indent>[ \t]*)subSystems:[ \t]*(?:#.*)?$")
+# One bare (optionally quoted) EString, optional trailing comment, no ':' -- i.e. NOT a key
+# line, which is how a `subSystems:` block ends.
+SUBSYSTEMS_ENTRY_RE = re.compile(r"""^(?:"[^"]*"|'[^']*'|[^\s:#][^:#]*?)[ \t]*(?:#.*)?$""")
+
+
+def normalise_bare_subsystems(text):
+    """Rewrite a MULTI-entry bare `subSystems:` block as a YAML block sequence, in memory.
+
+    `components+=SubSystem*` (RosSystem.xtext) is a repetition, not a list production: each
+    entry is one bare (optionally quoted) EString on its own indented line, and the real
+    grammar accepts nothing else. Settled 2026-08-14 against the 3.1.0 language server, the
+    experiment RM093's own hint asked for:
+
+        subSystems:          subSystems:
+          "turtlebot"          - "turtlebot"
+          "extra"              - "extra"
+        -> ACCEPTED          -> REJECTED, line 4:
+           0 errors             mismatched input '-' expecting RULE_END
+
+    One entry composes as a plain scalar and is valid YAML. TWO are two consecutive scalars,
+    which PyYAML cannot compose at all ("expected <block end>, but found '<scalar>'") -- so
+    the only form the toolchain accepts was the one form every YAML-based reader in this
+    plugin rejected outright, with an RM008 ERROR, on a file the oracle accepts clean.
+
+    Converting to `- item` HERE, line for line, lets composition succeed while every
+    diagnostic still points at the author's own line. Nothing on disk changes and the
+    emitter still writes the bare form, because that is what the grammar takes.
+
+    Returns (text, synthesised_lines): the 1-based line numbers this function rewrote.
+    check_subsystems needs them to tell OUR dashes (a legal source file) from the author's
+    own (RM093 -- a real syntax error the oracle rejects).
+    """
+    lines = text.splitlines(True)
+    out = list(lines)
+    synth = set()
+    i = 0
+    while i < len(lines):
+        m = SUBSYSTEMS_KEY_RE.match(lines[i].rstrip("\r\n"))
+        if not m:
+            i += 1
+            continue
+        key_indent = len(m.group("indent").expandtabs(TAB_STOP))
+        entries = []
+        j = i + 1
+        while j < len(lines):
+            raw = lines[j].rstrip("\r\n")
+            body = raw.strip()
+            if not body or body.startswith("#"):
+                j += 1
+                continue
+            stripped = raw.lstrip(" \t")
+            if len(raw[:len(raw) - len(stripped)].expandtabs(TAB_STOP)) <= key_indent:
+                break
+            if body[0] in "-[{&*?|>%@`":
+                # A '- item' sequence or a bracket list: composable as-is, and the author's own
+                # shape is what RM093 has to see. Rewriting a dash line would nest it
+                # ('- - "x"') and silently destroy the reference.
+                entries = []
+                break
+            if not SUBSYSTEMS_ENTRY_RE.match(body):
+                # A `key:` line ends the block -- keep whatever entries we already collected.
+                # Reaching this indented means the file's own indentation is irregular, which
+                # is common in the corpus and no reason to give up on the entries above it.
+                break
+            entries.append(j)
+            j += 1
+        if len(entries) > 1:
+            for k in entries:
+                raw = lines[k]
+                ending = raw[len(raw.rstrip("\r\n")):]
+                out[k] = " " * key_indent + "- " + raw.strip() + ending
+                synth.add(k + 1)
+        i = max(j, i + 1)
+    return "".join(out), synth
+
+
 def is_mapping(node):
     return HAVE_YAML and isinstance(node, yaml.MappingNode)
 
@@ -537,6 +614,7 @@ class Linter(object):
         self.lines = []
         self.root = None
         self.had_leading_tabs = False
+        self.synth_subsystem_lines = set()   # lines normalise_bare_subsystems() rewrote
         self.use_catalogue = use_catalogue
         self.needed_type_files = set()
         self.needed_node_files = set()
@@ -799,6 +877,10 @@ class Linter(object):
                 # that cannot start any token"); RM004/RM008T already reported them.
                 fixed.append(" " * col + stripped.rstrip())
             source = "\n".join(fixed) + "\n"
+
+        # The one multi-entry `subSystems:` form the grammar accepts is not composable YAML;
+        # see normalise_bare_subsystems. Line-for-line, so the marks below stay the author's.
+        source, self.synth_subsystem_lines = normalise_bare_subsystems(source)
 
         try:
             self.root = yaml.compose(io.StringIO(source))
@@ -1937,20 +2019,26 @@ class Linter(object):
                            "list production -- unlike 'nodes: [...]' inside a process, there is "
                            "no bracket form here. Emit one bare (optionally quoted) name per "
                            "indented line instead, e.g.:\n  subSystems:\n    \"turtlebot\"")
-            elif len(node.value) > 1:
-                self.warn(node_line(node), "RM093",
-                          "'subSystems:' has %d entries, written as a '- item' block sequence."
-                          % len(node.value),
-                          "Only the single-entry bare-scalar form (no leading '-') has been "
-                          "verified against the real oracle (tests/oracle/cases/"
-                          "15-subsystems-fixture). This dash form parses as valid YAML here, but "
-                          "whether it matches 'components+=SubSystem*'s actual concrete syntax "
-                          "for N>1 entries is unconfirmed -- the grammar has no bracket/list "
-                          "wrapper for this production at all, so the real multi-entry form may "
-                          "be N separate bare lines instead. Prefer a single subSystems: entry "
-                          "per file when possible (RM061 already flags nesting/tab risk); if you "
-                          "need more than one, verify against tests/oracle/ask_oracle.py before "
-                          "relying on it.")
+            elif len(node.value) > 1 and not {node_line(i) for i in node.value} <= \
+                    self.synth_subsystem_lines:
+                # Not our own normalisation (normalise_bare_subsystems) -- the author really
+                # did write dashes, and the real parser will not take them.
+                self.error(node_line(node), "RM093",
+                           "'subSystems:' has %d entries, written as a '- item' block sequence."
+                           % len(node.value),
+                           "The real grammar rejects this: 'mismatched input '-' expecting "
+                           "RULE_END'. 'components+=SubSystem*' is a repetition, not a list "
+                           "production, so each entry is one bare (optionally quoted) name on "
+                           "its own indented line -- no dash, no brackets:\n"
+                           "  subSystems:\n    \"turtlebot\"\n    \"extra\"\n"
+                           "Settled 2026-08-14 against the 3.1.0 language server, which ACCEPTS "
+                           "that bare two-entry form with 0 errors and REJECTS the dash form "
+                           "above (this rule's hint used to call the question open; it is not). "
+                           "Note the bare form is not loadable by yaml.safe_load -- this linter "
+                           "normalises it internally, but a consumer such as rossdl cannot read "
+                           "a multi-entry subSystems: model at all. That is an upstream conflict "
+                           "between the grammar and the YAML shape, not something a model author "
+                           "can write their way out of.")
             for item in node.value:
                 if is_scalar(item) and item.value.strip():
                     refs.append((item.value.strip(), node_line(item)))

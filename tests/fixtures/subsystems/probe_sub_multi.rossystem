@@ -1,0 +1,28 @@
+# probe_sub_multi -- the witness for a subSystems: block with MORE THAN ONE entry.
+#
+# The defect it pins: `components+=SubSystem*` is a repetition, so N entries are N bare lines.
+# Two bare scalars in a row are not composable YAML ("expected <block end>, but found
+# '<scalar>'"), so every reader in this plugin -- lint, plot and studio alike -- rejected this
+# file outright with an RM008 ERROR. The real 3.1.0 language server ACCEPTS it, 0 errors, and
+# REJECTS the `- entry` form this plugin used to prefer ("mismatched input '-' expecting
+# RULE_END"). Settled 2026-08-14; rosmodel_lint.normalise_bare_subsystems now rewrites the
+# block in memory so the shape on disk stays the only one the grammar takes.
+#
+# Both connections cross a subsystem boundary, and each one names a DIFFERENT subsystem, so a
+# reader that resolves only the first entry still fails here.
+probe_sub_multi:
+  fromFile: "probe_sub_multi/launch/probe.launch.py"
+  subSystems:
+    "robot_base" # PRESERVED trailing comment on the first of several entries
+    "sensor_base"
+  nodes:
+    "navigator":
+      from: "sub_probe_ctrl.controller"
+      interfaces:
+        - "cmd_vel_pub": pub-> "controller::cmd_vel_out"
+        - "odom_sub": sub-> "controller::odom"
+        - "scan_sub": sub-> "controller::scan"
+  connections:
+    - [odom, odom_sub] # base_driver (robot_base) -> navigator : nav_msgs/msg/Odometry
+    - [cmd_vel_pub, cmd_vel] # navigator -> base_driver (robot_base) : geometry_msgs/msg/Twist
+    - [scan, scan_sub] # lidar_driver (sensor_base) -> navigator : reaches the SECOND entry

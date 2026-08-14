@@ -277,7 +277,7 @@ in `--hook` mode) for a workspace whose references are heavily project-local. Se
 | `RM090` | ERROR | A node label is declared directly under `nodes:` **and** is also reachable through a `subSystems:` entry | `.rossystem` |
 | `RM091` | WARNING | A `subSystems:` entry doesn't resolve, itself declares another `subSystems:` (nesting risk), or resolves but exposes zero `interfaces:` on any node | `.rossystem` |
 | `RM092` | WARNING | A local node and a node reachable via `subSystems:` resolve the same `from:` under different labels — likely the same real node modelled twice | `.rossystem` |
-| `RM093` | ERROR / WARNING | `subSystems:` written as a bracket list `[...]` (ERROR — not valid syntax) or as a multi-entry `- item` block sequence (WARNING — parses, but unverified against the real oracle for N>1) | `.rossystem` |
+| `RM093` | ERROR | `subSystems:` written as a bracket list `[...]` or as a `- item` block sequence — the grammar takes neither (settled 2026-08-14: oracle cases `17-subsystems-multi` / `18-neg-subsystems-dash`, `mismatched input '-' expecting RULE_END`). N entries are N bare lines | `.rossystem` |
 
 `RM081`/`RM084` are WARNING, not ERROR, for the same reason `RM076` is: a genuinely
 project-local package/node is legitimate, and the linter cannot distinguish that from a typo of a
@@ -500,13 +500,21 @@ Catalogue on (default), same 336 files, 0 crashes:
 | `CS_ros2model_TBs` `.ros2` | 24 | 4 | 4 | 221 | 24 |
 | `CS_ros2model_TBs` `.rossystem` | 1 | 1 | 38 | 41 | 6 |
 | `ros-model-examples` `.ros2` | 229 | 145 | 924 | 3870 | 291 |
-| `ros-model-examples` `.rossystem` | 51 | 22 | 43 | 5050 | 30 |
+| `ros-model-examples` `.rossystem` | 51 | 22 | 43 | 5053 | 30 |
 | `ros-model-examples` `.ros` | 31 | 0 | 0 | 414 | 258 |
 
 The extra errors are catalogue-resolution findings on corpora the vendored catalogue was never
 built from — `RM082`=57, `RM086`=43, `RM085`=4 — and the extra 2019 warnings are almost entirely
 `RM089` (undisclosed catalogue provenance). Read them as "these corpora are outside the
 catalogue", not as newly discovered defects; `--no-catalogue` is the right mode for them.
+
+*Amended 2026-08-14, `normalise_bare_subsystems`.* One cell moved: catalogued
+`ros-model-examples` `.rossystem` warnings, 5050 → **5053**. All three are `RM091`, and they are
+findings that had been **missing**, not new noise: `cob/MOBI02/cob_navi_robot.rossystem` and
+`cob_navi_robot_nhg.rossystem` write their several `subSystems:` entries unquoted, one per line,
+which PyYAML folds into a single plain scalar — so the linter had been resolving one subsystem
+called `'cob4_bringup launch_visual cob_nav2'` and reporting one warning where three references
+exist. Nothing else in either table moves, and no ERROR count changes.
 
 ### Independent corroboration of the emission profile
 

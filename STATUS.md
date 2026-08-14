@@ -94,6 +94,34 @@ is not the combination Eshan's CI produces. Recorded here so it is not rediscove
 **Naming wart:** case `04-neg-lease-duration` is no longer a negative case. The name is kept for
 traceability with the A/B above; do not read the `neg-` prefix as an expectation.
 
+### Settled 2026-08-14 — a multi-entry `subSystems:` block, and the reference it was eating
+
+`components+=SubSystem*` is a repetition, so N subsystem references are N bare lines. `RM093`'s
+hint had carried that as an open question — *"the real multi-entry form may be N separate bare
+lines instead … verify against ask_oracle.py before relying on it"*. Verified, as a controlled
+pair differing only in those two lines (oracle cases `17-subsystems-multi`, `18-neg-subsystems-dash`):
+
+| Form | Oracle | Our reader, before |
+|---|---|---|
+| two bare lines | **ACCEPTED** 0E/0W | `RM008` ERROR — file rejected outright |
+| `- item` sequence | **REJECTED**, `mismatched input '-' expecting RULE_END` | `RM093` WARNING — "unverified" |
+
+Both verdicts were backwards. `RM093` is now an ERROR for the dash form, and
+`rosmodel_lint.normalise_bare_subsystems` rewrites the bare block in memory, line for line, so
+every YAML-based reader in the plugin — lint, `/ros-plot`, `/ros-studio` — can read the one form
+the grammar accepts. The emitter already wrote it; only the readers were wrong.
+
+**What this was hiding is the part worth remembering.** Quoted entries fail loudly (PyYAML cannot
+compose two consecutive scalars). *Unquoted* entries — which is what the corpus writes — fold into
+a single plain scalar and fail **silently**: `cob/MOBI02/cob_navi_robot_nhg.rossystem` was being
+read as one subsystem named `'cob4_bringup launch_visual cob_nav2'`, with no diagnostic at all,
+and every downstream check believed it. Two corpus files, three references, invisible until now.
+
+Unresolved and not ours to fix: the only form the grammar accepts is unreadable by
+`yaml.safe_load`, so a YAML-based consumer such as `rossdl` cannot load a multi-entry
+`subSystems:` model **in any legal spelling**. That is a grammar-vs-tooling conflict for upstream,
+not something a model author can write around — see §4.
+
 ### RM001 demoted — the corpus was never as broken as we reported
 
 **2026-07-21.** `RM001` (tab in leading whitespace) was an ERROR. It is now a WARNING, because the
@@ -300,8 +328,15 @@ Nothing here is answerable from the material on disk. Each needs a named person.
 
 *(The `from:` question that stood here has been settled — see §7.)*
 
-None outstanding in this section. `N1`, `N2`, `N3`, `E1`, `E2`, `B1` and `B2` above still need
-their named owners.
+**T1 — a multi-entry `subSystems:` model cannot be YAML-loaded, in any legal spelling.** The
+grammar accepts only N bare lines; PyYAML either refuses them (quoted) or folds them into one
+scalar (unquoted). So `rossdl`'s `yaml.safe_load` cannot consume such a model at all, and no
+model author can write around it. This plugin works around it internally
+(`normalise_bare_subsystems`), which is enough for our readers and does nothing for anyone
+else's. Needs a decision upstream — quote-aware grammar, a list production, or a documented
+"one subsystem per file" rule. Evidence: §1 (2026-08-14) and `tests/oracle/RESULTS.md`.
+
+`N1`, `N2`, `N3`, `E1`, `E2`, `B1`, `B2` and now `T1` still need their named owners.
 
 ## 5. Verifier findings this session REJECTED
 
