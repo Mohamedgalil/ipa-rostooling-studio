@@ -27,8 +27,8 @@ and merge, not modeling work, so it should not consume a full-effort agent.
 
 The user may pass additional URLs as arguments to this command: `$ARGUMENTS`. Treat each
 whitespace-separated token in `$ARGUMENTS` that looks like a URL as an additional source to
-merge in alongside the two standing sources above. If `$ARGUMENTS` is empty, just refresh
-the two standing sources.
+merge in alongside the three standing sources above. If `$ARGUMENTS` is empty, just refresh
+the three standing sources.
 
 ## How to run it
 
@@ -36,7 +36,7 @@ the two standing sources.
    what's new versus the previous version rather than silently overwriting history.
 2. Launch a single `Agent` call with `model: "haiku"` (this is the point of the command —
    keep it cheap) whose prompt:
-   - Lists all sources to fetch: the 2 standing ones plus any URLs found in `$ARGUMENTS`.
+   - Lists all sources to fetch: the 3 standing ones plus any URLs found in `$ARGUMENTS`.
    - Instructs it to use `WebFetch` on each, extract real package/repo names (never invent
      ones a fetch didn't actually return — if a fetch is degraded or JS-rendered and only
      returns a shell, say so rather than padding the list from general knowledge).
