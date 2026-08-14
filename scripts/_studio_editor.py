@@ -66,7 +66,18 @@ EDITOR_TEMPLATE = r'''<!doctype html>
      same matrix as the node layer and an edge can never drift off its port. touch-action:none
      hands the browser's own pan/pinch gestures to the wheel/pointer handlers instead. */
   .canvas-wrap{flex:1;position:relative;overflow:hidden;min-width:0;touch-action:none}
-  .canvas{position:relative;width:1600px;height:1100px;transform-origin:0 0;will-change:transform;background-image:radial-gradient(circle,var(--rule-soft) 1px,transparent 1px);background-size:22px 22px}
+  /* will-change:transform is set only WHILE panning/zooming, never at rest. Held permanently it
+     promotes the layer to the GPU, and the browser then keeps rasterising the text once and
+     scaling the bitmap -- every label goes soft the moment you zoom in. Dropping the hint at
+     rest forces a re-raster at the current scale, which is what makes the text sharp again. */
+  .canvas{position:relative;width:1600px;height:1100px;transform-origin:0 0;background-image:radial-gradient(circle,var(--rule-soft) 1px,transparent 1px);background-size:22px 22px}
+  .canvas.moving{will-change:transform}
+  /* Text is the thing being scaled, so hint the rasteriser to optimise for legibility over
+     speed, and keep glyph geometry from being rounded to the device grid at fractional zoom. */
+  .node{text-rendering:geometricPrecision;-webkit-font-smoothing:antialiased}
+  /* the inline editor sits where the text was, so the card does not jump when it opens */
+  .node input.inline{font:inherit;font-size:.8rem;padding:.05em .25em;border:1px solid var(--accent);
+    border-radius:3px;background:var(--surface);color:var(--ink);min-width:60px;max-width:22ch}
   .canvas-wrap.panning{cursor:grabbing}
   /* floating over the transformed layer, so they keep their size at every zoom level */
   .findbar,.viewbar{position:absolute;z-index:6;display:flex;align-items:center;gap:.3rem;background:var(--surface);border:1px solid var(--rule);border-radius:8px;box-shadow:var(--shadow);padding:.3rem .35rem}
@@ -77,6 +88,8 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .cbtn{font-family:var(--mono);font-size:.68rem;font-weight:600;color:var(--ink-2);background:var(--surface-2);border:1px solid var(--rule);border-radius:5px;padding:.2rem .42rem;cursor:pointer}
   .cbtn:hover{color:var(--ink);border-color:var(--accent)}
   .cbtn:disabled{opacity:.35;cursor:default}
+  .viewbar .tgl{display:flex;align-items:center;gap:.25rem;cursor:pointer;user-select:none}
+  .viewbar .tgl input{margin:0}
   .viewbar .zlvl{font-family:var(--mono);font-size:.66rem;color:var(--ink-3);min-width:3.6em;text-align:center}
   /* a find narrows the canvas rather than filtering it: a non-match stays visible (its edges
      are the reason you were looking) but recedes, so the hits read at a glance. */
@@ -107,6 +120,11 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .kd.sc{background:var(--k-sc)} .kd.as{background:var(--k-as)} .kd.ac{background:var(--k-ac)}
   .port{position:absolute;top:50%;width:12px;height:12px;border-radius:50%;border:2px solid var(--surface);transform:translateY(-50%);cursor:crosshair;z-index:3}
   .port.src{right:-6px} .port.snk{left:-6px}
+  /* Auto side placement overrides the kind default. A port on the bottom edge sits under the
+     row it belongs to, so which interface an edge lands on is still readable. */
+  .port.side-l{left:-6px;right:auto} .port.side-r{right:-6px;left:auto}
+  .port.side-b{top:auto;bottom:-6px;left:50%;right:auto;transform:translateX(-50%)}
+  .port.side-b.legal{transform:translateX(-50%) scale(1.25)}
   .port.pub{background:var(--k-pub)} .port.sub{background:var(--k-sub)} .port.ss{background:var(--k-ss)}
   .port.sc{background:var(--k-sc)} .port.as{background:var(--k-as)} .port.ac{background:var(--k-ac)}
   .port.legal{box-shadow:0 0 0 4px color-mix(in srgb,var(--glow) 55%,transparent);transform:translateY(-50%) scale(1.25)}
@@ -272,6 +290,8 @@ EDITOR_TEMPLATE = r'''<!doctype html>
     </div>
     <div class="viewbar">
       <button class="cbtn editonly" id="autoLayout" title="Arrange in layers that follow the connection direction">Auto layout</button>
+      <label class="cbtn tgl" id="autoSidesWrap" title="Put each connected port on the edge facing its partner (left, right or bottom) instead of the fixed kind side, so wires stop crossing the card">
+        <input type="checkbox" id="autoSides"> auto sides</label>
       <button class="cbtn" id="zFit" title="Fit to content (F)">Fit</button>
       <button class="cbtn" id="zOut" title="Zoom out (&minus;). Ctrl/&#8984;+wheel zooms at the pointer; plain wheel pans.">&minus;</button>
       <span class="zlvl" id="zLvl">100%</span>
@@ -286,6 +306,8 @@ EDITOR_TEMPLATE = r'''<!doctype html>
 <datalist id="typelist"></datalist>
 <datalist id="pkglist"></datalist>
 <datalist id="ftypelist"></datalist>
+<datalist id="nslist"></datalist>
+<datalist id="artlist"></datalist>
 
 <div class="scrim" id="catScrim">
   <div class="modal">
@@ -405,7 +427,38 @@ var DATA = /*__DATA__*/null;
     var fl=document.getElementById("ftypelist");
     (ROS.scalars||[]).concat(ROS.arrays||[]).forEach(function(t){
       var o=document.createElement("option");o.value=t;fl.appendChild(o);});
+    fillNsList();
   })();
+
+  // `namespace:` has no catalogue to draw on -- it is invented per system, not looked up -- so
+  // the useful suggestions are the ones THIS project already uses (typing the second node's
+  // namespace should not mean retyping it exactly) plus the two shapes the corpus writes.
+  // Rebuilt on demand: a namespace typed into one node should be offered on the next.
+  function fillNsList(){
+    var el=document.getElementById("nslist");
+    if(!el) return;
+    var seen={}, out=[];
+    (project.nodes||[]).forEach(function(n){
+      var v=(n.namespace==null?"":String(n.namespace)).trim();
+      if(v&&!seen[v]){seen[v]=1;out.push(v);}
+    });
+    ["/","/robot1","/robot2"].forEach(function(v){if(!seen[v]){seen[v]=1;out.push(v);}});
+    el.innerHTML="";
+    out.forEach(function(v){var o=document.createElement("option");o.value=v;el.appendChild(o);});
+
+    // the same argument for `artifact:`: two nodes backed by one artifact is an ordinary
+    // shape (the emitter folds them into a single .ros2 block), and it has no catalogue either.
+    var al=document.getElementById("artlist");
+    if(!al) return;
+    var aseen={}, arts=[];
+    (project.nodes||[]).forEach(function(n){
+      var v=(n.artifact==null?"":String(n.artifact)).trim();
+      if(v&&!aseen[v]){aseen[v]=1;arts.push(v);}
+    });
+    al.innerHTML="";
+    arts.sort().forEach(function(v){
+      var o=document.createElement("option");o.value=v;al.appendChild(o);});
+  }
 
   function nodeById(id){for(var i=0;i<project.nodes.length;i++)if(project.nodes[i].id===id)return project.nodes[i];return null;}
   function ifaceById(n,id){if(!n)return null;for(var i=0;i<n.ifaces.length;i++)if(n.ifaces[i].id===id)return n.ifaces[i];return null;}
@@ -527,8 +580,17 @@ var DATA = /*__DATA__*/null;
   // handlers below all do, and that division is the whole reason edges do not detach at zoom.
   var MINZ=0.15, MAXZ=3, view={k:1,tx:0,ty:0};
   function clampZ(k){ return k<MINZ?MINZ:(k>MAXZ?MAXZ:k); }
+  // While the view is changing the layer is worth promoting; once it settles the promotion is
+  // what makes the text blurry (see .canvas.moving), so it is dropped again a beat later.
+  var settleTimer=null;
+  function markMoving(){
+    canvas.classList.add("moving");
+    if(settleTimer) clearTimeout(settleTimer);
+    settleTimer=setTimeout(function(){canvas.classList.remove("moving");settleTimer=null;},180);
+  }
   function applyView(){
     canvas.style.transform="translate("+view.tx+"px,"+view.ty+"px) scale("+view.k+")";
+    markMoving();
     var z=document.getElementById("zLvl");
     if(z) z.textContent=Math.round(view.k*100)+"%";
   }
@@ -610,10 +672,11 @@ var DATA = /*__DATA__*/null;
       var row=document.createElement("div");
       row.className="iface"; row.dataset.i=f.id; row.dataset.kind=f.kind;
       row.dataset.hidden=kindShown[f.kind]?"0":"1";
+      var sideCls=autoSides?(" side-"+portSide(n,f)):"";
       row.innerHTML='<span class="kd '+f.kind+'">'+f.kind+'</span>'
         +'<span class="inm">'+esc(f.name)+'</span>'
         +'<span class="ity" title="'+esc(f.type||"")+'">'+esc(f.type||"—")+'</span>'
-        +'<span class="port '+(src?"src":"snk")+' '+f.kind+'" data-n="'+n.id+'" data-i="'+f.id+'" data-kind="'+f.kind+'" data-src="'+src+'" data-type="'+esc(f.type||"")+'"></span>';
+        +'<span class="port '+(src?"src":"snk")+sideCls+' '+f.kind+'" data-n="'+n.id+'" data-i="'+f.id+'" data-kind="'+f.kind+'" data-src="'+src+'" data-type="'+esc(f.type||"")+'"></span>';
       box.appendChild(row);
     }
     if(DIAG[n.id]&&DIAG[n.id].length){
@@ -698,13 +761,164 @@ var DATA = /*__DATA__*/null;
     });
   }
 
+  // ============================ automatic port sides ============================
+  // Opt-in, because it MOVES things: with it off, a port's edge is decided by its kind (sources
+  // right, sinks left), which is predictable and is what the read-only views assume. With it on,
+  // each CONNECTED port moves to the edge that faces its partner, so a wire to a node on the
+  // left leaves from the left instead of looping around the card. That is where the spaghetti
+  // comes from: a fixed side forces every backwards edge to travel the full width of both cards.
+  //
+  // The rule per port, using model coordinates (the nodes' own x/y, so it does not depend on
+  // having been rendered yet):
+  //   * unconnected            -> the kind default, unchanged. Nothing to face.
+  //   * partners mostly left   -> left edge
+  //   * partners mostly right  -> right edge
+  //   * partners mostly below, and the vertical separation dominates the horizontal one
+  //                            -> bottom edge, which is what stops a stack of vertical wires
+  //                               from being dragged sideways through the card first.
+  // Ties keep the kind default, so the layout stays stable rather than flickering between two
+  // equally good answers as a node is dragged past its partner.
+  var autoSides=false;
+  // Measured off the rendered card when there is one (a card's width follows its longest type
+  // string), with the stylesheet's min-width as the fallback for the first paint.
+  function nodeBox(n){
+    var el=canvas.querySelector('.node[data-n="'+n.id+'"]'), k=view.k||1;
+    if(el){
+      var r=el.getBoundingClientRect();
+      if(r.width>0) return {w:r.width/k,h:r.height/k};
+    }
+    return {w:190,h:120};
+  }
+  function nodeCentre(n){
+    var b=nodeBox(n);
+    return {x:(n.x||0)+b.w/2, y:(n.y||0)+b.h/2};
+  }
+  function portSide(n,f){
+    var def=SRC_SIDE[f.kind]?"r":"l";
+    var me=nodeCentre(n), dx=0, dy=0, seen=0;
+    (project.connections||[]).forEach(function(c){
+      var other=null;
+      if(c.from.n===n.id&&c.from.i===f.id) other=nodeById(c.to.n);
+      else if(c.to.n===n.id&&c.to.i===f.id) other=nodeById(c.from.n);
+      if(!other) return;
+      var oc=nodeCentre(other);
+      dx+=oc.x-me.x; dy+=oc.y-me.y; seen++;
+    });
+    if(!seen) return def;
+    dx/=seen; dy/=seen;
+    if(dy>60&&Math.abs(dy)>Math.abs(dx)*1.4) return "b";
+    if(dx>20) return "r";
+    if(dx<-20) return "l";
+    return def;
+  }
+
+  // ============================ inline editing on the card ============================
+  // The inspector remains the complete surface -- every field lives there. This covers the two
+  // or three edits you reach for constantly (rename the instance, rename an exposure, retype
+  // it) without crossing the window for each one. Double-click the text; Enter commits, Escape
+  // cancels, blur commits. Read-only backings (subsystem, and a catalogue node's interfaces)
+  // refuse, because those names belong to the referenced file, not to this one.
+  function inlineEdit(el,value,opts,commit){
+    if(!el||canvas.querySelector("[data-inline]")) return;      // one editor at a time
+    opts=opts||{};
+    var inp=document.createElement("input");
+    inp.setAttribute("data-inline","1");
+    inp.className="inline";
+    inp.value=value==null?"":String(value);
+    if(opts.list) inp.setAttribute("list",opts.list);
+    if(opts.placeholder) inp.placeholder=opts.placeholder;
+    // width in MODEL units: the card is inside the zoom transform, so a screen-space width
+    // would shrink the box as you zoom out.
+    var w=el.getBoundingClientRect().width/(view.k||1);
+    inp.style.width=Math.round(Math.max(w,60)+28)+"px";
+    el.parentNode.insertBefore(inp,el);
+    el.style.display="none";
+    var done=false;
+    function finish(ok){
+      if(done) return;
+      done=true;
+      var v=inp.value;
+      if(inp.parentNode) inp.parentNode.removeChild(inp);
+      el.style.display="";
+      if(ok) commit(v); else render();
+    }
+    inp.addEventListener("keydown",function(e){
+      // the canvas owns Ctrl+Z / Delete / arrow keys; while typing a name it must not.
+      e.stopPropagation();
+      if(e.key==="Enter"){e.preventDefault();finish(true);}
+      else if(e.key==="Escape"){e.preventDefault();finish(false);}
+    });
+    inp.addEventListener("blur",function(){finish(true);});
+    inp.addEventListener("pointerdown",function(e){e.stopPropagation();});
+    inp.focus();
+    inp.select();
+  }
+
+  function wireInline(){
+    canvas.addEventListener("dblclick",function(ev){
+      if(document.body.classList.contains("mode-view")) return;
+      var nEl=ev.target.closest(".node");
+      if(!nEl) return;
+      var n=nodeById(nEl.dataset.n);
+      if(!n||n.backing==="sub") return;          // declared in the referenced file
+      var title=ev.target.closest(".ntitle");
+      if(title){
+        // the LABEL is this system's own instance name, editable whatever backs the node
+        inlineEdit(title,n.label,{placeholder:"instance label"},function(v){
+          v=v.trim();
+          if(!v||v===n.label){render();return;}
+          pushUndo("label:"+n.id);
+          n.label=v;
+          render();
+          fillInspector();
+        });
+        return;
+      }
+      var row=ev.target.closest(".iface");
+      if(!row) return;
+      var f=ifaceById(n,row.dataset.i);
+      if(!f||n.backing!=="hand") return;         // a catalogue artifact's names are its own
+      var ty=ev.target.closest(".ity");
+      if(ty){
+        inlineEdit(ty,f.type||"",{list:"typelist",placeholder:"pkg/msg/Type"},function(v){
+          v=v.trim();
+          if(v===(f.type||"")){render();return;}
+          pushUndo("itype:"+f.id);
+          f.type=v||null;
+          render();
+          fillInspector();
+        });
+        return;
+      }
+      var nm=ev.target.closest(".inm");
+      if(nm){
+        inlineEdit(nm,f.name,{placeholder:"interface name"},function(v){
+          v=v.trim();
+          if(!v||v===f.name){render();return;}
+          pushUndo("iname:"+f.id);
+          f.name=v;
+          render();
+          fillInspector();
+        });
+      }
+    });
+  }
+
   // ============================ node drag ============================
   project.nodes.forEach(function(){});
   function wireCanvas(){
     canvas.addEventListener("pointerdown",function(ev){
-      var head=ev.target.closest("[data-drag]");
-      if(!head) return;
-      var el=head.closest(".node"), n=nodeById(el.dataset.n);
+      // The WHOLE card selects and drags, not just its title bar: a node is one object, and
+      // having to hit a 20px strip to pick it up is the kind of thing you only forgive in
+      // software you wrote yourself. Three exceptions, each of which owns its own gesture:
+      // a port starts a wire, an inline editor is being typed into, and anything explicitly
+      // marked interactive.
+      if(ev.target.closest(".port")||ev.target.closest("[data-inline]")
+         ||ev.target.closest("input,textarea,select,button")) return;
+      var el=ev.target.closest(".node");
+      if(!el) return;
+      var n=nodeById(el.dataset.n);
+      if(!n) return;
       // snapshot the pre-drag layout now; it is only pushed on pointerup if the pointer
       // actually moved, so selecting a node does not fill the undo stack with no-ops.
       dragState={n:n,px:ev.clientX,py:ev.clientY,ox:n.x,oy:n.y,moved:0,snap:snapshot()};
@@ -792,6 +1006,7 @@ var DATA = /*__DATA__*/null;
   }
   var dragState=null, wire=null, panState=null;
   wireCanvas();
+  wireInline();
 
   // ============================ wheel: pan, ctrl/pinch: zoom ============================
   // Trackpad semantics, and the only ones that work for both input devices: a two-finger
@@ -1148,10 +1363,10 @@ var DATA = /*__DATA__*/null;
       +'<label><input type="radio" name="bk" value="cat" '+(cat?"checked":"")+'> catalogue</label></div></div>'
       +'<div class="fld"><label>package '+(cat?"":"(lowercase — uppercase is an ERROR)")+'</label><input id="f_pkg" data-undo="1" list="pkglist" value="'+esc(n.pkg)+'" '+(cat?"disabled":"")+'></div>'
       +'<div class="fld"><label>node</label><input id="f_node" data-undo="1" value="'+esc(n.node)+'" '+(cat?"disabled":"")+'></div>'
-      +'<div class="fld"><label>artifact (arrow target base)</label><input id="f_art" data-undo="1" value="'+esc(n.artifact||"")+'" '+(cat?"disabled":"")+'></div>'
+      +'<div class="fld"><label>artifact (arrow target base)</label><input id="f_art" data-undo="1" list="artlist" value="'+esc(n.artifact||"")+'" '+(cat?"disabled":"")+'></div>'
       // namespace is a property of the node INSTANCE in the system, not of the backing
       // artifact, so it is editable for catalogue nodes too. Blank = omit the key.
-      +'<div class="fld"><label>namespace (optional)</label><input id="f_ns" data-undo="1" value="'+esc(n.namespace||"")+'" placeholder="e.g. /robot1">'
+      +'<div class="fld"><label>namespace (optional)</label><input id="f_ns" data-undo="1" list="nslist" value="'+esc(n.namespace||"")+'" placeholder="e.g. /robot1">'
       +((n.namespace&&String(n.namespace).trim())
         ?'<div class="hint w">emitted between from: and interfaces:. 0 of 52 corpus files use it — rosmodel_lint warns (RM044); the 3.1.0 server accepts it.</div>'
         :'<div class="hint">set this to scope the node in a multi-robot system.</div>')+'</div>'
@@ -1536,12 +1751,12 @@ var DATA = /*__DATA__*/null;
     var pkg=document.getElementById("f_pkg"), nod=document.getElementById("f_node"), art=document.getElementById("f_art");
     if(pkg) pkg.oninput=function(e){pushUndo("pkg:"+n.id);n.pkg=e.target.value.toLowerCase();e.target.value=n.pkg;render();};
     if(nod) nod.oninput=function(e){pushUndo("node:"+n.id);n.node=e.target.value;render();};
-    if(art) art.oninput=function(e){pushUndo("art:"+n.id);n.artifact=e.target.value;render();};
+    if(art) art.oninput=function(e){pushUndo("art:"+n.id);n.artifact=e.target.value;fillNsList();render();};
     var ns=document.getElementById("f_ns");
     // no fillInspector() here: the RM044 hint under the field only changes between "set" and
     // "unset", and rebuilding the panel mid-word would cost the caret. render() repaints the
     // node card (which shows the namespace) and re-runs the instant checks.
-    if(ns) ns.oninput=function(e){pushUndo("ns:"+n.id);n.namespace=e.target.value.trim()||null;render();};
+    if(ns) ns.oninput=function(e){pushUndo("ns:"+n.id);n.namespace=e.target.value.trim()||null;fillNsList();render();};
     inspector.querySelectorAll("[data-qtog]").forEach(function(x){x.onclick=function(){
       var id=x.dataset.qtog; qosOpen[id]=!qosOpen[id]; fillInspector();};});
     inspector.querySelectorAll("[data-qk]").forEach(function(x){
@@ -1970,9 +2185,39 @@ var DATA = /*__DATA__*/null;
     });
     return out.length?(indent+"qos:\n"+out.join("")):"";
   }
+  // MIRRORS ros_studio._fold_artifacts. Two nodes may share one `from: pkg.ARTIFACT` -- two
+  // instances of a node type, or two merged systems reusing a package -- and the artifact is one
+  // definition either way, so the .ros2 declares it ONCE with the union of what each node
+  // exposes. Emitting it per referring node is a duplicate key (RM009). The Python emitter folds;
+  // without this the preview showed the author a file `generate` would never write.
+  function foldArtifacts(recs){
+    var byArt={}, order=[];
+    recs.forEach(function(rec){
+      var key=String(rec.artifact||"");
+      if(!byArt[key]){
+        var copy={}; for(var k in rec) if(Object.prototype.hasOwnProperty.call(rec,k)) copy[k]=rec[k];
+        copy.ifaces=(rec.ifaces||[]).slice();
+        copy.params=(rec.params||[]).slice();
+        byArt[key]=copy; order.push(key);
+        return;
+      }
+      var into=byArt[key], have={}, haveP={};
+      // '|' cannot occur in a ROS interface name, so it separates the pair unambiguously
+      into.ifaces.forEach(function(f){have[f.kind+"|"+f.name]=1;});
+      (rec.ifaces||[]).forEach(function(f){
+        var kk=f.kind+"|"+f.name;
+        if(!have[kk]){have[kk]=1;into.ifaces.push(f);}
+      });
+      into.params.forEach(function(pr){haveP[pr.name]=1;});
+      (rec.params||[]).forEach(function(pr){
+        if(!haveP[pr.name]){haveP[pr.name]=1;into.params.push(pr);}
+      });
+    });
+    return order.map(function(k){return byArt[k];});
+  }
   function genRos2(pkg){
     var g=handPkgNodes(), comp=companionPkgs();
-    var nodes=(g.by[pkg]||[]).slice().sort(function(a,b){
+    var nodes=foldArtifacts((g.by[pkg]||[]).slice()).sort(function(a,b){
       var x=String(a.artifact||""), y=String(b.artifact||"");
       return x<y?-1:(x>y?1:0);});
     var entry=project.packages[pkg]||{}, git=entry.fromGitRepo;
@@ -2304,6 +2549,18 @@ var DATA = /*__DATA__*/null;
 
   // ============================ canvas controls ============================
   document.getElementById("autoLayout").onclick=autoLayout;
+  (function(){
+    var box=document.getElementById("autoSides");
+    if(!box) return;
+    // a VIEW preference, not model content: it never enters project.json and never touches undo
+    try{ autoSides=localStorage.getItem("rosStudio.autoSides")==="1"; }catch(e){}
+    box.checked=autoSides;
+    box.onchange=function(){
+      autoSides=box.checked;
+      try{ localStorage.setItem("rosStudio.autoSides",autoSides?"1":"0"); }catch(e){}
+      render();          // ports move, and drawEdges reads their rendered positions
+    };
+  })();
   document.getElementById("zFit").onclick=fitView;
   document.getElementById("zIn").onclick=function(){zoomCentre(1.25);};
   document.getElementById("zOut").onclick=function(){zoomCentre(1/1.25);};

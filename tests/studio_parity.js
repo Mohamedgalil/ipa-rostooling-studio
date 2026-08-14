@@ -56,7 +56,8 @@ var STUDIO = path.join(ROOT, "scripts", "ros_studio.py");
 // exactly as with genSystem().
 var WANTED = ["qd", "qs2", "nodeById", "ifaceById", "ifaceConnected", "exposureLabels",
   "genSystem",
-  "handPkgNodes", "localTypePkgs", "companionTypes", "companionPkgs", "typeAutoNote",
+  "handPkgNodes", "foldArtifacts", "localTypePkgs", "companionTypes", "companionPkgs",
+  "typeAutoNote",
   "pyFloat", "pyRepr", "fmtParamValue", "genQos", "genRos2", "genRos",
   "cmtClean", "cmtList", "cmtOf", "cmtBlock", "noteSuffix",
   "factStr", "unquoteEmitted", "paramFact", "qosFact", "ifaceFactKey", "projectFacts",

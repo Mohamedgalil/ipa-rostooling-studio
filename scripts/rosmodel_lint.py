@@ -522,6 +522,7 @@ def normalise_bare_subsystems(text):
             continue
         key_indent = len(m.group("indent").expandtabs(TAB_STOP))
         entries = []
+        entry_indent = None
         j = i + 1
         while j < len(lines):
             raw = lines[j].rstrip("\r\n")
@@ -530,7 +531,18 @@ def normalise_bare_subsystems(text):
                 j += 1
                 continue
             stripped = raw.lstrip(" \t")
-            if len(raw[:len(raw) - len(stripped)].expandtabs(TAB_STOP)) <= key_indent:
+            indent = len(raw[:len(raw) - len(stripped)].expandtabs(TAB_STOP))
+            if indent <= key_indent:
+                break
+            if entry_indent is None:
+                entry_indent = indent
+            elif indent != entry_indent:
+                # Siblings of a repetition sit at ONE depth. A deeper or shallower line is a real
+                # indentation error -- the server answers "mismatched input '' expecting RULE_END"
+                # -- and emitting both at key_indent would flatten them into a valid-looking flat
+                # sequence, turning a rejected file into a silent pass. Leave the block alone so
+                # composition fails and RM008 reports it, exactly as before this function existed.
+                entries = []
                 break
             if body[0] in "-[{&*?|>%@`":
                 # A '- item' sequence or a bracket list: composable as-is, and the author's own
@@ -2019,13 +2031,17 @@ class Linter(object):
                            "list production -- unlike 'nodes: [...]' inside a process, there is "
                            "no bracket form here. Emit one bare (optionally quoted) name per "
                            "indented line instead, e.g.:\n  subSystems:\n    \"turtlebot\"")
-            elif len(node.value) > 1 and not {node_line(i) for i in node.value} <= \
-                    self.synth_subsystem_lines:
+            elif not {node_line(i) for i in node.value} <= self.synth_subsystem_lines:
+                # ANY dashed entry, not just two or more: `subSystems:` / `  - "turtlebot"` is one
+                # entry and the server rejects it with the same "mismatched input '-'". Guarding
+                # on len > 1 let the single-entry form -- the one a hand-editor is most likely to
+                # write, copying the shape of every other list in the file -- through untouched.
                 # Not our own normalisation (normalise_bare_subsystems) -- the author really
                 # did write dashes, and the real parser will not take them.
                 self.error(node_line(node), "RM093",
-                           "'subSystems:' has %d entries, written as a '- item' block sequence."
-                           % len(node.value),
+                           "'subSystems:' has %d %s, written as a '- item' block sequence."
+                           % (len(node.value),
+                              "entry" if len(node.value) == 1 else "entries"),
                            "The real grammar rejects this: 'mismatched input '-' expecting "
                            "RULE_END'. 'components+=SubSystem*' is a repetition, not a list "
                            "production, so each entry is one bare (optionally quoted) name on "
