@@ -28,7 +28,8 @@ validator rule table and an enforced emission profile.
 ### ✅ There is a working oracle — use it
 
 `tests/oracle/ask_oracle.py` drives the real RosTooling language servers over stdio and reports
-their diagnostics. Thirteen cases currently pass, including negative controls that confirm the hard
+their diagnostics. All 24 cases currently behave as documented -- 15 ACCEPTED and 9 REJECTED,
+the rejections being negative controls that confirm the hard
 exclusions and three that settled the `from:` reference form. See
 [`tests/oracle/RESULTS.md`](tests/oracle/RESULTS.md).
 
@@ -42,8 +43,9 @@ Two things worth knowing:
   `BasicsIdeSetup` alongside `Ros2IdeSetup`, so message specs get real diagnostics, not just
   packages.
 - **`.rossystem` has no *shipped* server, but one has been built from source** at
-  `build/rossystem-ls/`, and `ask_oracle.py` selects it per case by file extension. Only three
-  synthetic systems have been through it so far — the 52 corpus systems have not.
+  `build/rossystem-ls/`, and `ask_oracle.py` selects it per case by file extension. Ten case
+  directories now carry a `.rossystem` and have been through it — the 52 corpus systems still
+  have not.
 
 One limit that no JDK lifts:
 
@@ -125,7 +127,7 @@ skills/ros-model/
   references/ros2-syntax.md     .ros2 + .ros grammar, verbatim productions
   references/rossystem-syntax.md .rossystem grammar + RosSystemValidator behaviour
   references/worked-examples.md  3 full transformations, failure catalogue, source-defect policy
-scripts/rosmodel_lint.py        static linter, 68 rules (.ros / .ros2 / .rossystem)
+scripts/rosmodel_lint.py        static linter, 81 rules (.ros / .ros2 / .rossystem)
 scripts/ros_plot.py             /ros-plot backend: .rossystem -> self-contained interactive HTML (read-only)
 scripts/ros_studio.py           /ros-studio backend: init (seed) / render (editor HTML) / generate (+ lint, oracle)
 scripts/_studio_common.py       shared HTML/CSS/JS primitives + emit vocabulary (imported by both ros_plot and ros_studio)
@@ -136,7 +138,7 @@ tests/studio_roundtrip.py       /ros-studio seed -> generate: round-trip, orphan
 tests/studio_parity.js          the editor's .rossystem preview vs the Python emitter, byte for byte
 tests/fixtures/manifest.md      fixture inventory
 tests/regenerated/              adversarial regeneration outputs (4 corpus targets)
-tests/oracle/ask_oracle.py      drives the REAL language servers; 13 cases
+tests/oracle/ask_oracle.py      drives the REAL language servers; 24 cases
 tests/oracle/RESULTS.md         what the toolchain actually said
 emission-profile.md             NORMATIVE formatting profile, 37 numbered rules
 docs/grammar-subset.md          what the pinned JAR can lex; the HEAD-vs-JAR token diff

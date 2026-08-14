@@ -1,9 +1,13 @@
 # STATUS — work item E1, `rostooling-modeler`
 
-**As of 2026-07-21.** Written to be useful to whoever picks this up, not to look finished.
+**As of 2026-08-14.** (Sections below carry their own datelines; where one says 2026-07-21 it
+means what was true then, and later amendments are marked.) Written to be useful to whoever picks this up, not to look finished.
 
-One-line summary: **the static half of E1 is done and self-consistent; the dynamic half has never
-been executed, and cannot be on this machine.** Everything below is labelled accordingly.
+One-line summary (**rewritten 2026-08-14**): **the static half of E1 is done and self-consistent,
+and the dynamic half now runs here too** -- Java 21 is installed, the 3.1.0 language server is
+built, and all 24 oracle cases execute on this machine. The original summary said the dynamic half
+"has never been executed, and cannot be on this machine"; that was true when written and was
+overtaken by section 2.1 the same week. Everything below is labelled accordingly.
 
 ---
 
@@ -35,7 +39,7 @@ env vars `ROSMODEL_JAVA` and `ROSMODEL_PYTHON` must be set on this machine (PATH
 
 | Deliverable | How it was verified |
 |---|---|
-| **`scripts/rosmodel_lint.py`** — 57 rules, 1 647 lines | **Executed** across all 305 corpus files, 0 crashes. Counts reproduce four independent measurements in `emission-profile.md` §1 exactly (RM003×1, RM005×1, RM015×3, RM040×3 on Corpus B; RM058×2 corpus-wide). |
+| **`scripts/rosmodel_lint.py`** — 81 rules, 2 873 lines (57 rules / 1 647 lines when this row was written) | **Executed** across all 305 corpus files, 0 crashes. Counts reproduce four independent measurements in `emission-profile.md` §1 exactly (RM003×1, RM005×1, RM015×3, RM040×3 on Corpus B; RM058×2 corpus-wide). |
 | Linter **positive control** | **Executed.** Both canonical reference outputs from `emission-profile.md` §4 lint completely clean, 0 findings, exit 0. |
 | Linter **negative controls** | **Executed.** Hand-built fixtures with planted defects; all caught at the expected severity, and valid constructs in the same files produced no findings. |
 | Linter **degradation paths** | **Executed.** Tab-indented files → `RM001` then normalised recovery, never an opaque YAML crash. PyYAML absent (import blocked) → layout checks still run, structural checks reported skipped, exit 0, no traceback. |
@@ -265,7 +269,8 @@ No `rossystem` language server was ever **shipped**; that finding stands. But on
 per case by file extension. Oracle cases 07-09 are the first `.rossystem` diagnostics ever obtained
 from the real toolchain, and they settled the `from:` question (§7).
 
-**What this does not yet cover:** only three small synthetic systems have been through it. The 52
+**What this does not yet cover:** ten case directories now carry a `.rossystem` and have been through it (2026-08-14), all of
+them synthetic or hand-built. The 52
 corpus `.rossystem` models have not been validated, and `scripts/rosmodel_lint.py` remains a
 *reimplementation* of `RosSystemValidator`'s ten `@Check` methods rather than the thing itself.
 Running the corpus through the built server is now cheap and is the obvious next step.
@@ -288,12 +293,12 @@ Running the corpus through the built server is now cheap and is the obvious next
 | Gap | What it would take |
 |---|---|
 | **No cross-file resolution in the linter.** R5–R10 (`CheckMsgsRef*`), S5 (`MatchPortMsgs`), S6 (`CheckParameter`) all need a linking environment. `MatchPortMsgs` compares with Xtend `!==` — *object identity* — which one file cannot decide. This is also why `.ros` `RM076` is a WARNING rather than the ERROR the oracle reports. | Build a workspace index: parse every `.ros`/`.ros2` in a directory tree and resolve `type:` and `from:` refs against it. ~0.5–1 PD. **Lower priority than it was** — the oracle now does real linking for all three file types, so the index is a convenience, not the only route. |
-| **The corpus has never been through the `.rossystem` server.** Only 3 synthetic cases have. | Point `ask_oracle.py` at the 52 corpus systems with their `.ros2`/`.ros` dependencies staged. The dependency staging is the actual work. ~0.3 PD. |
+| **The corpus has never been through the `.rossystem` server.** Ten case directories now carry one (2026-08-14), but they are all synthetic or hand-built. | Point `ask_oracle.py` at the 52 corpus systems with their `.ros2`/`.ros` dependencies staged. The dependency staging is the actual work. ~0.3 PD. |
 | **`.ros` linting has no cross-package spec index.** `RM076` cannot tell "wrong shape" from "defined in a file I was not given". | Falls out of the workspace index above. |
 | **`compare` has no expected-diff baseline.** It exits 1 on *any* semantic difference, including the deviations the skill mandates (added `fromFile:`, renamed duplicate labels). Mandated normalisations read as failures. | Add `--allow <baseline.json>`. ~0.2 PD. |
 | **`roundtrip.py` discards duplicate mapping keys.** Its YAML reader keeps only the last of a duplicated key. On `MT.rossystem` this dropped an entire node from the *original*'s fact set, so 24 of 27 reported "differences" were the harness losing data, not the output diverging. It prints a correct NOTE but still folds them into the headline count and the exit code. | Parse to a multimap, or partition the report into "differences" and "unrepresentable in the original" and exclude the latter from `RESULT` and the exit code. ~0.3 PD. **Until then, do not trust the headline count on any file with duplicate keys.** |
 | **`PreToolUse` blocking.** The current hook cannot prevent a bad write, only force a corrective edit. | Lint `tool_input.content` pre-write; for `Edit`, apply the diff first to know post-edit content. ~0.3 PD. |
-| **`RM066` never fired by a fixture.** | Add a fixture with the `TODO_PACKAGE` sentinel. Trivial. |
+| ~~**`RM066` never fired by a fixture.**~~ **CLOSED 2026-08-14** — `tests/oracle/cases/tb3-fresh/turtlebot3_guided_navigation.rossystem` carries the `TODO_PACKAGE` sentinel and the rule fires on it. | — |
 | **SysML mapping.** Descoped — see §4. | Unscoped. Needs Bjoern's sign-off before any estimate is meaningful. |
 
 ---
@@ -380,6 +385,11 @@ which is precisely the work the Java blocker made impossible anyway. So the plan
 circumstances happened to agree, for different reasons.
 
 ### What exists
+
+*Amended 2026-08-14: the reckoning below counts the state at 2026-07-21 and has not been
+re-costed since. For scale, `scripts/` is now 10 830 lines (ros_studio 3 209, rosmodel_lint 2 873,
+_studio_editor 2 679, ros_plot 1 239) and the harnesses 2 233 -- most of that is the /ros-studio
+line of work, which the estimate below predates entirely.*
 
 ~6 400 lines of deliverable: 1 885 lines of derived specification, 1 897 lines of skill,
 1 647 lines of linter (57 rules), 957 lines of test harness, plus plugin wiring and 4 adversarial

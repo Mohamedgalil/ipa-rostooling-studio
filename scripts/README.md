@@ -243,7 +243,7 @@ accepts both `'` and `"`, so the difference vanishes at parse time.
 | `RM063` | WARNING | `processes:` used | profile §3 |
 | `RM064` | INFO | Connected interfaces have differing trailing names | `MatchPortMsgs` (S5), advisory only |
 | `RM065` | WARNING | Connection endpoint name is owned by several nodes | profile rule 28 |
-| `RM066` | INFO | `fromFile:` contains the `TODO` placeholder sentinel | rossystem-syntax §2 derivation ladder |
+| `RM066` | INFO | `fromFile:` contains the `TODO` placeholder sentinel | rossystem-syntax §2 derivation ladder (exercised by `tests/oracle/cases/tb3-fresh/`) |
 | `RM067` | INFO | Uppercase in a `.rossystem` node **label** | house style only — no validator |
 
 `RM051` enforces the only three legal pairings, with `from` always the server/publisher side:
@@ -260,7 +260,7 @@ Two real catalogues are vendored under `../assets/`: `roscommonobjects/` (messag
 **type** specs, 53 packages) and `rosmodelscatalog/` (standard package **node** models, 48
 nodes across 9 domains — Nav2, TurtleBot 3, arms, cameras, etc.). `build_type_index.py` /
 `build_node_index.py` index them into `assets/type_index.json` / `assets/node_index.json`; these
-rules consume that index. Disable all nine with `--no-catalogue` (or `ROSMODEL_NO_CATALOGUE=1`
+rules consume that index. Disable all twelve (RM081-RM092) with `--no-catalogue` (or `ROSMODEL_NO_CATALOGUE=1`
 in `--hook` mode) for a workspace whose references are heavily project-local. See `SKILL.md` §8c.
 
 | ID | Severity | Check | Applies to |
@@ -277,6 +277,7 @@ in `--hook` mode) for a workspace whose references are heavily project-local. Se
 | `RM090` | ERROR | A node label is declared directly under `nodes:` **and** is also reachable through a `subSystems:` entry | `.rossystem` |
 | `RM091` | WARNING | A `subSystems:` entry doesn't resolve, itself declares another `subSystems:` (nesting risk), or resolves but exposes zero `interfaces:` on any node | `.rossystem` |
 | `RM092` | WARNING | A local node and a node reachable via `subSystems:` resolve the same `from:` under different labels — likely the same real node modelled twice | `.rossystem` |
+| `RM094` | ERROR | Full-line comment at column 0 inside an indented block | `AbstractIndentationTokenSource` closes every open block; oracle case `19-neg-col0-comment`: `missing EOF at ''` |
 | `RM093` | ERROR | `subSystems:` written as a bracket list `[...]` or as a `- item` block sequence — the grammar takes neither (settled 2026-08-14: oracle cases `17-subsystems-multi` / `18-neg-subsystems-dash`, `mismatched input '-' expecting RULE_END`). N entries are N bare lines | `.rossystem` |
 
 `RM081`/`RM084` are WARNING, not ERROR, for the same reason `RM076` is: a genuinely
@@ -348,7 +349,9 @@ The task brief asked for duration-value validation (quoted digits, signed 32-bit
 But grammar-subset §5.1 states those four fields must **never be emitted** — they are absent from
 the pinned parser's token set, so they fail *lexing*, and §5.1 explicitly calls the duration
 constraint "moot under the pinned profile … retained in documentation, not implemented as a
-validator". Both are implemented: `RM031` (ERROR) fires on the field's presence, and `RM035`
+validator". Both are implemented: `RM031` (INFO -- it was an ERROR only while the oracle was
+pinned to the 2024 build; the rule table above is authoritative) fires on the field's presence,
+and `RM035`
 additionally validates the value, so the check exists and is ready for the day the oracle is
 rebuilt. Note that `validator-rules.md` §0.3 confirms `CheckQoS` is **not even present in the
 shipped JAR bytecode** — so `RM035` mirrors a HEAD-only rule that the pinned oracle would neither
@@ -435,8 +438,12 @@ conservative for that reason.
 
 ## Test evidence
 
-Everything below was **executed**. Nothing was run against the Xtext language server — see the
-Java 19 blocker above.
+Everything below was **executed**. *Amended 2026-08-14:* the Java blocker referred to here is
+long resolved — Java 21 is installed, `tests/oracle/ask_oracle.py` drives the real language
+servers, and all 24 checked-in cases run on this machine (see the prerequisites table at the top
+of this file, and `tests/oracle/RESULTS.md`). Read the sentence below as "not run against the
+oracle *at the time these counts were taken*"; every ERROR in the rule table has since been
+confirmed against it.
 
 Environment: Python 3.12.6, PyYAML 6.0.3 (`py -3` on Windows).
 
@@ -457,7 +464,7 @@ the script appears in this README and vice versa, with no orphans in either dire
 > RM086, plus a resolvable ref with and without a disclosing comment for RM088/089) rather than a
 > corpus sweep — see the commit that introduced them for the exact cases.
 >
-> *Amended 2026-08-13.* The rule set is now **70** ids — `RM090`-`RM093` (`subSystems:` reuse
+> *Amended 2026-08-13.* The rule set was **70** ids at that date — `RM090`-`RM093` (`subSystems:` reuse
 > checks) were added, also not covered by the whole-corpus counts below. Verified against six
 > hand-built fixtures (a genuine label collision — including the harder case where the colliding
 > subsystem node itself exposes zero interfaces, caught by an independent review after the first
@@ -469,8 +476,11 @@ the script appears in this README and vice versa, with no orphans in either dire
 
 ### Whole-corpus run — 336 files, 0 crashes
 
-**Re-measured 2026-08-14** against the current script (80 emitted ids: RM000-RM093, plus the
-`RM008T` variant; RM000 is the internal read/parse failure, not a rule). This supersedes the
+**Re-measured 2026-08-14** against the current script. It emits **82** distinct ids -- RM000-RM094
+plus the `RM002B` and `RM008T` variants -- which is **81 rules**, RM000 being the internal
+read/parse failure rather than a rule. (RM094, the column-0 comment check, and the RM090/RM033
+severity corrections landed after this sweep and change none of its counts: no corpus file
+exhibits any of the three.) This supersedes the
 counts the three amendments above call stale, and adds the `.ros` corpus, which the old 305-file
 run predates. Both catalogue modes are given: the published table was always `--no-catalogue`
 (confirmed — the one-file `CS_ros2model_TBs` `.rossystem` row reproduces its historic 2/10/5
@@ -504,8 +514,9 @@ Catalogue on (default), same 336 files, 0 crashes:
 | `ros-model-examples` `.ros` | 31 | 0 | 0 | 414 | 258 |
 
 The extra errors are catalogue-resolution findings on corpora the vendored catalogue was never
-built from — `RM082`=57, `RM086`=43, `RM085`=4 — and the extra 2019 warnings are almost entirely
-`RM089` (undisclosed catalogue provenance). Read them as "these corpora are outside the
+built from — `RM082`=57, `RM086`=43, `RM085`=4 — and of the extra 2,306 warnings
+`RM089` (undisclosed catalogue provenance) alone accounts for 2,019, with `RM084`=127,
+`RM088`=86, `RM081`=48 and `RM091`=26 making up the rest. Read them as "these corpora are outside the
 catalogue", not as newly discovered defects; `--no-catalogue` is the right mode for them.
 
 *Amended 2026-08-14, `normalise_bare_subsystems`.* One cell moved: catalogued
@@ -555,6 +566,7 @@ Hand-built fixtures with planted defects. All were caught with the expected seve
 ### Degradation paths
 
 - **Tab-indented files** (25 `.rossystem`, 24 `.ros2` have leading tabs): reported as `RM001`
+  (**WARNING** since the 2026-07-21 demotion -- the oracle ACCEPTS tabs; the line below predates it)
   ERROR with a clear message, then normalised so structural checks still run — never an opaque
   YAML crash.
 - **PyYAML absent** (simulated by blocking the import): layout checks run in full, structural

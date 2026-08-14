@@ -244,7 +244,10 @@ comment attaches to the element on its own line.**
 **Normalised** — kept, but not byte-for-byte where it stood:
 
 - indentation follows the *emitted* element, not the source;
-- `#foo` and `#  foo` both come back as `# foo`, and `##` loses one `#`;
+- exactly one leading space is stripped and `# ` is always re-emitted, so `#foo` comes back
+  as `# foo` — but `#  foo` keeps its second space and `##x` comes back as `# #x`. Nothing is
+  ever deleted; extra spaces and extra hashes are content, not formatting (measured
+  2026-08-14 — the earlier claim that `#  foo` collapses and `##` loses a hash was wrong);
 - a line break typed into a comment field becomes a space (a comment runs to end of line, so a
   break would end it and turn the rest into code);
 - a leading block that preceded a **block key** (`nodes:`, `interfaces:`, `artifacts:`, …)

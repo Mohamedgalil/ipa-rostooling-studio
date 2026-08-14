@@ -656,6 +656,26 @@ corruption. **SHALL** = convention; deviating parses, but breaks house style.
 37. **SHALL NOT** emit trailing (end-of-line) comments or ASCII banner comments.
     *288 trailing comments and several banner blocks exist in Corpus A only; Corpus B has none.*
 
+> **Amended 2026-08-14 — rules 36 and 37 are superseded for tooling that PRESERVES comments.**
+> They were written for a generator emitting fresh files, where a comment is optional and the
+> safest placement wins. Two things have changed since:
+>
+> - **Rule 37 conflicts with a requirement.** `SKILL.md` rule 14 and the linter's `RM088`/`RM089`
+>   *require* a trailing comment disclosing the catalogue file behind every resolved reference —
+>   2,105 such warnings on the catalogued corpus sweep when they are absent. `/ros-studio` also
+>   preserves the author's own trailing comments in eleven `.rossystem` and eight `.ros2`
+>   positions (`commands/ros-studio.md`); deleting them to satisfy this rule would be exactly the
+>   silent loss the round-trip harness exists to prevent.
+> - **Rule 36's "strictly shallower" is not safe.** A comment dedented to column 0 inside an
+>   indented block ends the model outright — `AbstractIndentationTokenSource` closes every open
+>   block and the server reports `missing EOF` (oracle case `19-neg-col0-comment`; `RM094`).
+>   Indent a comment to the level of the element it annotates, which is what the emitter does and
+>   what the oracle accepts (`18c`, ACCEPTED 0E/0W).
+>
+> The §6 caveat above ("comment-line indentation inside indentation-sensitive blocks is
+> unverified") is now settled in the other direction: it is verified, and it is *shallower* that
+> breaks. Read 36/37 as history.
+
 ---
 
 ## 3. Grammar constructs with zero or near-zero corpus support

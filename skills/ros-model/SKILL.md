@@ -496,7 +496,11 @@ Run every line against the emitted file:
    `'single-quoted'` and contains `/`.
 4. Every parameter type keyword is bare. Every string `value:` is `"double-quoted"`.
 5. No `msgs:` / `srvs:` / `actions:` in a `.ros2` file.
-6. No `lease_duration` / `liveliness` / `lifespan` / `deadline` anywhere.
+6. `lease_duration` / `liveliness` / `lifespan` / `deadline` are **legal** — emit them when the
+   source has them (the restriction was lifted 2026-07-21; see §11). Never delete one to satisfy
+   this checklist: that would drop a concrete value the source carried. Two value rules do apply:
+   a duration is a nanosecond string and must be under ~2.147 s (`Integer.parseInt`, RM035), and
+   `liveliness:` is `automatic` or `manual`, bare — any other value is a parse error (RM033).
 7. Booleans lowercase; every `.ros2` `Double` value has a `.` or exponent. (In a `.rossystem` the
    declared type is not visible — preserve the source literal instead.)
 8. Block order matches §9. `.ros2` entries alphabetical; `.rossystem` `nodes:` in **source order**.
@@ -563,10 +567,25 @@ Run every line against the emitted file:
   file — add the trailing comment they suggest. RM090 (ERROR)/RM091/RM092 (WARNING) are the
   `subSystems:` reuse checks from §8d: a node reachable both directly and through a subsystem, an
   unresolved/nested/zero-interface subsystem reference, and a same-`from:`-different-label pair.
-  RM093 is a separate, non-catalogue grammar check (`--no-catalogue` does not suppress it): ERROR
-  on the bracket-list form `subSystems: [...]`, which is never valid (`components+=SubSystem*` is
-  a repetition, not a list production — see §8d); WARNING on a multi-entry `- item` block sequence,
-  which parses but has not been verified against the real oracle for more than one entry.
+  RM093 is a separate, non-catalogue grammar check (`--no-catalogue` does not suppress it), and
+  it is an **ERROR** on both illegal forms: the bracket list `subSystems: [...]` and the `- item`
+  block sequence, at any number of entries. `components+=SubSystem*` is a repetition, not a list
+  production: **N references are N bare lines**, and the dash form is a syntax error
+  (`mismatched input '-' expecting RULE_END`). Settled 2026-08-14 against the 3.1.0 server —
+  oracle cases `17-subsystems-multi` (two bare lines, ACCEPTED 0E/0W) and
+  `18-neg-subsystems-dash` (REJECTED). Write:
+
+  ```
+  subSystems:
+    "turtlebot"
+    "extra"
+  ```
+
+  Two consequences worth carrying: this is the one legal form that **`yaml.safe_load` cannot
+  read** (two consecutive scalars do not compose; unquoted ones fold into a single scalar), so a
+  YAML-based consumer such as `rossdl` cannot load a multi-entry model at all — flag it, do not
+  try to write around it. And a full-line comment at **column 0** anywhere inside an indented
+  block ends the model (`missing EOF`, RM094): indent every comment to the block it annotates.
 
 - **Round-trip harness**: `tests/roundtrip.py`, which compares two models semantically rather than
   byte-wise (corpus formatting is far too inconsistent for byte-diffing to mean anything).
@@ -598,9 +617,11 @@ Run every line against the emitted file:
   **ERRORs** (they fail in Xtext's linking layer, before the validator runs), not warnings.
   Validating one file in isolation will always show errors — always supply the `.ros` dependencies.
 
-- **The oracle is pinned to a 2024-08-01 build**, so it validates a 2024 language and can say
-  nothing about the four HEAD-only QoS fields except that it does not know them. That is exactly
-  why they are excluded above.
+- **The oracle is the rebuilt 3.1.0-SNAPSHOT server**, one unified binary for `.ros`, `.ros2`
+  and `.rossystem`, and it validates the current language — including the four QoS fields above,
+  which is why they are no longer excluded. The 2024-08-01 JAR is still reachable as
+  `ROSMODEL_ORACLE=legacy` for A/B work: it is what a *consumer* on an older build sees, and the
+  difference is exactly what RM031 reports at INFO.
 
 - **When the linter and the oracle disagree, the oracle wins.** The linter is a reimplementation;
   the oracle is the toolchain. Report a file as validated only if you actually ran it.
