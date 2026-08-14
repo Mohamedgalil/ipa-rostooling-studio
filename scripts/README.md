@@ -467,14 +467,46 @@ the script appears in this README and vice versa, with no orphans in either dire
 > `examples/turtlebot3_navigation.rossystem` — 0 new errors, 0 crashes, `--no-catalogue` confirmed
 > to suppress RM090-RM092 (RM093 is a pure grammar check and fires regardless).
 
-### Whole-corpus run — 305 files, 0 crashes
+### Whole-corpus run — 336 files, 0 crashes
+
+**Re-measured 2026-08-14** against the current script (80 emitted ids: RM000-RM093, plus the
+`RM008T` variant; RM000 is the internal read/parse failure, not a rule). This supersedes the
+counts the three amendments above call stale, and adds the `.ros` corpus, which the old 305-file
+run predates. Both catalogue modes are given: the published table was always `--no-catalogue`
+(confirmed — the one-file `CS_ros2model_TBs` `.rossystem` row reproduces its historic 2/10/5
+exactly), and a catalogued workspace sees more.
+
+`--no-catalogue` — comparable to every earlier table in this file:
 
 | Corpus | Files | Files with ERROR | E | W | I |
 |---|---:|---:|---:|---:|---:|
 | `CS_ros2model_TBs` `.ros2` | 24 | 3 | 3 | 37 | 0 |
-| `CS_ros2model_TBs` `.rossystem` | 1 | 1 | 2 | 15 | 0 |
-| `ros-model-examples` `.ros2` | 229 | 158 | 1595 | 1285 | 91 |
-| `ros-model-examples` `.rossystem` | 51 | 30 | 2741 | 2138 | 12 |
+| `CS_ros2model_TBs` `.rossystem` | 1 | 1 | 2 | 10 | 5 |
+| `ros-model-examples` `.ros2` | 229 | 142 | 868 | 2012 | 91 |
+| `ros-model-examples` `.rossystem` | 51 | 18 | 32 | 4845 | 14 |
+| `ros-model-examples` `.ros` | 31 | 0 | 0 | 389 | 247 |
+
+Nothing regressed: every delta from the old table is a **severity reclassification already
+recorded in `STATUS.md`**, not a change in what the linter sees. The `RM001` demotion (tabs are
+accepted by the real language server) moves 727 `.ros2` and 2709 `.rossystem` findings from E to
+W, and `RM012` → `RM067` moves 5 from W to I on the `CS` `.rossystem`. Error totals match
+`STATUS.md`'s own post-demotion table row for row (32 / 868 / 0 / 2 / 3). **834 of the 868
+remaining `.ros2` errors are still `RM042`** — `value: True` silently parsing as a string.
+
+Catalogue on (default), same 336 files, 0 crashes:
+
+| Corpus | Files | Files with ERROR | E | W | I |
+|---|---:|---:|---:|---:|---:|
+| `CS_ros2model_TBs` `.ros2` | 24 | 4 | 4 | 221 | 24 |
+| `CS_ros2model_TBs` `.rossystem` | 1 | 1 | 38 | 41 | 6 |
+| `ros-model-examples` `.ros2` | 229 | 145 | 924 | 3870 | 291 |
+| `ros-model-examples` `.rossystem` | 51 | 22 | 43 | 5050 | 30 |
+| `ros-model-examples` `.ros` | 31 | 0 | 0 | 414 | 258 |
+
+The extra errors are catalogue-resolution findings on corpora the vendored catalogue was never
+built from — `RM082`=57, `RM086`=43, `RM085`=4 — and the extra 2019 warnings are almost entirely
+`RM089` (undisclosed catalogue provenance). Read them as "these corpora are outside the
+catalogue", not as newly discovered defects; `--no-catalogue` is the right mode for them.
 
 ### Independent corroboration of the emission profile
 

@@ -157,6 +157,13 @@ the four `slam_toolbox_msgs.ros` copies, reported as ERROR), 106 `RM003` (odd in
 bodiless `response` sections, which are legal. **No corpus file gets an ERROR from any of the new
 structural rules.**
 
+**Re-verified 2026-08-14**, after the `subSystems:` rules (`RM090`-`RM093`), `load_local_system`
+and the whole `/ros-studio` line of work. Every ERROR count in this section still holds exactly —
+32 / 868 / 0 / 2 / 3, total **905**. The `.ros` warnings moved 263 → 389 and infos 247 → 247:
+that corpus is unchanged, the rules that read it grew. Full five-row tables for both catalogue
+modes are in `scripts/README.md`, whose own pre-demotion table was stale until this run and is
+now replaced.
+
 ---
 
 ## 2. BUILT BUT UNVERIFIED — and precisely why
