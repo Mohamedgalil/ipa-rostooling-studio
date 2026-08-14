@@ -1,0 +1,7 @@
+extra_sink:
+  artifacts:
+    extra_sink:
+      node: extra_sink
+      subscribers:
+        'extra_in':
+          type: 'nav_msgs/msg/Odometry'

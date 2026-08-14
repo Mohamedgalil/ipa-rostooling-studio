@@ -1,0 +1,9 @@
+lprobe:
+  artifacts:
+    probe:
+      node: probe
+      publishers:
+        'bad_liveliness':
+          type: "std_msgs/msg/String"
+          qos:
+            liveliness: banana

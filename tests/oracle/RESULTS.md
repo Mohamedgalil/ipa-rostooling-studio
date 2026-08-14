@@ -234,6 +234,32 @@ rather than by source-reading alone.
 | `16-subsystems-tf-ambiguity` | a connection naming `tf`, a label `turtlebot.rossystem` declares on BOTH `turtlebot_node` and `robot_state_publisher` | **ACCEPTED** 0E/0W — resolves silently to one of the two, unspecified which |
 | `17-subsystems-multi` | **two** `subSystems:` entries as two bare lines, with a connection reaching each | **ACCEPTED** 0E/0W |
 | `18-neg-subsystems-dash` | the same file with the entries written as a `- item` block sequence | **REJECTED** — line 4, `mismatched input '-' expecting RULE_END` |
+| `19-neg-col0-comment` | a full-line comment at **column 0** between `from:` and `interfaces:` | **REJECTED** — line 7, `missing EOF at ''` |
+| `20-subsystems-label-collision` | a node declared locally under `nodes:` whose label is ALSO reachable through `subSystems:` | **ACCEPTED** 0E/0W |
+| `21-neg-liveliness` | `liveliness: banana` | **REJECTED** — line 9, `no viable alternative at input 'banana'` |
+
+### Settled 2026-08-14: three more, two of which we had backwards
+
+**Case 19 — column 0 ends the model.** `AbstractIndentationTokenSource` emits the END tokens for
+every open block when it sees a line at column 0, so a comment dedented that far terminates the
+model and everything after it is unreachable input. Indent the same comment, or move its text to
+the end of the previous line, and the file is ACCEPTED 0E/0W. YAML does not care — a comment is
+not a node — so composition succeeded and every other check passed on a file the toolchain cannot
+load. `RM094` now reports it, and it is the only rule that can: this is invisible to a
+YAML-shaped reader.
+
+**Case 20 — `RM090` was wrong.** We reported ERROR on this; the server accepts it silently. The
+two nodes live in different Xtext resources, so the old hint's "two distinct RosNode objects
+answer to the same name in this file's scope" is not what happens. Demoted to WARNING, which is
+still worth saying: which of the two a `connections:` endpoint binds to is unspecified and a
+reader cannot tell from the file alone. Worth noting this false positive had already shaped
+design — the multi-file merge renames and collapses nodes specifically to avoid RM090.
+
+**Case 21 — `liveliness:` was never checked.** `Liveliness=('automatic'|'manual')` is a keyword
+alternation, but the field sat outside `QOS_ENUMS` *and* behind `RM031`'s early `continue`, so
+any value at all passed. `RM031` speaks to whether the FIELD needs a recent toolchain; it says
+nothing about the value, and the two checks are now independent. `liveliness: automatic` is
+ACCEPTED and stays clean.
 
 ### Settled 2026-08-14: how a MULTI-entry `subSystems:` block is written
 

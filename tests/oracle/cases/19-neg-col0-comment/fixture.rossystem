@@ -1,0 +1,8 @@
+fixture:
+  fromFile: "fixture_pkg/launch/fixture.launch.py"
+  nodes:
+    "odom_sink":
+      from: "odom_sink.odom_sink"
+# a column-0 comment inside the nodes block
+      interfaces:
+        - "odom_in": sub-> "odom_sink::odom_in"

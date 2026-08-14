@@ -274,6 +274,11 @@ QOS_PINNED = ["profile", "history", "depth", "reliability", "durability"] + QOS_
 QOS_DISCOURAGED = ["profile", "history", "depth"]
 
 QOS_ENUMS = {
+    # `('liveliness:' Liveliness=('automatic'|'manual'))?` -- a keyword alternation like the
+    # four below it, not an EString. It sat outside this table AND behind the QOS_NEWER branch
+    # below, so `liveliness: banana` reached the server, which answers "no viable alternative
+    # at input 'banana'" and rejects the file.
+    "liveliness": ["automatic", "manual"],
     "profile": ["default_qos", "services_qos", "sensor_qos", "parameter_qos"],
     "history": ["keep_last", "keep_all"],
     "reliability": ["best_effort", "reliable"],
@@ -863,6 +868,35 @@ class Linter(object):
                           "Remove it (emission-profile rule 5). Interaction with "
                           "AbstractIndentationTokenSource is unverified, so this is treated as "
                           "a risk rather than a proven failure.")
+
+        # A full-line comment at COLUMN 0 inside an indented block is a hard parse error. Settled
+        # 2026-08-14 against the 3.1.0 server: the same file with that comment indented, or with
+        # the text moved to the end of the previous line, is ACCEPTED 0E/0W; dedented to column 0
+        # it is REJECTED with "missing EOF at ''". AbstractIndentationTokenSource emits the END
+        # tokens for every open block when it sees a line at column 0, and the model ends there --
+        # everything after it is unreachable input.
+        #
+        # YAML does not care (a comment is not a node), so composition succeeds and every other
+        # check in this file passes on a file the toolchain cannot load. Nothing else catches it.
+        for idx, line in enumerate(self.lines, start=1):
+            stripped = line.strip()
+            if not stripped.startswith("#") or line[:1] in (" ", "	"):
+                continue
+            if idx == 1 or not any(l.strip() for l in self.lines[:idx - 1]):
+                continue                      # the file header block, which is legal and common
+            nxt = next((l for l in self.lines[idx:] if l.strip()), None)
+            if nxt is None or nxt.lstrip().startswith("#"):
+                continue                      # trailing block: RM087 territory, not this
+            if indent_of(nxt) > 0:
+                self.error(idx, "RM094",
+                           "Comment at column 0 inside an indented block.",
+                           "Indent it to the block it annotates, or move the text to the end of "
+                           "the previous line. A line at column 0 makes "
+                           "AbstractIndentationTokenSource close every open block, and the "
+                           "server then reports 'missing EOF' -- the model ends at this comment "
+                           "and the %d line(s) after it are never read. Verified 2026-08-14: "
+                           "indented, the same file is ACCEPTED with 0 errors."
+                           % (len(self.lines) - idx))
 
     # -- YAML composition ---------------------------------------------------------------
 
@@ -1849,6 +1883,20 @@ class Linter(object):
                           "0 corpus files use it, so portability is untested in practice.")
                 if name in ("lease_duration", "lifespan", "deadline"):
                     self.check_qos_duration(val, name)
+                elif name in QOS_ENUMS and is_scalar(val):
+                    # RM031 says the FIELD needs a recent toolchain; it says nothing about the
+                    # value, and `continue`ing here skipped the enum check entirely.
+                    if val.value not in QOS_ENUMS[name]:
+                        self.error(node_line(val), "RM033",
+                                   "QoS %s value '%s' is not permitted." % (name, val.value),
+                                   "Allowed values: %s (Ros2.xtext). The server answers 'no "
+                                   "viable alternative at input' and rejects the file."
+                                   % ", ".join(QOS_ENUMS[name]))
+                    elif is_quoted(val):
+                        self.error(node_line(val), "RM033",
+                                   "QoS %s value '%s' is quoted." % (name, val.value),
+                                   "These are grammar keywords, not EStrings; quoting one is a "
+                                   "parse error.")
                 continue
 
             if name not in QOS_PINNED:
@@ -1870,10 +1918,26 @@ class Linter(object):
                           "concrete source value to get a clean run (SKILL.md, Validation).")
 
             if name == "depth":
-                if is_scalar(val) and not re.match(r"^[0-9]+$", val.value.strip()):
+                # Integer0 is `terminal DECINT: '0' | ('1'..'9' DIGIT*) | ('-''0'..'9' DIGIT*)`
+                # -- the minus sign is IN the terminal, and the server accepts `depth: -5`
+                # (verified 2026-08-14, ACCEPTED 0E/0W). The old regex rejected it while citing
+                # the very grammar line that permits it. A negative queue depth is still almost
+                # certainly a mistake, so it is reported -- as the WARNING it is, not as a
+                # parse error it is not.
+                text = val.value.strip() if is_scalar(val) else ""
+                if is_scalar(val) and not re.match(r"^-?[0-9]+$", text):
                     self.error(node_line(val), "RM033",
-                               "QoS depth '%s' is not a non-negative integer." % val.value,
-                               "'depth:' Depth=Integer0 (Ros2.xtext:35).")
+                               "QoS depth '%s' is not an integer." % val.value,
+                               "'depth:' Depth=Integer0 (Ros2.xtext:35), and Integer0 is the "
+                               "DECINT terminal: an optional '-' followed by digits.")
+                elif text.startswith("-"):
+                    self.warn(node_line(val), "RM033",
+                              "QoS depth '%s' is negative." % val.value,
+                              "Legal -- DECINT admits a leading '-' and the server accepts it "
+                              "(ACCEPTED 0E/0W, 2026-08-14). It is reported because a negative "
+                              "queue depth has no meaning at runtime: rclcpp/rclpy take a "
+                              "size_t, so this is a modelling mistake the toolchain will not "
+                              "catch for you.")
             elif name in QOS_ENUMS and is_scalar(val):
                 allowed = QOS_ENUMS[name]
                 if val.value not in allowed:
@@ -2143,15 +2207,20 @@ class Linter(object):
                 owner = "%s (via subSystems: '%s')" % (node_label, ref)
 
                 if node_label in local_node_names:
-                    self.error(line, "RM090",
-                               "Node label '%s' is declared directly under this file's nodes: "
-                               "AND is reachable through subSystems: '%s'." % (node_label, ref),
-                               "Two distinct RosNode objects then answer to the same name in "
-                               "this file's scope -- this is the concrete shape of 'duplicate "
-                               "model definitions confusing the validator': declare it once. "
-                               "Drop the local nodes: entry and let the subsystem provide it, "
-                               "or drop the subSystems: reference if the local declaration needs "
-                               "to differ from the catalogued one.")
+                    self.warn(line, "RM090",
+                              "Node label '%s' is declared directly under this file's nodes: "
+                              "AND is reachable through subSystems: '%s'." % (node_label, ref),
+                              "Demoted from ERROR 2026-08-14: the real 3.1.0 language server "
+                              "ACCEPTS this, 0 errors, 0 warnings (a system reusing catalogued "
+                              "'turtlebot' while also declaring 'turtlebot_node' locally). The "
+                              "two nodes live in different Xtext resources and the server "
+                              "resolves the name silently, so the old hint's claim -- 'two "
+                              "distinct RosNode objects answer to the same name in this file's "
+                              "scope' -- is not what happens. It is still worth saying: which "
+                              "of the two a connections: endpoint binds to is unspecified, and "
+                              "a reader cannot tell from this file alone. Declare it once if "
+                              "you can -- drop the local entry and let the subsystem provide "
+                              "it, or drop the reference if the local declaration must differ.")
                 elif node_info["from"] and node_info["from"] in local_from.values():
                     local_label = next(k for k, v in local_from.items()
                                         if v == node_info["from"])

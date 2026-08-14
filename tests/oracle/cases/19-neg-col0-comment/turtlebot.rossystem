@@ -1,0 +1,19 @@
+turtlebot:
+  fromFile: "turtlebot3_bringup/launch/robot.launch.py"
+  nodes:
+    turtlebot_node:
+      from: "turtlebot3_node.turtlebot3_node"
+      interfaces:
+        - cmd_vel: sub->"turtlebot3_node::cmd_vel"
+        - tf: pub->"turtlebot3_node::tf"
+        - odom: pub->"turtlebot3_node::odom"
+    turtlebot3_laserscan:
+      from: "hlds_laser_publisher.hlds_laser_publisher"
+      interfaces:
+        - scan: pub-> "hlds_laser_publisher::scan"
+    robot_state_publisher:
+      from: "robot_state_publisher.robot_state_publisher"
+      interfaces:
+        - joint_states: sub-> "robot_state_publisher::joint_states"
+        - tf: pub-> "robot_state_publisher::tf"
+        - tf_static: pub-> "robot_state_publisher::tf_static"
