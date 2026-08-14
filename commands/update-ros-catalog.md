@@ -1,5 +1,5 @@
 ---
-description: Refresh the popular-ROS-packages reference by fetching metrics.ros.org and the awesome_ros_packages_and_tools list (plus any extra URLs you pass in), via a cheap (haiku) agent.
+description: Refresh the popular-ROS-packages reference by fetching metrics.ros.org and the two awesome-list sources (plus any extra URLs you pass in), via a cheap (haiku) agent.
 argument-hint: [extra-url-1] [extra-url-2] ...
 ---
 
@@ -16,6 +16,11 @@ and merge, not modeling work, so it should not consume a full-effort agent.
 1. `https://metrics.ros.org/repos_table.html` — table of ROS 2 repositories with metrics.
 2. `https://github.com/vovaekb/awesome_ros_packages_and_tools` — curated "awesome list" of
    ROS packages/tools, organized by category. **Known to overlap with source 1** — dedupe,
+   don't double-list.
+3. `https://github.com/fkromer/awesome-ros2` — a second, differently-maintained curated
+   "awesome list" for ROS 2 specifically (surfaced via a resources PDF the user shared on
+   2026-08-13). **Known to overlap with source 2** — same "awesome list" genre, likely
+   different but partially-overlapping contents — dedupe against both sources 1 and 2,
    don't double-list.
 
 ## Extra sources (from $ARGUMENTS)
