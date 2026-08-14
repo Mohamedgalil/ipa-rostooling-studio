@@ -49,11 +49,18 @@ var STUDIO = path.join(ROOT, "scripts", "ros_studio.py");
 // is legal (RM080 INFO), so a drift there produces a file that lints clean, generates clean
 // and has lost the author's content. That is the exact defect shape STATUS.md sec 8 defect 2
 // records, which is why the preview is held to the emitter's bytes rather than eyeballed.
+// The fifth group is the "changed since the seed" tab. Its whole point is to tell an edit
+// from a reformat, so a projectFacts() that disagrees with project_facts() would report edits
+// the author never made -- or, far worse, stay silent about one they did. Nothing else in the
+// suite compares the two: both sides are internally consistent and both keep linting clean,
+// exactly as with genSystem().
 var WANTED = ["qd", "qs2", "nodeById", "ifaceById", "ifaceConnected", "exposureLabels",
   "genSystem",
   "handPkgNodes", "localTypePkgs", "companionTypes", "companionPkgs", "typeAutoNote",
   "pyFloat", "pyRepr", "fmtParamValue", "genQos", "genRos2", "genRos",
-  "cmtClean", "cmtList", "cmtOf", "cmtBlock", "noteSuffix"];
+  "cmtClean", "cmtList", "cmtOf", "cmtBlock", "noteSuffix",
+  "factStr", "unquoteEmitted", "paramFact", "qosFact", "ifaceFactKey", "projectFacts",
+  "isFactObj", "factSummary", "diffWalk", "diffFacts", "diffShow", "padTo", "formatDiff"];
 
 
 // ---------------------------------------------------------------------------------------
@@ -129,6 +136,17 @@ function sliceFunction(src, name) {
   throw new Error("unbalanced braces in function " + name);
 }
 
+// A page-scope `var NAME = ...;` on ONE line, taken verbatim out of the rendered page. The
+// fact tree's section list and its sentinel live in such a declaration rather than in a
+// function, and hand-copying them here would put the drift back in the place this harness
+// exists to remove.
+function sliceVar(src, name) {
+  var m = new RegExp("^[ \\t]*var " + name + "\\s*=.*;[ \\t]*$", "m").exec(src);
+  if (!m)
+    throw new Error("the rendered page declares no one-line `var " + name + " = ...;`");
+  return m[0].trim();
+}
+
 // The payload ros_studio.render_editor() substitutes for /*__DATA__*/null, on one line.
 // genSystem() sorts the exposures with KINDS (= DATA.kindOrder, the emitter's ARROW_KINDS),
 // so the sandbox has to hand the shipped functions the shipped constants rather than a
@@ -157,6 +175,9 @@ function loadShipped(html, project) {
     "var ROSSEG = {}; Object.keys(SEGBLOCK).forEach(function(s){ROSSEG[SEGBLOCK[s]]=s;});\n" +
     "var QOS = DATA.qos;\n" +
     "var QOS_DUR = {}; (QOS.durations||[]).forEach(function(k){QOS_DUR[k]=1;});\n" +
+    sliceVar(script, "FACT_SECTIONS") + "\n" +
+    sliceVar(script, "FACT_MISSING") + "\n" +
+    sliceVar(script, "DIFF_OP_MARK") + "\n" +
     "var project = __project;\n" +
     "project.packages = project.packages || {};\n" +   // the page normalises these on load
     "project.types = project.types || {};\n" +
@@ -165,7 +186,8 @@ function loadShipped(html, project) {
     "  throw new Error('parity sandbox: unexpected document.getElementById(' + id + ')');\n" +
     "} };\n" +
     parts.join("\n") + "\n" +
-    "return { " + WANTED.map(function (n) { return n + ": " + n; }).join(", ") + " };\n";
+    "return { __DATA: DATA, "
+      + WANTED.map(function (n) { return n + ": " + n; }).join(", ") + " };\n";
   return new Function("__project", "__sysname", "__data", body)(
     project, sysname, extractData(script));
 }
@@ -184,6 +206,39 @@ function firstDiff(expected, actual) {
     }
   }
   return null;
+}
+
+// Key order is an artefact of how each side happens to build the tree, never of the model, so
+// both are re-serialised with keys sorted before they are compared.
+function canonical(v) {
+  if (v === null || typeof v !== "object") return JSON.stringify(v);
+  if (v instanceof Array) return "[" + v.map(canonical).join(",") + "]";
+  return "{" + Object.keys(v).sort().map(function (k) {
+    return JSON.stringify(k) + ":" + canonical(v[k]);
+  }).join(",") + "}";
+}
+
+// Name the first fact PATH the two trees disagree about; "python: ... / editor: ..." on a
+// 200-line JSON blob is not a report anyone can act on.
+function firstFactDiff(a, b) {
+  var hit = null;
+  (function walk(path, x, y) {
+    if (hit) return;
+    if (canonical(x) === canonical(y)) return;
+    if (x && y && typeof x === "object" && typeof y === "object"
+        && !(x instanceof Array) && !(y instanceof Array)) {
+      var keys = {};
+      Object.keys(x).forEach(function (k) { keys[k] = 1; });
+      Object.keys(y).forEach(function (k) { keys[k] = 1; });
+      Object.keys(keys).sort().forEach(function (k) {
+        walk(path ? path + "." + k : k, x[k], y[k]);
+      });
+      if (hit) return;
+    }
+    hit = (path || "(root)") + "\n      python: " + canonical(x)
+      + "\n      editor: " + canonical(y);
+  })("", a, b);
+  return hit || "(no leaf differs — the trees stringify differently)";
 }
 
 // `generate` also STAGES files it did not write -- a project-local subSystems: target and that
@@ -242,6 +297,37 @@ function compare(projectPath, htmlPath, expectPath, knownWrote) {
   }
   byExt("ros2", function () { return fns.handPkgNodes().order; }, fns.genRos2);
   byExt("ros", function () { return Object.keys(fns.companionTypes()); }, fns.genRos);
+
+  // ---- the "changed since the seed" tab -------------------------------------------------
+  // Three things are held here. (1) The editor's projectFacts() must equal the companion's
+  // project_facts(). (2) The rendered text of the diff must match too, because the two are
+  // read side by side -- the tab in the browser and `ros_studio.py diff` in the terminal --
+  // and a column that lines up differently is a different report. (3) project_facts() must
+  // agree with the files `generate` actually WRITES; `diff` computes both and says so when it
+  // does not, and that note is a failure here rather than a line nobody reads.
+  var pyFacts = JSON.parse(runStudio(["--facts", projectPath]));
+  var jsFacts = fns.projectFacts();
+  var pf = canonical(pyFacts), jf = canonical(jsFacts);
+  if (pf !== jf)
+    problems.push("projectFacts() differs from project_facts() at " + firstFactDiff(pyFacts, jsFacts));
+
+  if (fns.__DATA && fns.__DATA.seedFacts) {
+    // stdout on Windows arrives CRLF-terminated; the tab renders \n, and the line ENDING is
+    // the console's, not the report's.
+    var pyText = runStudio(["--preview-diff", projectPath])
+      .replace(/\r\n/g, "\n").replace(/\n$/, "");
+    var jsText = fns.formatDiff(fns.diffFacts(fns.__DATA.seedFacts, jsFacts));
+    if (pyText !== jsText) {
+      var dt = firstDiff(pyText, jsText);
+      problems.push("the editor's seed diff differs from format_diff() at "
+        + (dt || "(trailing bytes)"));
+    }
+    var report = JSON.parse(runStudio(["diff", projectPath, "--json"]));
+    (report.notes || []).forEach(function (n) {
+      if (/^project_facts\(\)/.test(n))
+        problems.push("project_facts() does not describe what generate wrote: " + n);
+    });
+  }
 
   // cross-check the exposure rule itself: every connection endpoint must read as connected
   // AND must have been assigned a label, which is what makes the connections block emittable.

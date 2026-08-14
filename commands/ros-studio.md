@@ -1,6 +1,6 @@
 ---
 description: Author RosTooling models in an interactive self-contained editor, then deterministically generate .ros2/.rossystem/.ros and validate them against the real language server, via scripts/ros_studio.py.
-argument-hint: "init [file.rossystem | dir ...] | render project.json [--open] | generate project.json [--oracle]"
+argument-hint: "init [file.rossystem | dir ...] | render project.json [--open] | generate project.json [--oracle] | diff project.json"
 allowed-tools: Bash, Read, Glob
 ---
 
@@ -8,9 +8,9 @@ allowed-tools: Bash, Read, Glob
 
 `/ros-studio` is the authoring counterpart to `/ros-plot`. Where `/ros-plot` only *reads*
 `.rossystem` models, `/ros-studio` lets you *build* them: a self-contained vanilla-JS editor
-(draggable nodes, kind-coloured ports, an inspector, connection drawing, a node catalogue and
-offline autocomplete) authors an in-memory project; a Python companion then generates the real
-files and validates them. It supersedes `/ros-plot` for authoring, but `/ros-plot` remains the
+(draggable nodes, kind-coloured ports, an inspector, connection drawing, a node catalogue,
+offline autocomplete, and a zoomable canvas with find and auto-layout) authors an in-memory
+project; a Python companion then generates the real files and validates them. It supersedes `/ros-plot` for authoring, but `/ros-plot` remains the
 lightweight read-only path — the editor also embeds those four read-only abstraction levels
 (System │ Interfaces │ Full │ Deps) behind a View ⇄ Edit toggle.
 
@@ -27,7 +27,7 @@ env-var convention as `hooks/hooks.json`, `.lsp.json` and `/ros-plot`:
 "${ROSMODEL_PYTHON:-python3}" "${CLAUDE_PLUGIN_ROOT}/scripts/ros_studio.py" $ARGUMENTS
 ```
 
-The three subcommands form the authoring loop:
+The subcommands form the authoring loop:
 
 - **`init [FILE.rossystem | DIR ...]`** — build a `project.json`. With a `.rossystem` argument it
   seeds from it: the read-only extractor recovers the system structure, the sibling `.ros2` files
@@ -112,6 +112,98 @@ The three subcommands form the authoring loop:
   and asks the **real** language server (`tests/oracle/ask_oracle.py`, needs Java). On a
   generation/lint ERROR it re-renders the editor with the diagnostics injected onto the
   offending nodes, next to the project as `<project>.error.html`, and exits non-zero.
+  `--diff` additionally prints the section below.
+- **`diff project.json`** — *what changed since the seed*. See below.
+
+## `diff` — what changed since the seed
+
+`project.json` records `seededFrom` (and `seededFromAll` for a merge), so after editing a
+seeded system you can ask what you actually changed. `diff` answers it at the **model** level:
+
+```bash
+"${ROSMODEL_PYTHON:-python3}" "${CLAUDE_PLUGIN_ROOT}/scripts/ros_studio.py" diff project.json
+```
+
+```
+diff -- project.json since turtlebot3_navigation.rossystem
+
+  system
+    ~ system.name                                 turtlebot3_navigation -> tb3_edited
+  nodes
+    ~ nodes.amcl.namespace                        (none) -> /robot1
+    - nodes.bt_navigator.parameters.use_sim_time  false
+    - nodes.controller_server                     exposures: 3; from=controller_server.controller_server
+    + nodes.my_new_node                           exposures: 1; from=my_pkg.my_node
+  connections
+    - connections                                 odom -> odom_ctrl_sub
+  packages
+    + packages.my_pkg                             artifacts: 1
+
+  6 change(s): 2 added, 2 changed, 2 removed
+```
+
+Marks: `+` added · `-` removed · `~` changed · `%` same items, different order.
+
+**Not a text diff, on purpose.** The emitter fixes key order (`ROSSYSTEM_TOP_KEYS` /
+`ROSSYSTEM_NODE_KEYS`), quotes every EString, sorts each node's interfaces by `(kind, name)` and
+re-places comments by the policy above — so a round-trip that changed *nothing* still rewrites
+most lines. Both sides are instead reduced to the same fact tree and that is compared:
+
+| section | leaves |
+|---|---|
+| `system` | `name`, `fromFile` |
+| `subSystems` | each reference, in order |
+| `nodes` | per node: `from`, `namespace`, each `exposures.<label>` (`kind-> artifact::name`), each `parameters.<label>` |
+| `connections` | each `fromLabel -> toLabel`, as a multiset plus an order check |
+| `packages` | per package: `fromGitRepo`, and per artifact its `node`, each interface's type, each `qos:` block, each parameter's `type = default` |
+| `types` | per locally defined spec, the field list of each body |
+
+The **before** side is read from the seed file(s) with the very parsers `init` seeds from; the
+**after** side is what `generate` actually writes, emitted to a temp directory and read back the
+same way. Nothing is written to the project directory.
+
+Two flags: `--against FILE.rossystem` diffs against a file of your choosing (the only way to use
+`diff` on a project created blank), and `--json` emits the change records.
+
+Notes it may print, both worth passing on verbatim:
+
+- a **merged seed** replays `init`'s label uniquifier on the seed side, but a `subSystems:`
+  reference the merge collapsed reads as a removal — which is what the emitted file really says;
+- `project_facts() and the generated files disagree …` means the editor's live preview of this
+  diff and the companion's report will differ. That is a bug in the emitter or the predictor, not
+  an edit you made; `tests/studio_parity.js` fails on it.
+
+Inside the editor the same report is the **changed since the seed** tab of the Commit modal,
+computed live from the project as you edit (the seed's fact tree travels with the page, so it
+works offline). `tests/studio_parity.js` holds the tab's text to `format_diff()`'s bytes and the
+editor's `projectFacts()` to the companion's `project_facts()`, exactly as it does for the three
+file previews.
+
+Because the diff is model-level it also surfaces losses the round-trip has, rather than papering
+over them: on the TurtleBot 3 example a clean seed→generate reports
+`- nodes.bt_navigator.parameters.use_sim_time`, because a node-level `parameters:` block in a
+`.rossystem` has no slot in the project model.
+
+## Working a large canvas
+
+Nine nodes fit on a fixed grid; dozens do not. The canvas therefore has:
+
+- **Zoom and pan.** Ctrl/⌘+wheel (or a trackpad pinch) zooms *at the pointer*; a plain wheel or
+  two-finger scroll pans; dragging empty canvas pans. **Fit**, **100%**, **−**/**+** sit bottom
+  left, with `F`, `0`, `-`, `+` as shortcuts. The SVG wire layer is a child of the transformed
+  node layer, so edges stay on their ports at every zoom level. The page opens at 100% when the
+  system fits and only ever zooms *out* to make it fit.
+- **Find** (top left, or `Ctrl+F`). Matches the node label, the `package.node` the file will
+  spell, the namespace, and **every interface name and type** — so "which node publishes
+  `/odom`" is one query. Matches are outlined and everything else recedes; Enter / Shift+Enter
+  step through them and scroll each into view.
+- **Auto layout** — a layered (Sugiyama-style) arrangement that follows connection direction:
+  sources on the left, sinks on the right, four barycentre sweeps to cut crossings, isolated
+  nodes in a trailing column. Feedback edges (a controller subscribing to what it drives) are
+  detected and excluded from the *layering* only; they are still drawn. Node sizes are measured
+  off the rendered boxes rather than estimated, because a node's height is its interface count.
+  Node `x`/`y` live in `project.json`, so a layout is a normal **undoable** edit (`Ctrl+Z`), and
+  **Reset layout** still returns to the positions the page was rendered with.
 
 ## What happens to comments
 
@@ -164,7 +256,8 @@ Every slot is editable: a **comments** section on the node and on the connection
 reach it). A `subSystems:` node itself has no comment slots — it is declared in the referenced
 file, and its comments live there. The
 `.rossystem`/`.ros2`/`.ros` tabs under **Commit** preview the generated files exactly as they will
-be written — `tests/studio_parity.js` holds all three previews to the Python emitter's bytes.
+be written — `tests/studio_parity.js` holds all three previews to the Python emitter's bytes, and
+the fourth tab, **changed since the seed**, to `diff`'s.
 
 ## The commit hand-off
 

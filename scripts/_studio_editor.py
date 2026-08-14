@@ -61,8 +61,28 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .issuelist .it{font-size:.72rem;line-height:1.3;color:var(--ink-2);border-left:2px solid var(--warn);padding-left:.45rem}
   .issuelist .it.e{border-color:var(--dead)}
 
-  .canvas-wrap{flex:1;position:relative;overflow:auto;min-width:0}
-  .canvas{position:relative;width:1600px;height:1100px;background-image:radial-gradient(circle,var(--rule-soft) 1px,transparent 1px);background-size:22px 22px}
+  /* The viewport clips and NOTHING scrolls natively: pan and zoom are one CSS transform on
+     .canvas, so the SVG wire layer -- a child of the same element -- is carried by the exact
+     same matrix as the node layer and an edge can never drift off its port. touch-action:none
+     hands the browser's own pan/pinch gestures to the wheel/pointer handlers instead. */
+  .canvas-wrap{flex:1;position:relative;overflow:hidden;min-width:0;touch-action:none}
+  .canvas{position:relative;width:1600px;height:1100px;transform-origin:0 0;will-change:transform;background-image:radial-gradient(circle,var(--rule-soft) 1px,transparent 1px);background-size:22px 22px}
+  .canvas-wrap.panning{cursor:grabbing}
+  /* floating over the transformed layer, so they keep their size at every zoom level */
+  .findbar,.viewbar{position:absolute;z-index:6;display:flex;align-items:center;gap:.3rem;background:var(--surface);border:1px solid var(--rule);border-radius:8px;box-shadow:var(--shadow);padding:.3rem .35rem}
+  .findbar{top:.6rem;left:.6rem}
+  .viewbar{bottom:.6rem;left:.6rem}
+  .findbar input{font-family:var(--mono);font-size:.74rem;background:var(--surface-2);border:1px solid var(--rule);border-radius:5px;padding:.22rem .4rem;color:var(--ink);width:15ch}
+  .findbar .fcount{font-family:var(--mono);font-size:.64rem;color:var(--ink-3);min-width:4.2em;text-align:center}
+  .cbtn{font-family:var(--mono);font-size:.68rem;font-weight:600;color:var(--ink-2);background:var(--surface-2);border:1px solid var(--rule);border-radius:5px;padding:.2rem .42rem;cursor:pointer}
+  .cbtn:hover{color:var(--ink);border-color:var(--accent)}
+  .cbtn:disabled{opacity:.35;cursor:default}
+  .viewbar .zlvl{font-family:var(--mono);font-size:.66rem;color:var(--ink-3);min-width:3.6em;text-align:center}
+  /* a find narrows the canvas rather than filtering it: a non-match stays visible (its edges
+     are the reason you were looking) but recedes, so the hits read at a glance. */
+  .node.fdim{opacity:.28}
+  .node.fhit{border-color:var(--warn)}
+  .node.fcur{border-color:var(--warn);box-shadow:0 0 0 3px var(--warn-wash),var(--shadow-lift)}
   .canvas svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1}
   .node{position:absolute;z-index:2;background:var(--surface);border:1.5px solid var(--rule);border-radius:9px;box-shadow:var(--shadow);min-width:190px;user-select:none}
   .node.sel{border-color:var(--accent);box-shadow:var(--shadow-lift)}
@@ -243,6 +263,21 @@ EDITOR_TEMPLATE = r'''<!doctype html>
     <div class="canvas lvl3" id="canvas">
       <svg id="wires"></svg>
     </div>
+    <div class="findbar">
+      <input id="findBox" placeholder="find a node&hellip;" spellcheck="false"
+             title="matches the node label, its package.node, its namespace, and any interface name or type">
+      <span class="fcount" id="findCount"></span>
+      <button class="cbtn" id="findPrev" title="previous match (Shift+Enter)" disabled>&#8593;</button>
+      <button class="cbtn" id="findNext" title="next match (Enter)" disabled>&#8595;</button>
+    </div>
+    <div class="viewbar">
+      <button class="cbtn editonly" id="autoLayout" title="Arrange in layers that follow the connection direction">Auto layout</button>
+      <button class="cbtn" id="zFit" title="Fit to content (F)">Fit</button>
+      <button class="cbtn" id="zOut" title="Zoom out (&minus;). Ctrl/&#8984;+wheel zooms at the pointer; plain wheel pans.">&minus;</button>
+      <span class="zlvl" id="zLvl">100%</span>
+      <button class="cbtn" id="zIn" title="Zoom in (+)">+</button>
+      <button class="cbtn" id="zOne" title="Actual size (0)">100%</button>
+    </div>
   </div>
 
   <aside class="inspector empty" id="inspector">Select a node to edit it, or add one from the rail.</aside>
@@ -343,6 +378,7 @@ var DATA = /*__DATA__*/null;
   var HOME=project.nodes.map(function(n){return {id:n.id,x:n.x,y:n.y};});
 
   var canvas=document.getElementById("canvas"), svg=document.getElementById("wires"),
+      canvasWrap=document.getElementById("canvasWrap"),
       inspector=document.getElementById("inspector");
   STUDIO.makeArrowMarkers(svg,"");
   var selNode=null, selEdge=null, addKind="pub", mode="edit", level=3;
@@ -484,13 +520,74 @@ var DATA = /*__DATA__*/null;
   }
   function clearDirty(){ dirty=false; updateHistoryUI(); }
 
+  // ============================ viewport (zoom / pan) ============================
+  // ONE transform on #canvas moves the node layer and the SVG wire layer together, so the two
+  // stay registered by construction. Everything that reads a screen rectangle back into model
+  // coordinates therefore has to divide by `view.k` -- portCenter(), drawDeps() and the drag
+  // handlers below all do, and that division is the whole reason edges do not detach at zoom.
+  var MINZ=0.15, MAXZ=3, view={k:1,tx:0,ty:0};
+  function clampZ(k){ return k<MINZ?MINZ:(k>MAXZ?MAXZ:k); }
+  function applyView(){
+    canvas.style.transform="translate("+view.tx+"px,"+view.ty+"px) scale("+view.k+")";
+    var z=document.getElementById("zLvl");
+    if(z) z.textContent=Math.round(view.k*100)+"%";
+  }
+  // The viewport clips, so the SVG has to be at least as big as the content or an edge to a
+  // far node is cut off at the old fixed 1600x1100. Measured, not guessed: a node's height
+  // depends on how many interface rows it drew.
+  function contentBox(){
+    var els=canvas.querySelectorAll(".node,.pkgbox");
+    if(!els.length) return {x:0,y:0,w:600,h:400};
+    var x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+    [].slice.call(els).forEach(function(e){
+      x0=Math.min(x0,e.offsetLeft); y0=Math.min(y0,e.offsetTop);
+      x1=Math.max(x1,e.offsetLeft+e.offsetWidth); y1=Math.max(y1,e.offsetTop+e.offsetHeight);
+    });
+    return {x:x0,y:y0,w:Math.max(1,x1-x0),h:Math.max(1,y1-y0)};
+  }
+  function sizeCanvas(){
+    var b=contentBox();
+    canvas.style.width=Math.max(1600,b.x+b.w+240)+"px";
+    canvas.style.height=Math.max(1100,b.y+b.h+240)+"px";
+  }
+  // zoom about a point given in VIEWPORT coordinates, so the model point under the pointer
+  // (or under the middle of the viewport, for the buttons) does not move.
+  function zoomAt(px,py,factor){
+    var k2=clampZ(view.k*factor);
+    if(k2===view.k) return;
+    view.tx=px-(px-view.tx)*(k2/view.k);
+    view.ty=py-(py-view.ty)*(k2/view.k);
+    view.k=k2; applyView();
+  }
+  function zoomCentre(factor){
+    zoomAt(canvasWrap.clientWidth/2, canvasWrap.clientHeight/2, factor);
+  }
+  function fitView(){
+    var b=contentBox(), pad=44;
+    var W=canvasWrap.clientWidth, H=canvasWrap.clientHeight;
+    if(W<=0||H<=0) return;
+    view.k=clampZ(Math.min((W-2*pad)/b.w,(H-2*pad)/b.h,1.4));
+    view.tx=(W-b.w*view.k)/2-b.x*view.k;
+    view.ty=(H-b.h*view.k)/2-b.y*view.k;
+    applyView();
+  }
+  function centreOn(nodeId){
+    var el=canvas.querySelector('.node[data-n="'+STUDIO.cssEsc(nodeId)+'"]');
+    if(!el) return;
+    view.tx=canvasWrap.clientWidth/2-(el.offsetLeft+el.offsetWidth/2)*view.k;
+    view.ty=canvasWrap.clientHeight/2-(el.offsetTop+el.offsetHeight/2)*view.k;
+    applyView();
+  }
+
   // ============================ render ============================
   function render(){
     canvas.className="canvas "+(level===4?"deps":"lvl"+level);
     [].slice.call(canvas.querySelectorAll(".node,.pkgbox")).forEach(function(e){e.remove();});
     for(var i=0;i<project.nodes.length;i++) renderNode(project.nodes[i]);
     if(level===4) renderDeps();
+    sizeCanvas();          // before drawEdges: the SVG follows the canvas box at 100%/100%
     drawEdges();
+    applyFind();           // render() replaced every element, so the highlight has to go back
     runIssues();
   }
   function renderNode(n){
@@ -550,15 +647,18 @@ var DATA = /*__DATA__*/null;
   }
 
   function esc2(s){return esc(s);}
+  // Model coordinates, NOT screen ones: getBoundingClientRect() reports the transformed box,
+  // so every delta has to come back through the zoom factor. Skipping that division is exactly
+  // how a wire layer detaches from its ports the moment the canvas is not at 100%.
   function portCenter(nId,iId){
     var p=canvas.querySelector('.port[data-n="'+nId+'"][data-i="'+iId+'"]');
-    var cr=canvas.getBoundingClientRect();
-    if(p){var pr=p.getBoundingClientRect(); if(pr.width>0) return {x:pr.left-cr.left+pr.width/2,y:pr.top-cr.top+pr.height/2};}
+    var cr=canvas.getBoundingClientRect(), k=view.k||1;
+    if(p){var pr=p.getBoundingClientRect(); if(pr.width>0) return {x:(pr.left-cr.left+pr.width/2)/k,y:(pr.top-cr.top+pr.height/2)/k};}
     // fall back to node-box centre (level 1 hides ports)
     var nb=canvas.querySelector('.node[data-n="'+nId+'"]');
     if(!nb) return null;
     var br=nb.getBoundingClientRect();
-    return {x:br.left-cr.left+br.width/2, y:br.top-cr.top+br.height/2};
+    return {x:(br.left-cr.left+br.width/2)/k, y:(br.top-cr.top+br.height/2)/k};
   }
   function edgeKindPair(c){
     var a=ifaceById(nodeById(c.from.n),c.from.i);
@@ -589,8 +689,9 @@ var DATA = /*__DATA__*/null;
     project.nodes.forEach(function(n){
       var pe=pkgEls[n.pkg||"(local)"]; if(!pe) return;
       var nb=canvas.querySelector('.node[data-n="'+n.id+'"]'); if(!nb) return;
-      var cr=canvas.getBoundingClientRect(), a=nb.getBoundingClientRect(), b=pe.getBoundingClientRect();
-      var ax=a.right-cr.left, ay=a.top-cr.top+a.height/2, bx=b.left-cr.left, by=b.top-cr.top+b.height/2;
+      var cr=canvas.getBoundingClientRect(), a=nb.getBoundingClientRect(), b=pe.getBoundingClientRect(), k=view.k||1;
+      var ax=(a.right-cr.left)/k, ay=(a.top-cr.top+a.height/2)/k,
+          bx=(b.left-cr.left)/k, by=(b.top-cr.top+b.height/2)/k;
       var path=document.createElementNS(NS,"path"); path.setAttribute("class","depedge edge");
       path.setAttribute("marker-end","url(#ah)");
       path.setAttribute("d",STUDIO.bezier(ax,ay,bx,by)); svg.appendChild(path);
@@ -611,9 +712,12 @@ var DATA = /*__DATA__*/null;
     });
     canvas.addEventListener("pointermove",function(ev){
       if(!dragState) return;
-      var ddx=ev.clientX-dragState.px, ddy=ev.clientY-dragState.py;
-      dragState.moved+=Math.abs(ddx)+Math.abs(ddy);
-      dragState.n.x=dragState.ox+ddx; dragState.n.y=dragState.oy+ddy;
+      var k=view.k||1;
+      var ddx=(ev.clientX-dragState.px)/k, ddy=(ev.clientY-dragState.py)/k;
+      dragState.moved+=Math.abs(ddx)*k+Math.abs(ddy)*k;   // the click threshold is in PIXELS
+      // never negative: the SVG wire layer starts at the canvas origin, so a node dragged
+      // above/left of it would keep its box but lose its edges.
+      dragState.n.x=Math.max(0,dragState.ox+ddx); dragState.n.y=Math.max(0,dragState.oy+ddy);
       var el=canvas.querySelector('.node[data-n="'+dragState.n.id+'"]');
       el.style.left=dragState.n.x+"px"; el.style.top=dragState.n.y+"px"; drawEdges();
     });
@@ -621,9 +725,29 @@ var DATA = /*__DATA__*/null;
       if(!dragState) return;
       var wasClick=dragState.moved<5, n=dragState.n, snap=dragState.snap; dragState=null;
       if(wasClick){selNode=n.id;selEdge=null;render();fillInspector();}
-      else pushSnapshot(snap);
+      else {sizeCanvas();pushSnapshot(snap);}
     });
-    canvas.addEventListener("pointerdown",function(ev){ if(ev.target===canvas||ev.target===svg){selNode=null;selEdge=null;render();fillInspector();} });
+    // Background drag = PAN. It shares its pointerdown with "click empty space to deselect",
+    // which is why the deselect only fires when the pointer did not travel: dragging the
+    // canvas to look somewhere else is not a decision to drop the selection.
+    canvas.addEventListener("pointerdown",function(ev){
+      if(ev.target!==canvas&&ev.target!==svg) return;
+      panState={px:ev.clientX,py:ev.clientY,tx:view.tx,ty:view.ty,moved:0};
+      canvasWrap.classList.add("panning");
+      try{canvas.setPointerCapture(ev.pointerId);}catch(e){}
+    });
+    canvas.addEventListener("pointermove",function(ev){
+      if(!panState) return;
+      var dx=ev.clientX-panState.px, dy=ev.clientY-panState.py;
+      panState.moved+=Math.abs(dx)+Math.abs(dy);
+      view.tx=panState.tx+dx; view.ty=panState.ty+dy; applyView();
+    });
+    canvas.addEventListener("pointerup",function(ev){
+      if(!panState) return;
+      var wasClick=panState.moved<5; panState=null;
+      canvasWrap.classList.remove("panning");
+      if(wasClick){selNode=null;selEdge=null;render();fillInspector();}
+    });
     // connection drawing
     canvas.addEventListener("pointerdown",function(ev){
       if(mode!=="edit") return;
@@ -645,8 +769,9 @@ var DATA = /*__DATA__*/null;
     });
     canvas.addEventListener("pointermove",function(ev){
       if(!wire) return;
-      var s=portCenter(wire.from.n,wire.from.i), cr=canvas.getBoundingClientRect();
-      var mx=ev.clientX-cr.left, my=ev.clientY-cr.top, rb=document.getElementById("rb");
+      var s=portCenter(wire.from.n,wire.from.i), cr=canvas.getBoundingClientRect(),
+          k=view.k||1;
+      var mx=(ev.clientX-cr.left)/k, my=(ev.clientY-cr.top)/k, rb=document.getElementById("rb");
       if(s&&rb) rb.setAttribute("d",STUDIO.bezier(s.x,s.y,mx,my));
     });
     canvas.addEventListener("pointerup",function(ev){
@@ -665,8 +790,185 @@ var DATA = /*__DATA__*/null;
       render();
     });
   }
-  var dragState=null, wire=null;
+  var dragState=null, wire=null, panState=null;
   wireCanvas();
+
+  // ============================ wheel: pan, ctrl/pinch: zoom ============================
+  // Trackpad semantics, and the only ones that work for both input devices: a two-finger
+  // scroll arrives as a plain wheel event and pans; a pinch arrives as ctrlKey+wheel and
+  // zooms at the pointer, which is also what Ctrl+wheel means on a mouse. preventDefault is
+  // required for the ctrl case or the browser page-zooms instead.
+  canvasWrap.addEventListener("wheel",function(ev){
+    ev.preventDefault();
+    if(ev.ctrlKey||ev.metaKey){
+      var r=canvasWrap.getBoundingClientRect();
+      zoomAt(ev.clientX-r.left, ev.clientY-r.top, Math.pow(0.99, ev.deltaY));
+      return;
+    }
+    if(ev.shiftKey){ view.tx-=(ev.deltaX||ev.deltaY); }
+    else { view.tx-=ev.deltaX; view.ty-=ev.deltaY; }
+    applyView();
+  },{passive:false});
+
+  // ============================ find on canvas ============================
+  // The catalogue modal has always had a search; the CANVAS had none, so on anything past a
+  // handful of nodes "where is amcl" meant reading every box. Matches the label, the
+  // package.node the file will spell, the namespace, and every interface name and type --
+  // finding a node by the topic it publishes is the question that actually gets asked.
+  var findQ="", findHits=[], findIdx=0;
+  function findMatches(){
+    var q=findQ.replace(/^\s+|\s+$/g,"").toLowerCase();
+    if(!q) return [];
+    var out=[];
+    project.nodes.forEach(function(n){
+      var hay=[n.label,(n.pkg||"")+"."+(n.node||""),n.namespace||""];
+      (n.ifaces||[]).forEach(function(f){ hay.push(f.name); hay.push(f.type||""); });
+      for(var i=0;i<hay.length;i++)
+        if(String(hay[i]).toLowerCase().indexOf(q)>=0){ out.push(n.id); return; }
+    });
+    return out;
+  }
+  function applyFind(){
+    findHits=findMatches();
+    if(findIdx>=findHits.length) findIdx=0;
+    var on=findHits.length>0, set={};
+    findHits.forEach(function(id){set[id]=1;});
+    [].slice.call(canvas.querySelectorAll(".node")).forEach(function(el){
+      var id=el.dataset.n;
+      el.classList.toggle("fdim", on&&!set[id]);
+      el.classList.toggle("fhit", on&&!!set[id]);
+      el.classList.toggle("fcur", on&&findHits[findIdx]===id);
+    });
+    var c=document.getElementById("findCount");
+    if(c) c.textContent=findQ.replace(/^\s+|\s+$/g,"")
+      ? (on?(findIdx+1)+"/"+findHits.length:"0/0") : "";
+    var p=document.getElementById("findPrev"), n2=document.getElementById("findNext");
+    if(p) p.disabled=!on; if(n2) n2.disabled=!on;
+  }
+  function findStep(delta){
+    if(!findHits.length) return;
+    findIdx=(findIdx+delta+findHits.length)%findHits.length;
+    applyFind(); centreOn(findHits[findIdx]);
+  }
+
+  // ============================ auto layout ============================
+  // Layered (Sugiyama-style), not force-directed: this graph is a directed dataflow, and a
+  // reader's question is "what feeds what", which a left-to-right layering answers and a
+  // force layout scrambles. Pure JS, no library -- the page is offline and self-contained.
+  //
+  // Sizes are MEASURED off the rendered nodes rather than estimated: a node's height is its
+  // interface count, which varies by an order of magnitude across a real system, and stacking
+  // by a guessed height is how a layout ends up with boxes on top of each other.
+  function nodeBox(id){
+    var el=canvas.querySelector('.node[data-n="'+STUDIO.cssEsc(id)+'"]');
+    if(el&&el.offsetWidth) return {w:el.offsetWidth,h:el.offsetHeight};
+    var n=nodeById(id);
+    return {w:200,h:56+22*((n&&n.ifaces&&n.ifaces.length)||0)};
+  }
+  function layeredPositions(){
+    var ids=project.nodes.map(function(n){return n.id;});
+    var idx={}; ids.forEach(function(id,i){idx[id]=i;});
+    var succ={}, pred={}, degree={};
+    ids.forEach(function(id){succ[id]=[];pred[id]=[];degree[id]=0;});
+    project.connections.forEach(function(c){
+      var a=c.from.n, b=c.to.n;
+      if(!(a in succ)||!(b in succ)||a===b) return;
+      succ[a].push(b); pred[b].push(a); degree[a]++; degree[b]++;
+    });
+    // Break cycles by DFS: an edge back to a vertex still on the stack is a back edge and is
+    // ignored for LAYERING only (it is still drawn). A ROS graph has feedback loops -- a
+    // controller subscribing to what it ultimately drives -- so a layering that refuses to
+    // handle one would refuse most real systems.
+    var colour={}, keep={};
+    ids.forEach(function(id){colour[id]=0;});
+    ids.forEach(function(root){
+      if(colour[root]!==0) return;
+      var stack=[{id:root,i:0}]; colour[root]=1;
+      while(stack.length){
+        var top=stack[stack.length-1];
+        if(top.i>=succ[top.id].length){ colour[top.id]=2; stack.pop(); continue; }
+        var nx=succ[top.id][top.i++];
+        if(colour[nx]===1) continue;                 // back edge -> dropped from the DAG
+        keep[top.id+""+nx]=1;
+        if(colour[nx]===0){ colour[nx]=1; stack.push({id:nx,i:0}); }
+      }
+    });
+    var dagSucc={}, indeg={};
+    ids.forEach(function(id){dagSucc[id]=[];indeg[id]=0;});
+    ids.forEach(function(a){
+      succ[a].forEach(function(b){
+        if(!keep[a+""+b]) return;
+        dagSucc[a].push(b); indeg[b]++;
+      });
+    });
+    // longest-path layering over the acyclic subgraph (Kahn, keeping the input order stable)
+    var layer={}, queue=[];
+    ids.forEach(function(id){ layer[id]=0; if(!indeg[id]) queue.push(id); });
+    var seen=0;
+    while(queue.length){
+      var v=queue.shift(); seen++;
+      dagSucc[v].forEach(function(w){
+        if(layer[w]<layer[v]+1) layer[w]=layer[v]+1;
+        if(--indeg[w]===0) queue.push(w);
+      });
+    }
+    // Isolated nodes get their own trailing column: mixed into layer 0 they pad out the
+    // sources and hide where the graph actually starts.
+    var maxL=0; ids.forEach(function(id){ if(degree[id]&&layer[id]>maxL) maxL=layer[id]; });
+    ids.forEach(function(id){ if(!degree[id]) layer[id]=maxL+1; });
+
+    var layers=[];
+    ids.forEach(function(id){ (layers[layer[id]]=layers[layer[id]]||[]).push(id); });
+    for(var i=0;i<layers.length;i++) layers[i]=layers[i]||[];
+    // Barycentre ordering, four sweeps. Crossings are what makes a layered drawing readable
+    // or not, and the median/barycentre heuristic removes most of them for a few lines.
+    var order={};
+    layers.forEach(function(row){ row.forEach(function(id,i){ order[id]=i; }); });
+    function sweep(useSucc){
+      var seq=useSucc?layers.slice().reverse():layers;
+      seq.forEach(function(row){
+        var bary={};
+        row.forEach(function(id,i){
+          var nb=(useSucc?succ[id]:pred[id]).filter(function(o){return order[o]!=null;});
+          var s=0;
+          nb.forEach(function(o){ s+=order[o]; });
+          bary[id]=nb.length?s/nb.length:order[id];
+        });
+        row.sort(function(a,b){ return (bary[a]-bary[b])||(idx[a]-idx[b]); });
+        row.forEach(function(id,i){ order[id]=i; });
+      });
+    }
+    for(var s2=0;s2<2;s2++){ sweep(false); sweep(true); }
+
+    var GAPX=110, GAPY=30, X0=60, Y0=60, pos={}, colX=X0, heights=[];
+    layers.forEach(function(row){
+      var h=0;
+      row.forEach(function(id,i){ h+=nodeBox(id).h+(i?GAPY:0); });
+      heights.push(h);
+    });
+    var tallest=0; heights.forEach(function(h){ if(h>tallest) tallest=h; });
+    layers.forEach(function(row,li){
+      var wmax=0;
+      row.forEach(function(id){ wmax=Math.max(wmax,nodeBox(id).w); });
+      var y=Y0+(tallest-heights[li])/2;
+      row.forEach(function(id){
+        var b=nodeBox(id);
+        pos[id]={x:Math.round(colX+(wmax-b.w)/2), y:Math.round(y)};
+        y+=b.h+GAPY;
+      });
+      colX+=wmax+GAPX;
+    });
+    return pos;
+  }
+  function autoLayout(){
+    var pos=layeredPositions();
+    pushUndo();          // node x/y live in project.json, so a layout is an undoable EDIT
+    project.nodes.forEach(function(n){
+      var p=pos[n.id];
+      if(p){ n.x=p.x; n.y=p.y; }
+    });
+    render(); fitView();
+  }
 
   // ============================ qos editing ============================
   // QoS was seeded by parse_ros2 and emitted by _emit_qos long before it was editable, so a
@@ -1736,6 +2038,212 @@ var DATA = /*__DATA__*/null;
     });
     return o;
   }
+  // ---- "what changed since the seed" -------------------------------------------------
+  // The companion embeds the SEED's fact tree (DATA.seedFacts, built by source_facts() from
+  // the .rossystem the project was seeded from). This side rebuilds the AFTER tree from the
+  // live project and diffs the two, so the answer is live while the author edits and needs no
+  // network. projectFacts/diffFacts/formatDiff mirror project_facts()/diff_facts()/
+  // format_diff() in ros_studio.py and are held to them by tests/studio_parity.js -- the same
+  // discipline as genSystem(), for the same reason: a preview that drifts lies about the model.
+  //
+  // A TEXT diff is not offered on purpose. The emitter fixes key order, quotes every EString
+  // and sorts each node's interfaces, so a round-trip that changed nothing still rewrites most
+  // lines; only the fact tree can tell an edit from a reformat.
+  function factStr(v){ return v==null?"":String(v); }
+  // one layer of the emitter's own quoting, undone -- the seed side was read back through a
+  // YAML composer that had already resolved the quote style and the \\ / \" escapes.
+  function unquoteEmitted(s){
+    s=String(s);
+    if(s.length>=2&&s.charAt(0)===s.charAt(s.length-1)&&(s.charAt(0)==='"'||s.charAt(0)==="'")){
+      var inner=s.slice(1,-1);
+      // NUL as the placeholder, never a space: a value that legitimately contains spaces
+      // would otherwise come back with every one of them turned into a backslash.
+      if(s.charAt(0)==='"')
+        return inner.replace(/\\\\/g,"\u0000").replace(/\\"/g,'"').replace(/\u0000/g,"\\");
+      return inner;
+    }
+    return s;
+  }
+  function paramFact(ptype,value){
+    return (ptype||"String")+" = "+unquoteEmitted(fmtParamValue(ptype,value));
+  }
+  // a qos: block as one line, in QOS_PINNED order -- the order _emit_qos writes it, so the
+  // parsed and the predicted forms agree.
+  function qosFact(qos){
+    if(!qos) return "";
+    var out=[];
+    (QOS.fields||[]).forEach(function(k){
+      var v=qos[k];
+      if(v==null||v==="") return;
+      out.push(k+"="+v);
+    });
+    return out.join("; ");
+  }
+  function ifaceFactKey(kind,name){ return kind+" "+name; }
+  function projectFacts(){
+    var labels=exposureLabels();
+    var facts={system:{name:factStr(document.getElementById("sysname").value||"system"),
+                       fromFile:factStr(project.system&&project.system.fromFile)},
+               subSystems:(project.subSystems||[]).map(function(s){return factStr(s.ref);}),
+               nodes:{}, connections:[], packages:{}, types:{}};
+    project.nodes.forEach(function(n){
+      if(n.backing==="sub") return;      // the subSystems: block provides it (RM090)
+      var rec={from:n.pkg+"."+n.node,
+               namespace:factStr(String(n.namespace==null?"":n.namespace).replace(/^\s+|\s+$/g,"")),
+               exposures:{}, parameters:{}};
+      (n.ifaces||[]).forEach(function(f){
+        var lbl=labels[n.id+"/"+f.id];
+        if(lbl==null) return;
+        rec.exposures[lbl]=f.kind+"-> "+(n.artifact||"")+"::"+f.name;
+      });
+      facts.nodes[n.label]=rec;
+    });
+    project.connections.forEach(function(c){
+      var fl=labels[c.from.n+"/"+c.from.i], tl=labels[c.to.n+"/"+c.to.i];
+      if(fl&&tl) facts.connections.push(fl+" -> "+tl);
+    });
+    var hp=handPkgNodes();
+    hp.order.forEach(function(pkg){
+      var entry=(project.packages||{})[pkg]||{};
+      var pentry={fromGitRepo:factStr(entry.fromGitRepo), artifacts:{}};
+      facts.packages[pkg]=pentry;
+      hp.by[pkg].forEach(function(n){
+        var arec={node:factStr(n.node), interfaces:{}, qos:{}, parameters:{}};
+        (n.ifaces||[]).forEach(function(f){
+          var key=ifaceFactKey(f.kind,f.name);
+          // the placeholder emit_ros2 writes for a type-less interface: the file spells it,
+          // so the fact tree has to as well.
+          arec.interfaces[key]=factStr(f.type||"TODO_pkg/msg/Type");
+          var q=qosFact(f.qos);
+          if(q) arec.qos[key]=q;
+        });
+        (n.params||[]).forEach(function(p){
+          arec.parameters[p.name]=paramFact(p.ptype,p.value);
+        });
+        pentry.artifacts[factStr(n.artifact)]=arec;
+      });
+    });
+    var ct=companionTypes();
+    Object.keys(ct).forEach(function(pkg){
+      Object.keys(ct[pkg]).forEach(function(block){
+        Object.keys(ct[pkg][block]).forEach(function(name){
+          var key=pkg+"/"+ROSSEG[block]+"/"+name, o={};
+          var fields=((project.types||{})[key]||{}).fields||{};
+          (ROS.bodies[block]||[]).forEach(function(body){
+            o[body]=(fields[body]||[]).filter(function(f){
+              return String(f.type==null?"":f.type).replace(/^\s+|\s+$/g,"")
+                  && String(f.name==null?"":f.name).replace(/^\s+|\s+$/g,"");
+            }).map(function(f){
+              return String(f.type).replace(/^\s+|\s+$/g,"")+" "
+                   + String(f.name).replace(/^\s+|\s+$/g,"");
+            });
+          });
+          facts.types[key]=o;
+        });
+      });
+    });
+    return facts;
+  }
+
+  var FACT_SECTIONS=["system","subSystems","nodes","connections","packages","types"];
+  var FACT_MISSING={};
+  function isFactObj(v){ return v!==null&&typeof v==="object"&&!(v instanceof Array); }
+  function factSummary(value){
+    if(isFactObj(value)){
+      var parts=[];
+      Object.keys(value).sort().forEach(function(k){
+        var v=value[k];
+        if(isFactObj(v)){ if(Object.keys(v).length) parts.push(k+": "+Object.keys(v).length); }
+        else if(v instanceof Array){ if(v.length) parts.push(k+": "+v.length); }
+        else if(v!=="") parts.push(k+"="+v);
+      });
+      return parts.join("; ")||"(empty)";
+    }
+    if(value instanceof Array) return value.length+" item(s)";
+    return String(value);
+  }
+  function diffWalk(path,before,after,out){
+    if(before===FACT_MISSING&&after===FACT_MISSING) return;
+    if(before===FACT_MISSING){ out.push({op:"added",path:path,before:"",after:factSummary(after)}); return; }
+    if(after===FACT_MISSING){ out.push({op:"removed",path:path,before:factSummary(before),after:""}); return; }
+    if(isFactObj(before)&&isFactObj(after)){
+      var keys={};
+      Object.keys(before).forEach(function(k){keys[k]=1;});
+      Object.keys(after).forEach(function(k){keys[k]=1;});
+      Object.keys(keys).sort().forEach(function(k){
+        diffWalk(path?path+"."+k:k,
+                 Object.prototype.hasOwnProperty.call(before,k)?before[k]:FACT_MISSING,
+                 Object.prototype.hasOwnProperty.call(after,k)?after[k]:FACT_MISSING,out);
+      });
+      return;
+    }
+    if((before instanceof Array)&&(after instanceof Array)){
+      // multiset + an order check: `connections` has no key of its own (the label pair IS its
+      // identity) and a message body's field list is ordered but not unique, so neither can be
+      // walked by index without reporting one insertion as a rewrite of every line after it.
+      var rest=after.slice(), i;
+      before.forEach(function(item){
+        var at=rest.indexOf(item);
+        if(at>=0) rest.splice(at,1);
+        else out.push({op:"removed",path:path,before:item,after:""});
+      });
+      var left=before.slice();
+      after.forEach(function(item){
+        var at=left.indexOf(item);
+        if(at>=0) left.splice(at,1);
+        else out.push({op:"added",path:path,before:"",after:item});
+      });
+      if(before.join("\u0000")!==after.join("\u0000")
+         && before.slice().sort().join("\u0000")===after.slice().sort().join("\u0000"))
+        out.push({op:"reordered",path:path,before:before.length+" item(s)",
+                  after:"same, different order"});
+      return;
+    }
+    if(before!==after)
+      out.push({op:"changed",path:path,before:factSummary(before),after:factSummary(after)});
+  }
+  function diffFacts(before,after){
+    var out=[];
+    FACT_SECTIONS.forEach(function(sec){
+      diffWalk(sec,
+               Object.prototype.hasOwnProperty.call(before,sec)?before[sec]:FACT_MISSING,
+               Object.prototype.hasOwnProperty.call(after,sec)?after[sec]:FACT_MISSING,out);
+    });
+    return out;
+  }
+  var DIFF_OP_MARK={added:"+",removed:"-",changed:"~",reordered:"%"};
+  function diffShow(s){ return s===""?"(none)":s; }
+  function padTo(s,w){ s=String(s); while(s.length<w) s+=" "; return s; }
+  function formatDiff(records){
+    if(!records.length) return "no model-level change since the seed.";
+    var width=0;
+    records.forEach(function(r){ if(r.path.length>width) width=r.path.length; });
+    if(width>46) width=46;
+    var lines=[], section=null, counts={};
+    records.forEach(function(r){
+      var sec=r.path.split(".")[0];
+      if(sec!==section){ section=sec; lines.push("  "+sec); }
+      var detail=r.op==="added"?r.after
+                :(r.op==="removed"?r.before:(diffShow(r.before)+" -> "+diffShow(r.after)));
+      lines.push("    "+DIFF_OP_MARK[r.op]+" "+padTo(r.path,width)+"  "+detail);
+      counts[r.op]=(counts[r.op]||0)+1;
+    });
+    var tail=Object.keys(counts).sort().map(function(k){return counts[k]+" "+k;}).join(", ");
+    lines.push("");
+    lines.push("  "+records.length+" change(s): "+tail);
+    return lines.join("\n");
+  }
+  function seedDiffText(){
+    if(!DATA.seedFacts)
+      return (DATA.seedNote||"no seed source recorded.")
+        + "\n\nRun the companion's `ros_studio.py diff project.json --against FILE.rossystem` "
+        + "to compare against a file of your choosing.";
+    var head="seed: "+(DATA.seedFrom||[]).join(", ")
+      +(DATA.seedMerged?"  (merged — the label uniquifier is replayed on the seed side)":"")
+      +"\n\n";
+    return head+formatDiff(diffFacts(DATA.seedFacts,projectFacts()));
+  }
+
   function genProjectJson(){
     project.system=project.system||{}; project.system.name=document.getElementById("sysname").value;
     return JSON.stringify(project,null,2);
@@ -1744,7 +2252,10 @@ var DATA = /*__DATA__*/null;
   document.getElementById("commit").onclick=function(){commitScrim.classList.add("on");document.getElementById("copyBox").value=genProjectJson();showGen("system");};
   function showGen(tab){
     var tabs=[["system",".rossystem"],["ros2",".ros2 (per package)"],
-              ["ros",".ros (message types)"],["json","project.json"]];
+              ["ros",".ros (message types)"],["json","project.json"],
+              // last on purpose: the first four answer "what will be written", this one
+              // answers "what did I change", which is the question you ask on the way out.
+              ["diff","changed since the seed"]];
     var tb=document.getElementById("genTabs"); tb.innerHTML="";
     tabs.forEach(function(t){var bt=document.createElement("button");bt.textContent=t[1];bt.className=t[0]===tab?"on":"";bt.onclick=function(){showGen(t[0]);};tb.appendChild(bt);});
     var out="";
@@ -1762,6 +2273,7 @@ var DATA = /*__DATA__*/null;
         : "(every type this project references resolves in the vendored catalogue — no "
           +"companion .ros is generated)";
     }
+    else if(tab==="diff") out=seedDiffText();
     else out=genProjectJson();
     document.getElementById("genOut").textContent=out;
   }
@@ -1790,9 +2302,28 @@ var DATA = /*__DATA__*/null;
   levelSeg.querySelectorAll("button").forEach(function(b){b.onclick=function(){level=+b.dataset.lvl;setLevelButtons();render();};});
   function setLevelButtons(){levelSeg.querySelectorAll("button").forEach(function(x){x.classList.toggle("on",+x.dataset.lvl===level);});}
 
+  // ============================ canvas controls ============================
+  document.getElementById("autoLayout").onclick=autoLayout;
+  document.getElementById("zFit").onclick=fitView;
+  document.getElementById("zIn").onclick=function(){zoomCentre(1.25);};
+  document.getElementById("zOut").onclick=function(){zoomCentre(1/1.25);};
+  // 100% keeps what you are looking at, at actual size -- resetting the pan as well would
+  // throw away the one thing the author had just navigated to.
+  document.getElementById("zOne").onclick=function(){zoomCentre(1/view.k);};
+  var findBox=document.getElementById("findBox");
+  findBox.oninput=function(e){ findQ=e.target.value; findIdx=0; applyFind();
+    if(findHits.length) centreOn(findHits[0]); };
+  findBox.onkeydown=function(e){
+    if(e.key==="Enter"){ e.preventDefault(); findStep(e.shiftKey?-1:1); }
+    if(e.key==="Escape"){ e.preventDefault(); findBox.value=""; findQ=""; findIdx=0;
+      applyFind(); findBox.blur(); }
+  };
+  document.getElementById("findPrev").onclick=function(){findStep(-1);};
+  document.getElementById("findNext").onclick=function(){findStep(1);};
+
   // ============================ misc ============================
   STUDIO.wireTheme(document.getElementById("theme"));
-  document.getElementById("reset").onclick=function(){pushUndo();HOME.forEach(function(h){var n=nodeById(h.id);if(n){n.x=h.x;n.y=h.y;}});render();};
+  document.getElementById("reset").onclick=function(){pushUndo();HOME.forEach(function(h){var n=nodeById(h.id);if(n){n.x=h.x;n.y=h.y;}});render();fitView();};
   document.getElementById("sysname").oninput=function(e){pushUndo("sysname");project.system=project.system||{};project.system.name=e.target.value;};
   document.getElementById("undoBtn").onclick=undo;
   document.getElementById("redoBtn").onclick=redo;
@@ -1811,7 +2342,16 @@ var DATA = /*__DATA__*/null;
         if(k==="y"||e.shiftKey) redo(); else undo();
         return;
       }
+      if(k==="f"){ e.preventDefault(); findBox.focus(); findBox.select(); return; }
     }
+    // viewport keys, only when the caret is not in a field
+    if(!typing&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
+      if(e.key==="f"||e.key==="F"){ e.preventDefault(); fitView(); return; }
+      if(e.key==="0"){ e.preventDefault(); zoomCentre(1/view.k); return; }
+      if(e.key==="+"||e.key==="="){ e.preventDefault(); zoomCentre(1.25); return; }
+      if(e.key==="-"||e.key==="_"){ e.preventDefault(); zoomCentre(1/1.25); return; }
+    }
+    if(e.key==="Escape"&&findQ){ findBox.value=""; findQ=""; findIdx=0; applyFind(); return; }
     if(e.key==="Escape"){[].slice.call(document.querySelectorAll(".scrim.on:not([data-locked])")).forEach(function(s){s.classList.remove("on");});selNode=null;selEdge=null;render();fillInspector();}
     if(mode==="view" && e.key>="1" && e.key<="4" && !typing){level=+e.key;setLevelButtons();render();}
     if((e.key==="Delete"||e.key==="Backspace")&&mode==="edit"&&selNode&&!typing){
@@ -1858,6 +2398,15 @@ var DATA = /*__DATA__*/null;
   render();
   fillInspector();      // the idle inspector is the SYSTEM panel (fromFile, fromGitRepo), not
   updateHistoryUI();    // a placeholder, so it has to be painted before anything is selected
+  // Open at 100% when the system fits, and only zoom OUT when it does not: a three-node
+  // project blown up to fill the viewport looks like a rendering bug, and the author's mental
+  // model of "actual size" is the one the drag handles work in.
+  (function(){
+    var b=contentBox(), pad=44, W=canvasWrap.clientWidth, H=canvasWrap.clientHeight;
+    if(W<=0||H<=0) return;
+    if(b.w+2*pad<=W&&b.h+2*pad<=H){ view.k=1; view.tx=pad-b.x; view.ty=pad-b.y; applyView(); }
+    else fitView();
+  })();
 })();
 </script>
 </body>

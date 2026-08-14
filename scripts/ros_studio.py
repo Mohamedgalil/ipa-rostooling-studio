@@ -23,12 +23,19 @@ language-server oracle (opt-in).
         (message/service/action types, package names, node catalogue) embedded so
         autocomplete works offline.
 
-    ros_studio.py generate project.json [--outdir DIR] [--oracle]
+    ros_studio.py generate project.json [--outdir DIR] [--oracle] [--diff]
         Deterministically emit .ros2 / .rossystem / companion .ros (reusing rosmodel_lint's
         vocabulary), then run rosmodel_lint over the result. With --oracle, stage catalogue
         dependencies (collect_deps) and run the real language server (ask_oracle). On a
         generation/lint ERROR, re-render the editor with the diagnostics injected onto the
-        offending nodes (written next to the project as <project>.error.html).
+        offending nodes (written next to the project as <project>.error.html). With --diff,
+        also print the model-level diff against the seed source (see below).
+
+    ros_studio.py diff project.json [--against FILE.rossystem] [--json]
+        What changed since the seed. Compares the GENERATED model against the .rossystem the
+        project was seeded from (project["seededFrom"]) at the MODEL level -- nodes,
+        exposures, connections, parameters, artifacts, message specs -- not as text, because
+        the emitter's fixed key order, quoting and sorting make a text diff unreadable.
 
 This SUPERSEDES /ros-plot for authoring; /ros-plot stays as the lightweight read-only path.
 """
@@ -41,6 +48,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -1927,6 +1935,412 @@ def generate_files(project):
 
 
 # ========================================================================================
+# Model-level diff against the seed
+#
+# project.json carries `seededFrom`, so "what have I changed since the source .rossystem"
+# is finally answerable -- and only became worth answering once the round-trip was lossless:
+# before that a diff was dominated by spurious deletions (7 of 10 connections on the
+# TurtleBot 3 example) and said nothing about the author's edits.
+#
+# A TEXT diff of the two files is unreadable and mostly false. The emitter fixes key order
+# (ROSSYSTEM_TOP_KEYS / ROSSYSTEM_NODE_KEYS, rule 25), quotes every EString, sorts a node's
+# interfaces by (kind, name) and its parameters by name, and re-places comments by the
+# documented policy -- so a round-trip that changed NOTHING still rewrites most lines.
+# Everything below instead reduces both sides to the SAME fact tree and diffs that:
+#
+#   {"system":      {"name","fromFile"},
+#    "subSystems":  [ref, ...],
+#    "nodes":       {label: {"from","namespace",
+#                            "exposures":  {exposureLabel: "kind-> artifact::name"},
+#                            "parameters": {label: value}}},
+#    "connections": ["fromLabel -> toLabel", ...],
+#    "packages":    {pkg: {"fromGitRepo",
+#                          "artifacts": {artifact: {"node",
+#                                                   "interfaces": {"kind name": type},
+#                                                   "qos":        {"kind name": "k=v; ..."},
+#                                                   "parameters": {name: "Type = default"}}}}},
+#    "types":       {"pkg/seg/Name": {body: ["type name", ...]}}}
+#
+# Two builders produce it. source_facts() reads FILES with the same parsers `init` seeds
+# from; project_facts() predicts what generation will write from the project alone. They are
+# meant to agree exactly -- `diff` cross-checks them and says so if they do not, and
+# tests/studio_parity.js holds project_facts() to source_facts(<generated>) on every fixture
+# as well as to the editor's own projectFacts().
+# ========================================================================================
+
+_FACT_SECTIONS = ("system", "subSystems", "nodes", "connections", "packages", "types")
+
+
+def _facts_tree():
+    return {"system": {"name": "", "fromFile": ""}, "subSystems": [], "nodes": {},
+            "connections": [], "packages": {}, "types": {}}
+
+
+def _fact_str(v):
+    """Every leaf of the tree is a STRING, so the two builders can never disagree about
+    None-vs-"" or 1-vs-"1" for a value both sides ultimately read back out of a text file."""
+    return "" if v is None else str(v)
+
+
+def _qos_fact(qos):
+    """A qos: block as one line, in the grammar's pinned field order (QOS_PINNED) -- the same
+    order _emit_qos writes, so the parsed and the predicted form agree."""
+    if not qos or not isinstance(qos, dict):
+        return ""
+    out = []
+    for key in L.QOS_PINNED:
+        val = qos.get(key)
+        if val in (None, ""):
+            continue
+        out.append("%s=%s" % (key, val))
+    return "; ".join(out)
+
+
+def _unquote_emitted(s):
+    """Undo one layer of the emitter's own quoting. The source side of the diff reads the
+    default back through the YAML composer, which has already resolved the quote style and the
+    \\\\ / \\" escapes _q_double writes, so the predicted side has to resolve them too or a
+    String parameter containing a quote reads as a change on every run."""
+    s = str(s)
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+        inner = s[1:-1]
+        return inner.replace("\\\\", "\x00").replace('\\"', '"').replace("\x00", "\\") \
+            if s[0] == '"' else inner
+    return s
+
+
+def _param_fact(ptype, value):
+    """`type` + `default` as one leaf, spelled the way the FILE spells it: the project side
+    runs _fmt_param_value (which quotes a String) and then unquotes, because the source side
+    reads through a parser that already did."""
+    return "%s = %s" % (ptype or "String",
+                        _unquote_emitted(_fmt_param_value(ptype, value)))
+
+
+def _iface_fact_key(kind, name):
+    return "%s %s" % (kind, name)
+
+
+def source_facts(path):
+    """Fact tree for an existing .rossystem plus the sibling .ros2/.ros files.
+
+    Read through ros_plot.extract_model / parse_ros2 / parse_ros -- exactly the parsers
+    seed_from_rossystem uses -- so a difference this reports is a model difference and never
+    a parser disagreement between the two sides of the diff.
+
+    Only the artifacts a node of THIS system actually resolves to are included: a stray .ros2
+    sitting in the directory contributes nothing to generation, so counting it would report a
+    removal the author never made. Same rule the seeder applies when it builds
+    project["packages"].
+    """
+    facts = _facts_tree()
+    model = ros_plot.extract_model(path, use_catalogue=True)
+    base_dir = os.path.dirname(os.path.abspath(path))
+
+    facts["system"] = {"name": _fact_str(model["systemName"]),
+                       "fromFile": _fact_str(model.get("fromFile"))}
+    facts["subSystems"] = [_fact_str(s["ref"]) for s in model.get("subSystems") or []]
+
+    ros2_index, pkg_git = {}, {}
+    seen = set()
+    for g in SEED_GLOBS:
+        for f in glob.glob(os.path.join(base_dir, g)):
+            f = os.path.abspath(f)
+            if f in seen:
+                continue
+            seen.add(f)
+            idx, git = parse_ros2(f)
+            ros2_index.update(idx)
+            pkg_git.update(git)
+
+    ros_types = {}
+    for g in SEED_ROS_GLOBS:
+        for f in sorted(glob.glob(os.path.join(base_dir, g))):
+            found, _extras = parse_ros(os.path.abspath(f))
+            ros_types.update(found)
+    # A package the vendored catalogue owns is neither side's to change (redeclaring one is
+    # RM009 and the seeder refuses to carry it), so it is excluded from BOTH sides rather than
+    # reported as a wholesale deletion the author cannot act on.
+    ros_types, _catalogued = _drop_catalogued_types(ros_types)
+    for key, spec in ros_types.items():
+        facts["types"][key] = {body: ["%s %s" % (f.get("type"), f.get("name"))
+                                      for f in fields]
+                               for body, fields in (spec.get("fields") or {}).items()}
+
+    for mn in model["nodes"]:
+        artifact = None
+        for i in mn["interfaces"]:
+            if i.get("artifact"):
+                artifact = i["artifact"]
+                break
+        rec = {"from": _fact_str(mn.get("from")),
+               "namespace": _fact_str(mn.get("namespace")),
+               "exposures": {}, "parameters": {}}
+        for i in mn["interfaces"]:
+            rec["exposures"][i["label"]] = "%s-> %s" % (i.get("rawKind") or i["kind"],
+                                                        _fact_str(i.get("target")))
+        for p in mn.get("params") or []:
+            rec["parameters"][p["label"]] = _fact_str(p.get("value"))
+        facts["nodes"][mn["label"]] = rec
+
+        pkg, node_name = mn.get("package"), mn.get("nodeName")
+        art = None
+        if pkg and node_name:
+            art = ros2_index.get((pkg, node_name)) or (
+                ros2_index.get((pkg, artifact)) if artifact else None)
+        if art is None:
+            continue                      # catalogue-backed or unresolved: writes no .ros2
+        pentry = facts["packages"].setdefault(
+            art["package"], {"fromGitRepo": _fact_str(pkg_git.get(art["package"])),
+                             "artifacts": {}})
+        arec = {"node": _fact_str(art["node"]), "interfaces": {}, "qos": {},
+                "parameters": {}}
+        for f in art["interfaces"]:
+            key = _iface_fact_key(f["kind"], f["name"])
+            arec["interfaces"][key] = _fact_str(f.get("type"))
+            q = _qos_fact(f.get("qos"))
+            if q:
+                arec["qos"][key] = q
+        for p in art["params"]:
+            arec["parameters"][p["name"]] = _param_fact(p.get("ptype"), p.get("value"))
+        pentry["artifacts"][art["artifact"]] = arec
+
+    for e in model["edges"]:
+        facts["connections"].append("%s -> %s" % (e["fromLabel"], e["toLabel"]))
+    return facts
+
+
+def project_facts(project):
+    """The same fact tree, predicted from the project WITHOUT writing anything.
+
+    This is the "after" side the editor previews, so it must describe what generation actually
+    writes rather than what the project happens to hold. Three things are dropped on purpose,
+    each mirroring an emitter rule:
+      * a `backing == "sub"` node is provided by the subSystems: block, so emit_rossystem does
+        not re-declare it (RM090);
+      * a node-level `parameters:` block has no slot in the project at all, so nothing is
+        emitted for it -- which is exactly the loss the diff exists to make visible;
+      * only a hand-authored node's package produces a .ros2, and only a locally invented type
+        produces a .ros.
+    """
+    facts = _facts_tree()
+    facts["system"] = {"name": _fact_str(project["system"].get("name") or "system"),
+                       "fromFile": _fact_str(project["system"].get("fromFile"))}
+    facts["subSystems"] = [_fact_str(s["ref"]) for s in project.get("subSystems") or []]
+
+    labels = _exposure_labels(project)
+    for n in project["nodes"]:
+        if n.get("backing") == "sub":
+            continue
+        rec = {"from": "%s.%s" % (n["pkg"], n["node"]),
+               "namespace": _fact_str((n.get("namespace") or "").strip()),
+               "exposures": {}, "parameters": {}}
+        for f in n["ifaces"]:
+            lbl = labels.get((n["id"], f["id"]))
+            if lbl is None:
+                continue
+            rec["exposures"][lbl] = "%s-> %s::%s" % (f["kind"], n.get("artifact") or "",
+                                                     f["name"])
+        facts["nodes"][n["label"]] = rec
+
+    for c in project["connections"]:
+        fl = labels.get((c["from"]["n"], c["from"]["i"]))
+        tl = labels.get((c["to"]["n"], c["to"]["i"]))
+        if fl and tl:
+            facts["connections"].append("%s -> %s" % (fl, tl))
+
+    by_pkg = {}
+    for n in project["nodes"]:
+        if n["backing"] == "hand" and n["pkg"]:
+            by_pkg.setdefault(n["pkg"], []).append(n)
+    for pkg, recs in by_pkg.items():
+        entry = project.get("packages", {}).get(pkg) or {}
+        pentry = facts["packages"].setdefault(
+            pkg, {"fromGitRepo": _fact_str(entry.get("fromGitRepo")), "artifacts": {}})
+        for n in recs:
+            arec = {"node": _fact_str(n["node"]), "interfaces": {}, "qos": {},
+                    "parameters": {}}
+            for f in n["ifaces"]:
+                key = _iface_fact_key(f["kind"], f["name"])
+                # the placeholder emit_ros2 writes for a type-less interface: the file will
+                # spell it, so the fact tree has to as well.
+                arec["interfaces"][key] = _fact_str(f.get("type") or "TODO_pkg/msg/Type")
+                q = _qos_fact(f.get("qos"))
+                if q:
+                    arec["qos"][key] = q
+            for p in n.get("params") or []:
+                arec["parameters"][p["name"]] = _param_fact(p.get("ptype"), p.get("value"))
+            pentry["artifacts"][_fact_str(n.get("artifact"))] = arec
+
+    for pkg, blocks in _companion_types(project).items():
+        seg_of = ROS_BLOCK_TO_TYPE_SEG
+        for block, name in blocks:
+            key = "%s/%s/%s" % (pkg, seg_of[block], name)
+            fields = ((project.get("types") or {}).get(key) or {}).get("fields") or {}
+            facts["types"][key] = {
+                body: ["%s %s" % (str(f.get("type") or "").strip(),
+                                  str(f.get("name") or "").strip())
+                       for f in (fields.get(body) or [])
+                       if str(f.get("type") or "").strip()
+                       and str(f.get("name") or "").strip()]
+                for body in L.ROS_SPEC_BODIES[block]}
+    return facts
+
+
+_FACT_MISSING = object()
+
+
+def _fact_summary(value):
+    """A one-line stand-in for a whole subtree, so an added or removed node reports as ONE
+    line instead of one per leaf underneath it."""
+    if isinstance(value, dict):
+        parts = []
+        for k in sorted(value):
+            v = value[k]
+            if isinstance(v, (dict, list)):
+                if v:                      # an empty sub-block is not news; omit it
+                    parts.append("%s: %d" % (k, len(v)))
+            elif v != "":
+                parts.append("%s=%s" % (k, v))
+        return "; ".join(parts) or "(empty)"
+    if isinstance(value, list):
+        return "%d item(s)" % len(value)
+    return str(value)
+
+
+def _diff_walk(path, before, after, out):
+    if before is _FACT_MISSING and after is _FACT_MISSING:
+        return
+    if before is _FACT_MISSING:
+        out.append({"op": "added", "path": path, "before": "", "after": _fact_summary(after)})
+        return
+    if after is _FACT_MISSING:
+        out.append({"op": "removed", "path": path, "before": _fact_summary(before),
+                    "after": ""})
+        return
+    if isinstance(before, dict) and isinstance(after, dict):
+        for k in sorted(set(before) | set(after)):
+            _diff_walk("%s.%s" % (path, k) if path else str(k),
+                       before.get(k, _FACT_MISSING), after.get(k, _FACT_MISSING), out)
+        return
+    if isinstance(before, list) and isinstance(after, list):
+        # A list is diffed as a MULTISET plus an order check. `connections` has no key of its
+        # own -- the label pair IS its identity -- and a message body's field list is ordered
+        # but its entries are not unique, so neither can be walked by index without reporting
+        # one insertion as a rewrite of every line after it.
+        b, a = list(before), list(after)
+        rest = list(a)
+        for item in b:
+            if item in rest:
+                rest.remove(item)
+            else:
+                out.append({"op": "removed", "path": path, "before": item, "after": ""})
+        left = list(b)
+        for item in a:
+            if item in left:
+                left.remove(item)
+            else:
+                out.append({"op": "added", "path": path, "before": "", "after": item})
+        if b != a and sorted(b) == sorted(a):
+            out.append({"op": "reordered", "path": path,
+                        "before": "%d item(s)" % len(b), "after": "same, different order"})
+        return
+    if before != after:
+        out.append({"op": "changed", "path": path, "before": _fact_summary(before),
+                    "after": _fact_summary(after)})
+
+
+def diff_facts(before, after):
+    """Ordered change records between two fact trees. Sections keep the tree's own order
+    (system, subSystems, nodes, connections, packages, types) so the report reads top-down
+    the way the file does."""
+    out = []
+    for sec in _FACT_SECTIONS:
+        _diff_walk(sec, before.get(sec, _FACT_MISSING), after.get(sec, _FACT_MISSING), out)
+    return out
+
+
+_DIFF_OP_MARK = {"added": "+", "removed": "-", "changed": "~", "reordered": "%"}
+
+
+def _diff_show(s):
+    """An absent value is spelled, not left blank: "namespace  -> /robot1" reads as if the
+    arrow were part of the value."""
+    return "(none)" if s == "" else s
+
+
+def format_diff(records):
+    """Render change records as text. Mirrored BYTE-FOR-BYTE by the editor's diffText() so the
+    "changed since the seed" tab and the companion's report cannot tell two stories."""
+    if not records:
+        return "no model-level change since the seed."
+    width = 0
+    for r in records:
+        width = max(width, len(r["path"]))
+    width = min(width, 46)
+    lines, section = [], None
+    for r in records:
+        sec = r["path"].split(".")[0]
+        if sec != section:
+            section = sec
+            lines.append("  " + sec)
+        detail = r["after"] if r["op"] == "added" else (
+            r["before"] if r["op"] == "removed"
+            else "%s -> %s" % (_diff_show(r["before"]), _diff_show(r["after"])))
+        lines.append("    %s %s  %s" % (_DIFF_OP_MARK[r["op"]], r["path"].ljust(width),
+                                        detail))
+    counts = {}
+    for r in records:
+        counts[r["op"]] = counts.get(r["op"], 0) + 1
+    tail = ", ".join("%d %s" % (counts[k], k) for k in sorted(counts))
+    lines.append("")
+    lines.append("  %d change(s): %s" % (len(records), tail))
+    return "\n".join(lines)
+
+
+def seed_sources(project):
+    """The .rossystem file(s) this project was seeded from, absolute, existing ones only."""
+    paths = project.get("seededFromAll") or (
+        [project["seededFrom"]] if project.get("seededFrom") else [])
+    return [p for p in paths if os.path.isfile(p)]
+
+
+def merged_source_facts(paths):
+    """One fact tree over several seed sources.
+
+    A merge is not a concatenation, because seed_from_many UNIQUIFIES a node label two sources
+    both declare (RM009). The rename is replayed here with the SAME rule and the same hint --
+    _unique_label(label, used, systemName), pass A of seed_from_many -- so a collision reads as
+    the rename it is instead of as a deletion plus an unrelated addition.
+
+    What is NOT replayed is pass B, the subSystems: shadow collapse: when one source is reached
+    through another's subSystems:, the merge keeps the real node and drops the reference. That
+    surfaces below as a subSystems removal, which is what the emitted file really says.
+    """
+    facts = _facts_tree()
+    used = set()
+    for i, p in enumerate(paths):
+        one = source_facts(p)
+        if i == 0:
+            facts["system"] = one["system"]
+        facts["subSystems"] += one["subSystems"]
+        facts["connections"] += one["connections"]
+        hint = one["system"].get("name") or os.path.basename(p)
+        for label, rec in one["nodes"].items():
+            merged_label = _unique_label(label, used, hint)
+            used.add(merged_label)
+            facts["nodes"].setdefault(merged_label, rec)
+        for pkg, entry in one["packages"].items():
+            tgt = facts["packages"].setdefault(pkg, {"fromGitRepo": entry["fromGitRepo"],
+                                                     "artifacts": {}})
+            for art, arec in entry["artifacts"].items():
+                tgt["artifacts"].setdefault(art, arec)
+        for key, spec in one["types"].items():
+            facts["types"].setdefault(key, spec)
+    return facts
+
+
+# ========================================================================================
 # Validation
 # ========================================================================================
 
@@ -2064,8 +2478,28 @@ def render_editor(project, diagnostics=None, banner=None):
     if diagnostics:
         project = dict(project)
         project["diagnostics"] = diagnostics
+    # The seed's fact tree travels WITH the page so the Commit modal can answer "what have I
+    # changed" offline: the editor rebuilds the after-side from the live project (projectFacts,
+    # the mirror of project_facts) and diffs against this. Absent when the project was created
+    # blank or the source has since moved -- the tab then says which, rather than showing an
+    # empty diff that would read as "nothing changed".
+    seeds = seed_sources(project)
+    recorded = project.get("seededFromAll") or (
+        [project["seededFrom"]] if project.get("seededFrom") else [])
+    seed_facts = merged_source_facts(seeds) if seeds else None
+    seed_note = None
+    if not recorded:
+        seed_note = "this project was not seeded from a .rossystem, so there is no source to " \
+                    "compare against."
+    elif not seeds:
+        seed_note = "the seed source is no longer where the project recorded it (%s)." \
+                    % ", ".join(recorded)
     payload = {
         "project": project,
+        "seedFacts": seed_facts,
+        "seedNote": seed_note,
+        "seedFrom": [os.path.basename(p) for p in (seeds or recorded)],
+        "seedMerged": len(seeds) > 1,
         "types": ac["types"],
         "typeFiles": ac.get("typeFiles", {}),
         "packages": ac["packages"],
@@ -2299,6 +2733,13 @@ def cmd_generate(args):
         print("\nERROR: re-rendered editor with diagnostics -> %s" % err_html)
         return 1
 
+    if getattr(args, "diff", False):
+        print("\n--- changed since the seed ---")
+        text, _records, notes = _diff_report(project)
+        print(text if text is not None else "  (nothing to diff against)")
+        for n in notes:
+            print("\n  note: %s" % n)
+
     if args.oracle:
         print("\n--- oracle (real language server) ---")
         # a staged subSystems: target is walked too -- it can carry catalogue references of its
@@ -2308,6 +2749,78 @@ def cmd_generate(args):
         if not ok:
             print("oracle did NOT return a clean ACCEPTED.", file=sys.stderr)
             return 1
+    return 0
+
+
+def _generated_facts(project):
+    """The fact tree of what generation ACTUALLY writes: emit into a temp directory and read
+    it back with source_facts(). Deliberately not project_facts() -- that one predicts, this
+    one observes, and `diff` compares the two so an emitter that starts dropping something the
+    project holds is reported instead of cancelling out on both sides of the diff."""
+    work = tempfile.mkdtemp(prefix="ros-studio-diff-")
+    try:
+        files = generate_files(project)
+        for rel, content in files.items():
+            with open(os.path.join(work, rel), "w", encoding="utf-8",
+                      newline="\n") as handle:
+                handle.write(content)
+        sysfile = project["system"].get("name", "system") + ".rossystem"
+        return source_facts(os.path.join(work, sysfile))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _diff_report(project, against=None):
+    """(text, records, notes). `against` overrides the recorded seed source(s)."""
+    notes = []
+    if against:
+        sources = [os.path.abspath(against)]
+        if not os.path.isfile(sources[0]):
+            return None, None, ["no such file: %s" % sources[0]]
+    else:
+        sources = seed_sources(project)
+        recorded = project.get("seededFromAll") or (
+            [project["seededFrom"]] if project.get("seededFrom") else [])
+        for p in recorded:
+            if not os.path.isfile(p):
+                notes.append("seed source has moved or been deleted: %s" % p)
+        if not sources:
+            return None, None, (notes or ["this project records no seededFrom -- it was "
+                                          "created blank, so there is nothing to diff "
+                                          "against. Use --against FILE.rossystem."])
+    before = merged_source_facts(sources)
+    if len(sources) > 1:
+        notes.append("merged seed (%d sources): the label uniquifier is replayed on the seed "
+                     "side, but a subSystems: reference the merge collapsed reads below as a "
+                     "removal." % len(sources))
+    after = _generated_facts(project)
+    predicted = diff_facts(project_facts(project), after)
+    if predicted:
+        notes.append("project_facts() and the generated files disagree in %d place(s) — the "
+                     "editor's preview of this diff will differ from the report below. This "
+                     "is an emitter/predictor bug, not an edit: %s"
+                     % (len(predicted), "; ".join(r["path"] for r in predicted[:6])))
+    records = diff_facts(before, after)
+    return format_diff(records), records, notes
+
+
+def cmd_diff(args):
+    project = _load_project(args.project)
+    text, records, notes = _diff_report(project, args.against)
+    if text is None:
+        for n in notes:
+            print("ros_studio: %s" % n, file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"records": records, "notes": notes}, indent=2, ensure_ascii=False))
+        return 0
+    src = ", ".join(os.path.basename(p) for p in
+                    ([os.path.abspath(args.against)] if args.against
+                     else seed_sources(project)))
+    print("diff -- %s since %s\n" % (os.path.basename(args.project), src))
+    print(text)
+    for n in notes:
+        print("\n  note: %s" % n)
     return 0
 
 
@@ -2369,14 +2882,45 @@ def main(argv=None):
     p_gen.add_argument("project")
     p_gen.add_argument("--outdir", default=None)
     p_gen.add_argument("--oracle", action="store_true")
+    p_gen.add_argument("--diff", action="store_true",
+                       help="also print the model-level diff against the seed source")
     p_gen.set_defaults(func=cmd_generate)
+
+    p_diff = sub.add_parser("diff", help="model-level diff of the generated model against "
+                                         "the .rossystem the project was seeded from")
+    p_diff.add_argument("project")
+    p_diff.add_argument("--against", default=None,
+                        help="diff against this .rossystem instead of the recorded seed")
+    p_diff.add_argument("--json", action="store_true",
+                        help="emit the change records as JSON")
+    p_diff.set_defaults(func=cmd_diff)
 
     # convenience: `ros_studio.py --json project.json` dumps generated files without writing
     parser.add_argument("--json", metavar="PROJECT", default=None,
                         help="print generated files as JSON for PROJECT and exit")
+    # Parity hooks. tests/studio_parity.js holds the editor's projectFacts() to --facts and its
+    # "changed since the seed" tab to --preview-diff; `diff` itself reports whether --facts and
+    # the files `generate` actually writes agree.
+    parser.add_argument("--facts", metavar="PROJECT", default=None,
+                        help="print the project's fact tree as JSON and exit")
+    parser.add_argument("--preview-diff", metavar="PROJECT", dest="preview_diff", default=None,
+                        help="print the diff the EDITOR previews (predicted, not generated) "
+                             "and exit")
 
     args = parser.parse_args(argv)
-    if args.json:
+    if getattr(args, "facts", None) and not getattr(args, "cmd", None):
+        print(json.dumps(project_facts(_load_project(args.facts)), indent=2,
+                         ensure_ascii=False, sort_keys=True))
+        return 0
+    if getattr(args, "preview_diff", None) and not getattr(args, "cmd", None):
+        project = _load_project(args.preview_diff)
+        seeds = seed_sources(project)
+        if not seeds:
+            print("no seed source recorded.")
+            return 0
+        print(format_diff(diff_facts(merged_source_facts(seeds), project_facts(project))))
+        return 0
+    if args.json and not getattr(args, "cmd", None):
         project = _load_project(args.json)
         print(json.dumps(generate_files(project), indent=2, ensure_ascii=False))
         return 0
