@@ -140,6 +140,70 @@ def load_system_index():
     return _system_index_cache["value"]
 
 
+_bni_cache = {"loaded": False, "value": None}
+_local_system_cache = {}
+
+
+def _build_node_index_module():
+    """scripts/build_node_index.py, loaded BY PATH. It does `from rosmodel_lint import ...`, so
+    a top-level import here would be a cycle, and by-name would need scripts/ already on
+    sys.path. Returns None if it cannot be loaded; every caller degrades to "unresolved"."""
+    if not _bni_cache["loaded"]:
+        _bni_cache["loaded"] = True
+        try:
+            import importlib.util
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "build_node_index.py")
+            spec = importlib.util.spec_from_file_location("_rosmodel_build_node_index", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _bni_cache["value"] = module
+        except Exception:
+            _bni_cache["value"] = None
+    return _bni_cache["value"]
+
+
+def load_local_system(base_dir, ref):
+    """A `subSystems:` reference resolved against a .rossystem sitting NEXT TO the file being
+    linted, in the same record shape load_system_index() returns (plus "local": True).
+
+    Consulted only when the vendored catalogue has never heard of the name -- i.e. an ordinary
+    project-local system. Without it, every connections: endpoint such a subsystem provides
+    raises RM050 ("not a declared interface of system X"), which is this plugin's blind spot and
+    not a defect in the model: the real validator's scoping walks the Xtext resource set, not
+    assets/node_index.json. RM091 still fires, because "resolved by sitting next to you" is
+    weaker evidence than "catalogued", and the author should know which one they got.
+
+    The walk itself is build_node_index.extract_rossystem_system, so the code that BUILT the
+    catalogue and the code that reads a local file cannot disagree about what a subsystem
+    exposes (both read the referenced file's OWN interfaces: block, per checkIfInterfaceInSystem
+    -- RosSystemValidator.xtend:87-109)."""
+    key = (os.path.abspath(base_dir or "."), ref)
+    if key in _local_system_cache:
+        return _local_system_cache[key]
+    _local_system_cache[key] = None
+    bni = _build_node_index_module()
+    if bni is None or not HAVE_YAML:
+        return None
+    for cand in (ref, os.path.splitext(os.path.basename(ref))[0]):
+        path = os.path.join(base_dir or ".", cand + ".rossystem")
+        if not os.path.isfile(path):
+            continue
+        try:
+            root = bni.compose_yaml(path)
+            if root is None:
+                break
+            _name, nodes, nested = bni.extract_rossystem_system(root)
+        except Exception:
+            break
+        if nodes is None:
+            break
+        _local_system_cache[key] = {"file": os.path.basename(path), "nodes": nodes,
+                                    "hasOwnSubsystems": bool(nested), "local": True}
+        break
+    return _local_system_cache[key]
+
+
 class Finding(object):
     __slots__ = ("file", "line", "severity", "rule", "message", "hint")
 
@@ -1904,20 +1968,39 @@ class Linter(object):
         for ref, line in refs:
             entry = index.get(ref)
             if entry is None:
+                # a project-local target sitting next to this file resolves too. It is weaker
+                # evidence than the catalogue, so RM091 still fires -- but its interfaces are
+                # merged below, because otherwise every endpoint it provides raises RM050 and
+                # the plugin rejects a layout the real validator accepts.
+                entry = load_local_system(os.path.dirname(os.path.abspath(self.path)), ref)
+                if entry is None:
+                    self.warn(line, "RM091",
+                              "subSystems: '%s' does not resolve against "
+                              "assets/node_index.json's indexed systems, and no '%s.rossystem' "
+                              "sits next to this file." % (ref, ref),
+                              "Either it is a genuine project-local system kept elsewhere (fine, "
+                              "but then this plugin cannot verify what it exposes) or the name "
+                              "is wrong -- check the target file's own top-level key, not its "
+                              "filename.")
+                    continue
                 self.warn(line, "RM091",
-                          "subSystems: '%s' does not resolve against assets/node_index.json's "
-                          "indexed systems." % ref,
-                          "Either it is a genuine project-local system (fine, but then this "
-                          "plugin cannot verify what it exposes) or the name is wrong -- check "
-                          "the target file's own top-level key, not its filename.")
-                continue
+                          "subSystems: '%s' is not catalogued; resolved against the sibling "
+                          "file '%s' instead." % (ref, entry["file"]),
+                          "Its %d node(s) are treated as reachable, so connections: endpoints "
+                          "they declare are accepted. Nothing outside this directory can "
+                          "resolve the reference, though -- run /update-ros-catalog if the "
+                          "target belongs in assets/rosmodelscatalog/."
+                          % len(entry["nodes"]))
 
             # Same root as needed_node_files (assets/rosmodelscatalog/) -- a resolved
             # subSystems: target is itself a vendored file collect_deps.py needs to stage,
             # same as a resolved from:'s .ros2. Recorded even when the two branches below
             # flag the reference as risky or useless: staging it is still correct, and a
-            # future catalogue sync could add the interfaces this version lacks.
-            self.needed_node_files.add(entry["file"])
+            # future catalogue sync could add the interfaces this version lacks. A sibling
+            # file is NOT recorded: it is not under assets/ and collect_deps stages it by a
+            # different path (its own local-file pass).
+            if not entry.get("local"):
+                self.needed_node_files.add(entry["file"])
 
             if entry["hasOwnSubsystems"]:
                 self.warn(line, "RM091",

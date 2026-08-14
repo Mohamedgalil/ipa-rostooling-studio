@@ -1,0 +1,25 @@
+# probe_sub -- the round-trip witness for `subSystems:` reuse.
+#
+# The defect it pins: a connection endpoint that names an interface of a REUSED system is not a
+# node of this file, so the seeder used to resolve it to nothing and drop the connection --
+# silently, with `generate` still reporting "0 error(s)". Both connections below have exactly
+# one such endpoint, and neither is expressible any other way.
+#
+# It also carries the two subSystems: comment positions, one preserved and one dropped, so the
+# comment policy covers this block too.
+probe_sub:
+  fromFile: "probe_sub/launch/probe.launch.py"
+  subSystems: # DROPPED trailing on a block key -- the model has no slot for the key itself
+    # PRESERVED block above a subSystems: entry
+    "robot_base" # PRESERVED trailing on a subSystems: entry -- resolves to robot_base.rossystem
+  nodes:
+    "controller":
+      from: "sub_probe_ctrl.controller"
+      interfaces:
+        - "cmd_vel_pub": pub-> "controller::cmd_vel_out"
+        - "odom_sub": sub-> "controller::odom"
+  connections:
+    # the endpoint spelled "odom" is base_driver's, reached through subSystems: "robot_base" --
+    # the referenced file's own label, verbatim, with no re-suffixing step.
+    - [odom, odom_sub] # base_driver (subSystems:) -> controller : nav_msgs/msg/Odometry
+    - [cmd_vel_pub, cmd_vel] # controller -> base_driver (subSystems:) : geometry_msgs/msg/Twist

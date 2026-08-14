@@ -1,0 +1,18 @@
+# robot_base -- the TARGET half of the subSystems: reuse witness.
+#
+# probe_sub.rossystem next to this file reaches both of these interfaces through
+# `subSystems: "robot_base"`. A subsystem's connectable interfaces are exactly what its OWN
+# interfaces: block declares, never what the .ros2 behind from: declares
+# (checkIfInterfaceInSystem, RosSystemValidator.xtend:87-109) -- which is why they are spelled
+# out here rather than left to sub_probe_base.ros2.
+#
+# Also a fixture in its own right: studio_roundtrip.py runs every .rossystem in this directory,
+# so an ordinary system with no subSystems: of its own is checked on the same pass.
+robot_base:
+  fromFile: "robot_base/launch/base.launch.py"
+  nodes:
+    "base_driver":
+      from: "sub_probe_base.base_driver"
+      interfaces:
+        - "odom": pub-> "base_driver::odom"
+        - "cmd_vel": sub-> "base_driver::cmd_vel"

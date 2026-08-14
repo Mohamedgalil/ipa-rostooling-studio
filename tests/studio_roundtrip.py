@@ -12,8 +12,12 @@ failed to re-link and its connection was dropped -- silently, with `generate` st
 So the assertion here is not "it runs" or "it lints clean" -- a truncated model does both. It
 is that the set of NODES, EXPOSURES and CONNECTIONS survives the trip unchanged.
 
-Four checks per fixture:
-  ROUND-TRIP   seed -> generate preserves every node, exposure, namespace and connection.
+Five checks per fixture:
+  ROUND-TRIP   seed -> generate preserves every node, exposure, namespace, subSystems: entry and
+               connection. `subSystems:` is in that list because it re-opened the same wound: a
+               reused composition's nodes are not in this file's nodes: block, so every
+               connection endpoint that named one resolved to nothing and was dropped -- 6 of 9
+               on the TurtleBot 3 example, with `generate` still reporting "0 error(s)".
   ORPHAN-GATE  an arrow target the backing artifact does not declare BLOCKS generation.
   FIELDS       the optional members no example happens to use -- `namespace:` on a node,
                `fromGitRepo:` on a package, a `qos:` block on an interface -- are PLANTED into
@@ -26,10 +30,20 @@ Four checks per fixture:
                emit_rossystem()/emit_ros2(). The editor is a live preview of those emitters; if
                the two drift, the page lies about the model and every other check here still
                passes. Needs `node`; SKIPs without it (the other checks still run and gate).
+  COMMENTS     every comment line in the source either comes back out attached to the SAME
+               element, or is REPORTED by `init` -- and the count `init` reports is exactly the
+               number that did not come back. `generate` used to emit only its own provenance
+               lines, so all 30+ comments on the TurtleBot 3 example were deleted on the first
+               edit cycle, with every other check here still green. See the comment policy in
+               commands/ros-studio.md; tests/fixtures/comments/ carries one witness per
+               position, including two the policy deliberately drops, and
+               tests/fixtures/subsystems/ adds the two subSystems: positions.
 
     python tests/studio_roundtrip.py [FILE.rossystem ...]
 
-With no argument it runs every .rossystem under examples/. Exit 0 iff every check passes.
+With no argument it runs every .rossystem under examples/ AND the checked-in fixtures under
+tests/fixtures/. examples/ is gitignored demo content that other work rewrites; the fixtures are
+the part of the load a change to this repo is actually held to. Exit 0 iff every check passes.
 """
 
 import os
@@ -54,6 +68,28 @@ FROMFILE_RE = re.compile(r'^\s{2}fromFile:\s*"?([^"]*?)"?\s*$')
 FROMGIT_RE = re.compile(r'^\s{2}fromGitRepo:\s*"?([^"]*?)"?\s*$')
 ROS2_QOS_RE = re.compile(r'^\s+(profile|history|depth|reliability|durability|lease_duration'
                          r'|liveliness|lifespan|deadline):\s*(.+?)\s*$')
+# 'components+=SubSystem*' is a repetition: one bare (optionally quoted) EString per indented
+# line, no key and no bracket list (RM093), so an entry has to be recognised by POSITION -- the
+# block key opens the state, and the first line that is not an entry closes it again.
+SUBSYS_KEY_RE = re.compile(r'^\s{1,4}subSystems:\s*$')
+SUBSYS_ENTRY_RE = re.compile(r'^\s+-?\s*"?([\w./-]+)"?\s*$')
+
+
+def _stage_siblings(src_dir, work, exts):
+    """Copy the neighbours the seeder opens -- the .ros2 files a node's from: resolves to, and
+    the .rossystem files a subSystems: entry resolves to when the target is project-local rather
+    than catalogued. Returns the paths written."""
+    out = []
+    for sub in ("", "rosnodes", "nodes"):
+        d = os.path.join(src_dir, sub)
+        if not os.path.isdir(d):
+            continue
+        for f in sorted(os.listdir(d)):
+            if f.endswith(exts):
+                dst = os.path.join(work, f)
+                shutil.copy(os.path.join(d, f), dst)
+                out.append(dst)
+    return out
 
 
 def facts(path):
@@ -65,11 +101,22 @@ def facts(path):
     nodes and still look preserved; `fromFile` is a one-element set so an absent one compares
     equal to an absent one."""
     exposures, connections, nodes = set(), set(), set()
-    namespaces, from_file = set(), set()
+    namespaces, from_file, subsystems = set(), set(), set()
     current = None
+    in_subs = False
     with open(path, encoding="utf-8") as handle:
         for line in handle:
             line = re.sub(r"\s+#.*$", "", line.rstrip())
+            if SUBSYS_KEY_RE.match(line):
+                in_subs = True
+                continue
+            if in_subs:
+                m = SUBSYS_ENTRY_RE.match(line)
+                if m and ":" not in line:
+                    subsystems.add(m.group(1).strip('"\''))
+                    continue
+                if line.strip():
+                    in_subs = False          # the block ended; fall through to the normal readers
             m = EXPOSURE_RE.match(line)
             if m:
                 exposures.add(m.groups())
@@ -91,10 +138,10 @@ def facts(path):
                 current = m.group(1)
                 nodes.add(current)
     return {"nodes": nodes, "exposures": exposures, "connections": connections,
-            "namespaces": namespaces, "fromFile": from_file}
+            "namespaces": namespaces, "fromFile": from_file, "subSystems": subsystems}
 
 
-FACT_KEYS = ("nodes", "exposures", "connections", "namespaces", "fromFile")
+FACT_KEYS = ("nodes", "exposures", "connections", "namespaces", "fromFile", "subSystems")
 
 
 def run(args, cwd=None):
@@ -105,17 +152,13 @@ def run(args, cwd=None):
 
 def check_roundtrip(src, work):
     """Seed from `src`, generate, and compare fact sets. Returns (ok, [failure lines])."""
+    # the siblings the seeder opens -- .ros2 for types, .rossystem for a project-local
+    # subSystems: target -- must travel with it. Staged BEFORE the fixture, so a directory that
+    # contains the fixture itself cannot clobber the copy under test.
+    src_dir = os.path.dirname(os.path.abspath(src))
+    _stage_siblings(src_dir, work, (".ros2", ".rossystem"))
     staged = os.path.join(work, os.path.basename(src))
     shutil.copy(src, staged)
-    # the sibling .ros2 files the seeder opens to recover types must travel with it
-    src_dir = os.path.dirname(os.path.abspath(src))
-    for sub in ("", "rosnodes", "nodes"):
-        d = os.path.join(src_dir, sub)
-        if not os.path.isdir(d):
-            continue
-        for f in os.listdir(d):
-            if f.endswith(".ros2"):
-                shutil.copy(os.path.join(d, f), os.path.join(work, f))
 
     proj = os.path.join(work, "project.json")
     code, out = run(["init", staged, "--out", proj])
@@ -151,15 +194,9 @@ def check_orphan_gate(src, work):
     generation before anything is written -- not be dropped, and not be written out for the
     language server to reject."""
     src_dir = os.path.dirname(os.path.abspath(src))
-    ros2 = []
-    for sub in ("", "rosnodes", "nodes"):
-        d = os.path.join(src_dir, sub)
-        if os.path.isdir(d):
-            ros2 += [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".ros2")]
-    if not ros2:
+    staged_siblings = _stage_siblings(src_dir, work, (".ros2", ".rossystem"))
+    if not [f for f in staged_siblings if f.endswith(".ros2")]:
         return None, ["skipped: no sibling .ros2 to back a node"]
-    for f in ros2:
-        shutil.copy(f, os.path.join(work, os.path.basename(f)))
 
     text = open(src, encoding="utf-8").read()
     m = None
@@ -240,11 +277,10 @@ def check_fields(src, work):
     """Plant namespace / fromGitRepo / qos into a copy of the fixture and require them back.
     Returns (True|False|None, [lines]); None means SKIP."""
     src_dir = os.path.dirname(os.path.abspath(src))
-    ros2 = []
-    for sub in ("", "rosnodes", "nodes"):
-        d = os.path.join(src_dir, sub)
-        if os.path.isdir(d):
-            ros2 += [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".ros2")]
+    # a project-local subSystems: target has to be reachable here too, or the planted copy loses
+    # the connections the plain round-trip keeps and this check would blame `namespace:` for it.
+    ros2 = [f for f in _stage_siblings(src_dir, work, (".ros2", ".rossystem"))
+            if f.endswith(".ros2")]
     if not ros2:
         return None, ["skipped: no sibling .ros2 to carry fromGitRepo/qos"]
 
@@ -252,7 +288,7 @@ def check_fields(src, work):
     for f in ros2:
         pkg = os.path.splitext(os.path.basename(f))[0]
         text, had_qos = _plant_ros2(open(f, encoding="utf-8").read(), pkg)
-        open(os.path.join(work, os.path.basename(f)), "w", encoding="utf-8").write(text)
+        open(f, "w", encoding="utf-8").write(text)
         planted_pkgs[pkg] = had_qos
 
     text, n_ns = _plant_namespaces(open(src, encoding="utf-8").read())
@@ -300,6 +336,132 @@ def check_fields(src, work):
     return not fails, fails
 
 
+# ---------------------------------------------------------------------------------------
+# COMMENTS
+# ---------------------------------------------------------------------------------------
+
+DROPPED_RE = re.compile(r"(\d+) comment\(s\) could not be attached")
+
+
+def split_comment(line):
+    """(code, comment body or None). A deliberately SEPARATE reader from ros_studio's: sharing it
+    would let a bug in the scanner make this check agree with the emitter about a comment that
+    neither of them preserved. '#' inside a quoted scalar is content, not a comment."""
+    line = line.rstrip("\r\n")
+    quote = None
+    for i, ch in enumerate(line):
+        if quote:
+            if ch == quote:
+                quote = None
+            continue
+        if ch in "\"'":
+            quote = ch
+            continue
+        if ch == "#":
+            body = line[i + 1:].rstrip()
+            return line[:i], body[1:] if body.startswith(" ") else body
+    return line, None
+
+
+def _anchor(code):
+    """The identity of the line a comment annotates. Quotes are removed and whitespace
+    collapsed, so re-quoting `- [a, b]` as `- ["a", "b"]` and re-indenting are not a move --
+    but attaching the comment to a different element is."""
+    return re.sub(r"\s+", " ", code.strip().replace('"', "").replace("'", ""))
+
+
+def comment_facts(path):
+    """{(anchor, text)} for every comment LINE: its own line for a trailing comment, the next
+    code-bearing line for a standalone one, '<end of file>' when nothing follows."""
+    facts, pending = set(), []
+    with open(path, encoding="utf-8") as handle:
+        for raw in handle:
+            code, note = split_comment(raw)
+            if not code.strip():
+                if note is not None:
+                    pending.append(note)
+                continue
+            anchor = _anchor(code)
+            if note is not None:
+                facts.add((anchor, note))
+            for text in pending:
+                facts.add((anchor, text))
+            pending = []
+    for text in pending:
+        facts.add(("<end of file>", text))
+    return facts
+
+
+def _kept(fact, after):
+    """A source comment survived when the SAME anchor carries text that contains it. Containment,
+    not equality: the emitter merges its own RM088/RM089 provenance into an authored trailing
+    comment that does not already name the file, so the author's words come back with the
+    disclosure prepended."""
+    anchor, text = fact
+    return any(ga == anchor and text in gt for ga, gt in after)
+
+
+def check_comments(src, work):
+    """Seed, generate, and hold the result to the comment policy. Returns (ok, [lines])."""
+    src_dir = os.path.dirname(os.path.abspath(src))
+    ros2 = [f for f in _stage_siblings(src_dir, work, (".ros2", ".rossystem"))
+            if f.endswith(".ros2")]
+    staged = os.path.join(work, os.path.basename(src))
+    shutil.copy(src, staged)
+    # only the fixture and its .ros2 files are held to the policy: a sibling .rossystem is a
+    # DIFFERENT model with its own comments, and this run does not generate it.
+    sources = [staged] + ros2
+
+    proj = os.path.join(work, "comments.json")
+    code, out = run(["init", staged, "--out", proj])
+    if code != 0:
+        return False, ["init failed (exit %d):\n%s" % (code, out)]
+    outdir = os.path.join(work, "comments-generated")
+    code, gen_out = run(["generate", proj, "--outdir", outdir])
+    if code != 0:
+        return False, ["generate failed (exit %d):\n%s" % (code, gen_out)]
+
+    # pair each source with the file it generates: the .rossystem by extension, a .ros2 by
+    # package name (which is what ros_studio names the file it writes).
+    written = os.listdir(outdir)
+    fails, lost = [], []
+    for source in sources:
+        base = os.path.basename(source)
+        if base.endswith(".rossystem"):
+            cand = [f for f in written if f.endswith(".rossystem")]
+        else:
+            cand = [f for f in written if f == base]
+        if not cand:
+            # nothing was generated FROM this source (an unused sibling .ros2): its comments are
+            # not this project's to preserve.
+            continue
+        after = comment_facts(os.path.join(outdir, cand[0]))
+        for fact in sorted(comment_facts(source)):
+            if not _kept(fact, after):
+                lost.append((base,) + fact)
+
+    m = DROPPED_RE.search(out)
+    reported = int(m.group(1)) if m else 0
+    if reported != len(lost):
+        fails.append("%d comment(s) did not survive the round-trip but `init` reported %d -- "
+                     "every one that is not re-emitted must be REPORTED (SKILL.md rule 12)"
+                     % (len(lost), reported))
+        for base, anchor, text in lost[:8]:
+            fails.append("    not accounted for: %s  on %r  \"%s\"" % (base, anchor, text))
+    # equal counts alone would pass if one comment were silently dropped while a different one
+    # was reported, so the texts `init` did print must be texts that really went missing. The
+    # report truncates at a fixed limit, hence the check is on what it printed, not on `lost`.
+    for line in out.splitlines():
+        line = line.strip()
+        if not line.startswith("seed diag:") or " on " not in line or '"' not in line:
+            continue
+        text = line[line.index('"') + 1:line.rindex('"')]
+        if text and not any(text == t for _b, _a, t in lost):
+            fails.append("`init` reported a dropped comment that IS in the output: \"%s\""
+                         % text)
+    return not fails, fails
+
+
 def check_parity(work, proj_name="project.json", gen_name="generated"):
     """Hand artefacts an earlier check just built to tests/studio_parity.js, which pulls the
     shipped pure functions out of the RENDERED editor and diffs its .rossystem/.ros2 previews
@@ -334,12 +496,23 @@ def check_parity(work, proj_name="project.json", gen_name="generated"):
     return False, [line for line in text.splitlines() if line.strip()]
 
 
+def _default_targets():
+    """examples/ plus the checked-in fixtures. examples/ is gitignored demo content that other
+    work rewrites under this harness; tests/fixtures/ is what a change to this repo is held to,
+    so it must be in the default load rather than an opt-in argument."""
+    out = []
+    for root in (os.path.join(PLUGIN_ROOT, "examples"),
+                 os.path.join(_HERE, "fixtures", "comments"),
+                 os.path.join(_HERE, "fixtures", "subsystems")):
+        if not os.path.isdir(root):
+            continue
+        out += sorted(os.path.join(root, f) for f in os.listdir(root)
+                      if f.endswith(".rossystem"))
+    return out
+
+
 def main(argv):
-    targets = argv[1:]
-    if not targets:
-        ex = os.path.join(PLUGIN_ROOT, "examples")
-        targets = sorted(os.path.join(ex, f) for f in os.listdir(ex)
-                         if f.endswith(".rossystem"))
+    targets = argv[1:] or _default_targets()
     if not targets:
         print("no .rossystem to test")
         return 1
@@ -347,9 +520,9 @@ def main(argv):
     def verdict(state):
         return "PASS" if state else ("SKIP" if state is None else "FAIL")
 
-    print("%-38s %-12s %-12s %-9s %-12s"
-          % ("FIXTURE", "ROUND-TRIP", "ORPHAN-GATE", "FIELDS", "PARITY"))
-    print("-" * 87)
+    print("%-32s %-12s %-12s %-9s %-9s %-9s"
+          % ("FIXTURE", "ROUND-TRIP", "ORPHAN-GATE", "FIELDS", "PARITY", "COMMENTS"))
+    print("-" * 90)
     failures = 0
     for src in targets:
         work = tempfile.mkdtemp(prefix="studio-rt-")
@@ -361,15 +534,18 @@ def main(argv):
             fld_dir = os.path.join(work, "fields")
             os.makedirs(fld_dir, exist_ok=True)
             fld_ok, fld_why = check_fields(src, fld_dir)
+            cmt_dir = os.path.join(work, "comments")
+            os.makedirs(cmt_dir, exist_ok=True)
+            cmt_ok, cmt_why = check_comments(src, cmt_dir)
             par_ok, par_why = check_parity(work)
             if fld_ok:      # only meaningful once the planted artefacts exist
                 f_ok, f_why = check_parity(fld_dir, "fields.json", "fields-generated")
                 if f_ok is False:
                     par_ok = False
                     par_why = par_why + ["[planted fields] " + line for line in f_why]
-            print("%-38s %-12s %-12s %-9s %-12s" % (
+            print("%-32s %-12s %-12s %-9s %-9s %-9s" % (
                 os.path.basename(src), verdict(ok), verdict(gate_ok), verdict(fld_ok),
-                verdict(par_ok)))
+                verdict(par_ok), verdict(cmt_ok)))
             for line in why:
                 failures += 1
                 print("    round-trip: %s" % line)
@@ -391,6 +567,10 @@ def main(argv):
             elif par_ok is None:
                 for line in par_why:
                     print("    parity: %s" % line)
+            if cmt_ok is False:
+                for line in cmt_why:
+                    failures += 1
+                    print("    comments: %s" % line)
         finally:
             shutil.rmtree(work, ignore_errors=True)
     print()

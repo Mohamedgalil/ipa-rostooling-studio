@@ -39,10 +39,16 @@ var STUDIO = path.join(ROOT, "scripts", "ros_studio.py");
 // `fromGitRepo:` are editable ONLY in this page and appear ONLY in that file: the author's
 // single chance to see them before Commit is that preview, so it has to be the emitter's
 // bytes and not an approximation of them.
+//
+// The third group is the comment layer. Comments are the only model content the author writes
+// as free text, so a drift here is invisible in every other check: the preview would keep
+// showing the author's words while `generate` wrote a file without them, or at a different
+// indent, or with the RM088/RM089 provenance overwritten.
 var WANTED = ["qd", "qs2", "nodeById", "ifaceById", "ifaceConnected", "exposureLabels",
   "genSystem",
-  "handPkgNodes", "companionPkgs", "typeComment", "pyFloat", "pyRepr", "fmtParamValue",
-  "genQos", "genRos2"];
+  "handPkgNodes", "companionPkgs", "typeAutoNote", "pyFloat", "pyRepr", "fmtParamValue",
+  "genQos", "genRos2",
+  "cmtClean", "cmtList", "cmtOf", "cmtBlock", "noteSuffix"];
 
 
 // ---------------------------------------------------------------------------------------
@@ -172,7 +178,20 @@ function firstDiff(expected, actual) {
   return null;
 }
 
-function compare(projectPath, htmlPath, expectPath) {
+// `generate` also STAGES files it did not write -- a project-local subSystems: target and that
+// target's own .ros2 -- so the output directory listing is no longer the set of files THIS
+// project produces, and comparing the editor's preview set against it would fail on a file the
+// editor is right not to preview. Take the set from generate's own report instead.
+function wroteRos2(stdout) {
+  var out = [];
+  String(stdout).split("\n").forEach(function (line) {
+    var m = /^wrote\s+(.*\.ros2)$/.exec(line.trim());
+    if (m) out.push(path.basename(m[1]).replace(/\.ros2$/, ""));
+  });
+  return out.sort();
+}
+
+function compare(projectPath, htmlPath, expectPath, knownWrote) {
   var project = JSON.parse(fs.readFileSync(projectPath, "utf8"));
   var html = fs.readFileSync(htmlPath, "utf8");
   var expected = fs.readFileSync(expectPath, "utf8");
@@ -189,7 +208,7 @@ function compare(projectPath, htmlPath, expectPath) {
   // decides on its own which packages produce a file (hand-authored + non-empty pkg), so an
   // extra or a missing file is itself a parity failure and is reported as one.
   var outdir = path.dirname(expectPath);
-  var wrote = fs.readdirSync(outdir).filter(function (f) { return /\.ros2$/.test(f); })
+  var wrote = knownWrote || fs.readdirSync(outdir).filter(function (f) { return /\.ros2$/.test(f); })
     .map(function (f) { return f.replace(/\.ros2$/, ""); }).sort();
   var previews = fns.handPkgNodes().order;
   if (wrote.join(",") !== previews.join(","))
@@ -254,8 +273,8 @@ function buildInputs(fixture, work) {
   var gen = path.join(work, "gen");
   runStudio(["init", fixture, "--out", proj]);
   runStudio(["render", proj, "--out", html]);
-  runStudio(["generate", proj, "--outdir", gen]);
-  return { project: proj, html: html, expect: generated(gen) };
+  var out = runStudio(["generate", proj, "--outdir", gen]);
+  return { project: proj, html: html, expect: generated(gen), wrote: wroteRos2(out) };
 }
 
 // A seeded project happens to arrive with each node's interfaces already in the emitter's
@@ -269,8 +288,8 @@ function permutedCase(base, work) {
   var proj = path.join(work, "p-permuted.json");
   var gen = path.join(work, "gen-permuted");
   fs.writeFileSync(proj, JSON.stringify(project, null, 2), "utf8");
-  runStudio(["generate", proj, "--outdir", gen]);
-  return { project: proj, html: base.html, expect: generated(gen) };
+  var out = runStudio(["generate", proj, "--outdir", gen]);
+  return { project: proj, html: base.html, expect: generated(gen), wrote: wroteRos2(out) };
 }
 
 function main(argv) {
@@ -294,11 +313,13 @@ function main(argv) {
     // diff-only mode still gets the permuted case -- it costs one extra `generate` and it is
     // the half of the comparison a freshly seeded project cannot exercise (see permutedCase).
     work = fs.mkdtempSync(path.join(os.tmpdir(), "studio-parity-"));
+    var perm = permutedCase(opts, work);
+    // the caller built the primary outdir, so its "wrote" report is not ours to read. The
+    // permuted run produces the same package set (only iface ARRAYS were reversed), so its
+    // report is the authority for both -- and it excludes the staged files either way.
+    opts.wrote = perm.wrote;
     cases.push({ name: path.basename(opts.expect), paths: opts });
-    cases.push({
-      name: path.basename(opts.expect) + " [ifaces permuted]",
-      paths: permutedCase(opts, work)
-    });
+    cases.push({ name: path.basename(opts.expect) + " [ifaces permuted]", paths: perm });
   } else {
     if (!fixtures.length) {
       var ex = path.join(ROOT, "examples");
@@ -321,7 +342,7 @@ function main(argv) {
     cases.forEach(function (c) {
       var problems;
       try {
-        problems = compare(c.paths.project, c.paths.html, c.paths.expect);
+        problems = compare(c.paths.project, c.paths.html, c.paths.expect, c.paths.wrote);
       } catch (e) {
         problems = ["harness error: " + e.message];
       }

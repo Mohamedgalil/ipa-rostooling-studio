@@ -67,6 +67,9 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .node{position:absolute;z-index:2;background:var(--surface);border:1.5px solid var(--rule);border-radius:9px;box-shadow:var(--shadow);min-width:190px;user-select:none}
   .node.sel{border-color:var(--accent);box-shadow:var(--shadow-lift)}
   .node.cat{border-style:dashed}
+  /* a subSystems: node is not declared by THIS file -- dimmed and dotted so it reads as
+     borrowed, and it is read-only everywhere in the inspector. */
+  .node.sub{border-style:dotted;opacity:.9}
   .node.hasdiag{border-color:var(--dead)}
   .node .nhead{display:flex;align-items:center;gap:.4rem;padding:.45rem .6rem;border-bottom:1px solid var(--rule-soft);cursor:grab}
   .node .nhead:active{cursor:grabbing}
@@ -138,6 +141,12 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .qosbox .qnote{font-size:.6rem;line-height:1.35;margin:0 0 .3rem 6.95em;color:var(--ink-3)}
   .qosbox .qnote.i{color:var(--ink-3)} .qosbox .qnote.w{color:var(--warn)} .qosbox .qnote.e{color:var(--dead);font-weight:600}
   .qosbox .qnote:empty{display:none}
+  .iedit .ctog{cursor:pointer;font-family:var(--mono);font-size:.56rem;font-weight:700;text-transform:uppercase;color:var(--ink-3);border:1px solid var(--rule);border-radius:3px;padding:.1em .3em;white-space:nowrap}
+  .iedit .ctog.set{color:var(--accent-2);border-color:var(--accent);background:var(--accent-wash)}
+  .cmtbox{margin:-.1rem 0 .35rem;padding:.4rem .45rem;border:1px solid var(--rule);border-top:none;border-radius:0 0 5px 5px;background:var(--surface)}
+  .cmtbox .crow{display:flex;flex-direction:column;gap:.12rem;margin-bottom:.3rem}
+  .cmtbox .crow label{font-size:.6rem;color:var(--ink-3)}
+  .cmtbox .crow input,.cmtbox .crow textarea{width:100%;font-family:var(--mono);font-size:.66rem;line-height:1.4;background:var(--surface-2);border:1px solid var(--rule);border-radius:4px;padding:.15rem .25rem;color:var(--ink);resize:vertical}
   .syspanel .pkgrow{margin-bottom:.5rem}
   .syspanel .pkgrow .pn{font-family:var(--mono);font-size:.7rem;font-weight:600;margin-bottom:.15rem}
   .hint{font-size:.66rem;line-height:1.4;color:var(--ink-3);margin-top:.15rem}
@@ -322,7 +331,11 @@ var DATA = /*__DATA__*/null;
   var selNode=null, selEdge=null, addKind="pub", mode="edit", level=3;
   // which interfaces have their QoS panel open. Kept OUTSIDE `project` on purpose: it is view
   // state, and putting it in the model would make opening a panel an undoable edit.
-  var qosOpen={};
+  var qosOpen={}, cmtOpen={};
+  // Comment panels are wired by a per-render registry key rather than by a model id, because the
+  // same panel shape serves nodes, interfaces, parameters, connections, the system and a
+  // package -- and only the first two of those have an id at all.
+  var cmtReg={};
   var kindShown={}; KINDS.forEach(function(k){kindShown[k]=true;});
 
   document.getElementById("sysname").value=(project.system&&project.system.name)||"system";
@@ -460,11 +473,14 @@ var DATA = /*__DATA__*/null;
   }
   function renderNode(n){
     var el=document.createElement("div");
-    el.className="node"+(n.backing==="cat"?" cat":"")+(selNode===n.id?" sel":"")+((DIAG[n.id]&&DIAG[n.id].length)?" hasdiag":"");
+    el.className="node"+(n.backing==="cat"?" cat":"")+(n.backing==="sub"?" sub":"")+(selNode===n.id?" sel":"")+((DIAG[n.id]&&DIAG[n.id].length)?" hasdiag":"");
     el.style.left=n.x+"px"; el.style.top=n.y+"px"; el.dataset.n=n.id;
     var fromStr='"'+n.pkg+"."+n.node+'"';
+    var badge=n.backing==="sub"?"subsystem":(n.backing==="cat"?"catalogue":"authored");
     var h='<div class="nhead" data-drag><span class="ntitle">'+esc(n.label)+'</span>'
-      +'<span class="badge '+(n.backing==="cat"?"cat":"")+'">'+(n.backing==="cat"?"catalogue":"authored")+'</span></div>'
+      +'<span class="badge '+(n.backing==="cat"?"cat":"")+'" title="'
+      +(n.backing==="sub"?"reached through subSystems: &quot;"+esc(n.subRef||"")+"&quot; — declared in that file, not this one":"")
+      +'">'+badge+'</span></div>'
       +'<div class="nfrom">from: '+esc(fromStr)
       +((n.namespace&&String(n.namespace).trim())?'<br>namespace: '+esc(n.namespace):'')
       +'</div><div class="ifaces"></div>';
@@ -688,13 +704,118 @@ var DATA = /*__DATA__*/null;
     return h;
   }
 
+  // ============================ comments ============================
+  // Byte-parity with _clean_comment/_comment_list/_comment_block/_note_suffix in ros_studio.py.
+  // `generate` used to emit only its own provenance lines, so every comment the author wrote was
+  // deleted on the first edit cycle; these slots are where they live now, and they are EDITABLE
+  // here because the point is to maintain them where you model, not to ferry them through.
+  function cmtClean(s){ return String(s==null?"":s).replace(/[\r\n]+/g," ").replace(/\s+$/,""); }
+  // A leading block, from a JSON array or a textarea. Interior blanks are the author's paragraph
+  // breaks and are kept; leading/trailing ones go, so a textarea's final newline does not grow a
+  // stray "#" on every keystroke.
+  function cmtList(v){
+    if(v==null) return [];
+    var items=(Object.prototype.toString.call(v)==="[object Array]")?v:String(v).split("\n"), out=[];
+    items.forEach(function(x){
+      String(x==null?"":x).split("\n").forEach(function(y){ out.push(cmtClean(y)); });
+    });
+    while(out.length&&out[out.length-1]==="") out.pop();
+    while(out.length&&out[0]==="") out.shift();
+    return out;
+  }
+  function cmtOf(o,k){ var c=(o&&o.comments)||{}; return c[k]; }
+  function cmtBlock(o,k,indent){
+    return cmtList(cmtOf(o,k)).map(function(t){return indent+(t?"# "+t:"#")+"\n";}).join("");
+  }
+  // `auto` is the emitter's own provenance body (RM088/RM089). An authored comment REPLACES it
+  // once it already names that file -- repeating the path teaches the reader nothing -- and
+  // otherwise the provenance is kept with the authored text appended, so an edit cannot silently
+  // delete the disclosure those two rules require.
+  function noteSuffix(note,auto){
+    note=cmtClean(note); auto=String(auto==null?"":auto).trim();
+    if(!note) return auto?("  # "+auto):"";
+    if(auto&&note.indexOf(auto.split("/").pop())<0) note=auto+" -- "+note;
+    return "  # "+note;
+  }
+  // which slots hold a BLOCK of lines rather than one trailing comment: "header", "before",
+  // "ros2Before". Matching on the suffix case-insensitively, because "before" and "ros2Before"
+  // differ only in case and a `indexOf("Before")` test silently classed the plain "before"
+  // slot -- the most-used one -- as single-line.
+  function cmtMulti(k){ return k==="header"||/before$/i.test(k); }
+  function cmtCount(o){
+    var c=(o&&o.comments)||{}, n=0;
+    for(var k in c){ if(cmtMulti(k)?cmtList(c[k]).length:cmtClean(c[k])) n++; }
+    return n;
+  }
+  // slot -> the label says WHICH FILE the text lands in: one interface appears in both the
+  // .rossystem and the .ros2, and its two comments there are different text.
+  var CMT_FIELDS={
+    node:[["before","block above the node (.rossystem)"],["line","trailing on the node line"],
+          ["from","trailing on from:"],["ros2Before","block above the artifact (.ros2)"],
+          ["ros2Line","trailing on the artifact line (.ros2)"]],
+    iface:[["before","block above the exposure (.rossystem)"],["line","trailing on the exposure"],
+           ["ros2Before","block above the interface (.ros2)"],
+           ["ros2Line","trailing on the interface (.ros2)"],["ros2Type","trailing on type: (.ros2)"]],
+    param:[["ros2Before","block above the parameter (.ros2)"],
+           ["ros2Line","trailing on the parameter (.ros2)"]],
+    conn:[["before","block above the connection (.rossystem)"],["line","trailing on the connection"]],
+    system:[["header","file header block (.rossystem)"],["fromFile","trailing on fromFile:"]],
+    sub:[["before","block above the subSystems: entry"],["line","trailing on the entry"]],
+    pkg:[["header","file header block (.ros2)"]]
+  };
+  function cmtRows(o,kind,key){
+    cmtReg[key]=o;
+    return CMT_FIELDS[kind].map(function(fd){
+      var multi=cmtMulti(fd[0]), v=cmtOf(o,fd[0]);
+      var txt=multi?cmtList(v).join("\n"):cmtClean(v);
+      var ctl=multi
+        ? '<textarea data-undo="1" rows="'+Math.min(10,Math.max(2,txt.split("\n").length))
+          +'" data-cmt="'+esc(key)+'" data-ck="'+fd[0]+'">'+esc(txt)+'</textarea>'
+        : '<input data-undo="1" data-cmt="'+esc(key)+'" data-ck="'+fd[0]+'" value="'+esc(txt)+'">';
+      return '<div class="crow"><label>'+esc(fd[1])+'</label>'+ctl+'</div>';
+    }).join("");
+  }
+  function cmtPanel(o,kind,key){
+    if(!cmtOpen[key]) return "";
+    return '<div class="cmtbox">'+cmtRows(o,kind,key)
+      +'<div class="hint">written as "# text"; a line break inside one becomes a space, since a '
+      +'comment runs to end of line.</div></div>';
+  }
+  function cmtChip(o,key){
+    var c=cmtCount(o);
+    return '<span class="ctog'+(c?" set":"")+'" data-ctog="'+esc(key)+'" title="comments carried '
+      +'into the generated files">cmt'+(c?"·"+c:"")+'</span>';
+  }
+  function wireComments(){
+    inspector.querySelectorAll("[data-ctog]").forEach(function(x){x.onclick=function(){
+      var k=x.dataset.ctog; cmtOpen[k]=!cmtOpen[k]; fillInspector();};});
+    inspector.querySelectorAll("[data-cmt]").forEach(function(x){x.oninput=function(){
+      var o=cmtReg[x.dataset.cmt]; if(!o) return;
+      var k=x.dataset.ck;
+      pushUndo("cmt:"+x.dataset.cmt+":"+k);
+      if(!o.comments) o.comments={};
+      var v=cmtMulti(k)?cmtList(x.value):cmtClean(x.value);
+      if(cmtMulti(k)?!v.length:!v) delete o.comments[k]; else o.comments[k]=v;
+      // an empty object would be written into project.json and read back as "has comments";
+      // drop the key so a cleared slot is indistinguishable from one that never existed.
+      if(!Object.keys(o.comments).length) delete o.comments;
+      var tog=inspector.querySelector('[data-ctog="'+STUDIO.cssEsc(x.dataset.cmt)+'"]');
+      if(tog){ var c=cmtCount(o); tog.className="ctog"+(c?" set":""); tog.textContent="cmt"+(c?"·"+c:""); }
+    };});
+  }
+
   // ============================ inspector ============================
   function fillInspector(){
+    cmtReg={};                       // the panel is rebuilt from scratch; so is its registry
     if(selEdge){ return fillEdgeInspector(); }
     var n=selNode&&nodeById(selNode);
     if(!n) return fillSystemInspector();
     inspector.className="inspector";
     if(mode!=="edit"){ return fillReadonlyNode(n); }
+    // A subSystems: node belongs to the REFERENCED file. Editing it here would be a lie: its
+    // label, from: and interfaces are never written by this project, and deleting it would strip
+    // the connections that name it while the subSystems: line still claimed to provide it.
+    if(n.backing==="sub"){ return fillSubsystemNode(n); }
     var cat=n.backing==="cat";
     var ih='<div class="insec"><h4>node: '+esc(n.label)+'</h4>'
       +'<div class="fld"><label>label (rossystem instance)</label><input id="f_label" data-undo="1" value="'+esc(n.label)+'"></div>'
@@ -720,8 +841,10 @@ var DATA = /*__DATA__*/null;
         +'<label class="expchk" title="'+(conn?"connected — always exposed":"write this interface into the .rossystem even with nothing wired to it")+'">'
         +'<input type="checkbox" data-exp="'+f.id+'"'+((f.exposed||conn)?" checked":"")+(conn?" disabled":"")+'>expose</label>'
         +'<span class="qtog'+(qosCount(f)?" set":"")+'" data-qtog="'+f.id+'" title="quality of service — written into the .ros2, not the .rossystem">qos'+(qosCount(f)?"·"+qosCount(f):"")+'</span>'
+        +cmtChip(f,"i:"+f.id)
         +'</span></span>'
-        +'<span class="del" data-del="'+f.id+'">✕</span></div>'+qosPanel(f);
+        +'<span class="del" data-del="'+f.id+'">✕</span></div>'
+        +qosPanel(f)+cmtPanel(f,"iface","i:"+f.id);
     }
     ih+='<div class="addform"><div class="kseg" id="kseg">'+KINDS.map(function(k){return '<button data-k="'+k+'" class="'+(k===addKind?"on":"")+'">'+k+'</button>';}).join("")+'</div>'
       +'<input id="ni_name" placeholder="interface name (quoted for you)">'
@@ -732,12 +855,19 @@ var DATA = /*__DATA__*/null;
     for(var p=0;p<n.params.length;p++){var pp=n.params[p];
       ih+='<div class="iedit"><span class="kd" style="background:var(--k-param)">'+(pp.ptype||"Str").slice(0,3)+'</span>'
         +'<span class="grow"><span class="inm2">'+esc(pp.name)+'</span> <span class="ity2">= '+esc(String(pp.value))+'</span></span>'
-        +'<span class="del" data-delp="'+pp.id+'">✕</span></div>';
+        +cmtChip(pp,"p:"+pp.id)
+        +'<span class="del" data-delp="'+pp.id+'">✕</span></div>'+cmtPanel(pp,"param","p:"+pp.id);
     }
     ih+='<div class="addform"><input id="np_name" placeholder="param name">'
       +'<select id="np_type"><option>Integer</option><option>Double</option><option>String</option><option>Boolean</option></select>'
       +'<input id="np_val" placeholder="value (typed-safe: no True/int traps)">'
       +'<button class="minibtn" id="np_add">+ add parameter</button></div></div>';
+    // the node's own comments, always open: a leading block is the one an author reaches for
+    // most and hiding it behind a chip would keep it out of sight in exactly the file it
+    // documents.
+    ih+='<div class="insec"><h4>comments</h4>'+cmtRows(n,"node","n:"+n.id)
+      +'<div class="hint">re-emitted at these positions on generate; everything else is '
+      +'reported by <code>init</code> and dropped.</div></div>';
     ih+='<button class="delnode" id="delNode">Delete node</button>';
     inspector.innerHTML=ih;
     wireInspector(n);
@@ -771,17 +901,46 @@ var DATA = /*__DATA__*/null;
     }else{
       h+='<div class="fld"><label>fromFile</label><div class="derived">'+esc(ff||"(absent)")+'</div></div>';
     }
-    h+='<div class="fld"><label>contents</label><div class="derived">'+project.nodes.length
-      +' node(s) · '+project.connections.length+' connection(s)</div></div></div>';
+    var own=project.nodes.filter(function(n){return n.backing!=="sub";}).length;
+    h+='<div class="fld"><label>contents</label><div class="derived">'+own
+      +' node(s)'+((project.nodes.length-own)?(' + '+(project.nodes.length-own)+' via subSystems:'):'')
+      +' · '+project.connections.length+' connection(s)</div></div>';
+    // the .rossystem file header lives on the PROJECT, not on any node, so this panel is the
+    // only place it can be edited -- and on the TurtleBot 3 example it is 40 lines of the
+    // author's reasoning, which `generate` used to delete outright.
+    if(edit) h+=cmtRows(project,"system","sys");
+    h+='</div>';
+
+    // subSystems: is reference-only -- the entries come from the seeded file and there is no UI
+    // to invent one, because a reference that resolves to nothing exposes nothing connectable
+    // (RM091) and the studio has no way to check a name the author types. Their comments ARE
+    // editable: on the TurtleBot 3 example the single entry carries the line naming exactly
+    // which catalogue file it resolves to and which nodes it brings in.
+    var subs=project.subSystems||[];
+    if(subs.length){
+      h+='<div class="insec"><h4>subsystems (reused compositions)</h4>';
+      subs.forEach(function(s,i){
+        var got=project.nodes.filter(function(n){return n.backing==="sub"&&n.subRef===s.ref;});
+        h+='<div class="pkgrow"><div class="pn">"'+esc(s.ref)+'"</div>'
+          +'<div class="roinfo">'+esc(s.file?("assets/rosmodelscatalog/"+s.file):"(not in the vendored catalogue)")
+          +'<br>'+got.length+' node(s) reached: '+esc(got.map(function(n){return n.label;}).join(", ")||"none")+'</div>'
+          +(edit?cmtRows(s,"sub","sub:"+i):"")+'</div>';
+      });
+      h+='</div>';
+    }
 
     h+='<div class="insec"><h4>packages (.ros2)</h4>';
     if(!pkgs.length) h+='<div class="roinfo">No hand-authored package yet — catalogue nodes '
       +'reference a vendored .ros2 and generate none.</div>';
     pkgs.forEach(function(p){
-      var git=(project.packages[p]||{}).fromGitRepo||"";
+      // the package entry is derived from the nodes, so it may not exist yet -- and the .ros2
+      // file header has nowhere else to hang.
+      var entry=project.packages[p]=(project.packages[p]||{});
+      var git=entry.fromGitRepo||"";
       h+='<div class="pkgrow"><div class="pn">'+esc(p)+'.ros2</div>'
         +(edit?'<input data-git="'+esc(p)+'" data-undo="1" value="'+esc(git)
                +'" placeholder="fromGitRepo — https://github.com/org/repo/">'
+               +cmtRows(entry,"pkg","pkg:"+p)
               :'<div class="derived">'+esc(git||"(no fromGitRepo)")+'</div>')
         +'</div>';
     });
@@ -799,6 +958,29 @@ var DATA = /*__DATA__*/null;
       pushUndo("git:"+p);
       if(!project.packages[p]) project.packages[p]={};
       project.packages[p].fromGitRepo=x.value.trim()||null;};});
+    wireComments();
+  }
+  // A node reached through subSystems:. Read-only by construction -- what it exposes is decided
+  // by the referenced file's OWN interfaces: block, never by the .ros2 its from: points at
+  // (checkIfInterfaceInSystem, RosSystemValidator.xtend:87-109). Its interfaces are still listed
+  // and still connectable on the canvas: that is the entire point of the reference.
+  function fillSubsystemNode(n){
+    var sub=null;
+    (project.subSystems||[]).forEach(function(s){ if(s.ref===n.subRef) sub=s; });
+    var rows=n.ifaces.map(function(f){
+      return f.kind+"  "+f.name+(f.type?"  "+f.type:"")
+        +(ifaceConnected(n,f)?"   (connected)":"");}).join("\n")||"(none)";
+    inspector.innerHTML='<div class="insec"><h4>node: '+esc(n.label)+'</h4>'
+      +'<div class="roinfo">via subSystems: "'+esc(n.subRef||"")+'"'
+      +((sub&&sub.file)?'<br>'+esc("assets/rosmodelscatalog/"+sub.file):'')
+      +'<br>from: "'+esc(n.pkg)+'.'+esc(n.node)+'"</div>'
+      +'<div class="hint">read-only: this node is declared in the referenced system, not here. '
+      +'Edit it there, or drop the subSystems: entry and declare it under this file\'s own '
+      +'nodes: instead — declaring it in both is RM090.</div></div>'
+      +'<div class="insec"><h4>interfaces (from the referenced system)</h4>'
+      +'<pre class="roinfo" style="white-space:pre-wrap">'+esc(rows)+'</pre>'
+      +'<div class="hint">a connections: endpoint spells these names verbatim; they are not '
+      +'re-labelled here.</div></div>';
   }
   function fillReadonlyNode(n){
     var rows=n.ifaces.map(function(f){
@@ -806,12 +988,18 @@ var DATA = /*__DATA__*/null;
                                             .map(function(k){return k+"="+f.qos[k];}).join(" ")+"]"):"";
       return f.kind+"  "+f.name+(f.type?"  "+f.type:"")+q;}).join("\n")||"(none)";
     var pr=n.params.map(function(p){return p.name+" : "+p.ptype+" = "+p.value;}).join("\n")||"(none)";
+    // View mode is read-only, but a comment the author wrote is model content: showing it here
+    // means switching to View does not make it look as if the file has none.
+    var cm=cmtBlock(n,"before","")+CMT_FIELDS.node.slice(1).map(function(fd){
+      var v=cmtMulti(fd[0])?cmtList(cmtOf(n,fd[0])).join("\n"):cmtClean(cmtOf(n,fd[0]));
+      return v?(fd[1]+": "+v+"\n"):"";}).join("");
     inspector.innerHTML='<div class="insec"><h4>node: '+esc(n.label)+'</h4>'
       +'<div class="roinfo">from: "'+esc(n.pkg)+'.'+esc(n.node)+'"'
       +((n.namespace&&String(n.namespace).trim())?'<br>namespace: '+esc(n.namespace):'')
       +'<br>backing: '+n.backing+'<br>artifact: '+esc(n.artifact||"")+'</div></div>'
       +'<div class="insec"><h4>interfaces</h4><pre class="roinfo" style="white-space:pre-wrap">'+esc(rows)+'</pre></div>'
       +'<div class="insec"><h4>parameters</h4><pre class="roinfo" style="white-space:pre-wrap">'+esc(pr)+'</pre></div>'
+      +(cm?'<div class="insec"><h4>comments</h4><pre class="roinfo" style="white-space:pre-wrap">'+esc(cm)+'</pre></div>':'')
       +((DIAG[n.id]&&DIAG[n.id].length)?'<div class="insec"><h4>diagnostics</h4><pre class="roinfo" style="white-space:pre-wrap;color:var(--dead)">'+esc(DIAG[n.id].join("\n"))+'</pre></div>':'');
   }
   function fillEdgeInspector(){
@@ -825,9 +1013,13 @@ var DATA = /*__DATA__*/null;
       +'<div class="fld"><label>kind</label><div class="derived">'+pair+'</div></div>'
       +'<div class="fld"><label>from (server/publisher)</label><div class="derived">'+esc(nodeById(c.from.n).label)+' · '+esc(a.name)+' ('+a.kind+')</div></div>'
       +'<div class="fld"><label>to (client/subscriber)</label><div class="derived">'+esc(nodeById(c.to.n).label)+' · '+esc(bb.name)+' ('+bb.kind+')</div></div>';
-    if(mode==="edit") h+='<button class="delnode" id="delEdge">Delete connection</button>';
     h+='</div>';
+    // a connection has no name of its own, so its comment is keyed by the LABEL PAIR both here
+    // and in emit_rossystem -- which is why it has to be editable from the edge, not the node.
+    if(mode==="edit") h+='<div class="insec"><h4>comments</h4>'+cmtRows(c,"conn","c:"+c.id)
+      +'</div><button class="delnode" id="delEdge">Delete connection</button>';
     inspector.innerHTML=h;
+    wireComments();
     var de=document.getElementById("delEdge");
     if(de) de.onclick=function(){pushUndo();project.connections=project.connections.filter(function(x){return x.id!==c.id;});selEdge=null;render();fillInspector();};
   }
@@ -907,6 +1099,7 @@ var DATA = /*__DATA__*/null;
       else if(t==="Double") val=(raw.indexOf(".")>=0?raw:String((parseFloat(raw||"0")||0).toFixed(1)));
       n.params.push({id:nid(),name:nm,ptype:t,value:val});
       render();fillInspector();};
+    wireComments();
     var del=document.getElementById("delNode");
     if(del) del.onclick=function(){
       pushUndo();
@@ -1033,6 +1226,16 @@ var DATA = /*__DATA__*/null;
       });
     });
     var labels={}, used={};
+    // pass 0: a subSystems: node's label belongs to the REFERENCED file and cannot be renamed
+    // here -- it is the exact string a connections: endpoint has to spell -- so it claims its
+    // name before any local exposure can take it. Two subsystem nodes sharing a label (the
+    // catalogued turtlebot's "tf") both map to that one string: that ambiguity is the source
+    // file's (RM065), and inventing a distinct label would emit an endpoint resolving to nothing.
+    wanted.forEach(function(p){
+      if(p[0].backing!=="sub") return;
+      var lbl=String(p[1].label||p[1].name||"").trim();
+      if(lbl){ labels[p[0].id+"/"+p[1].id]=lbl; used[lbl]=1; }
+    });
     wanted.forEach(function(p){                       // pass 1: source labels are authoritative
       var lbl=(p[1].label||"").trim();
       if(lbl&&!used[lbl]){used[lbl]=1;labels[p[0].id+"/"+p[1].id]=lbl;}
@@ -1057,12 +1260,30 @@ var DATA = /*__DATA__*/null;
   function genSystem(){
     var labels=exposureLabels();
     var name=document.getElementById("sysname").value||"system";
-    var o=name+":\n";
-    if(project.system&&project.system.fromFile) o+='  fromFile: '+qd(project.system.fromFile)+'\n';
+    var o=cmtBlock(project,"header","")+name+":\n";
+    if(project.system&&project.system.fromFile)
+      o+='  fromFile: '+qd(project.system.fromFile)+noteSuffix(cmtOf(project,"fromFile"))+'\n';
+    // ROSSYSTEM_TOP_KEYS: fromFile -> subSystems -> processes -> nodes -> parameters ->
+    // connections. 'components+=SubSystem*' is a repetition, so each entry is one bare
+    // (optionally quoted) EString on its own indented line -- there is no bracket form (RM093).
+    var subs=project.subSystems||[];
+    if(subs.length){
+      o+="  subSystems:\n";
+      subs.forEach(function(s){
+        o+=cmtBlock(s,"before","    ")+'    '+qd(s.ref)
+          +noteSuffix(cmtOf(s,"line"),s.file?("assets/rosmodelscatalog/"+s.file):"")+'\n';
+      });
+    }
     o+="  nodes:\n";
     project.nodes.forEach(function(n){
-      o+='    '+qd(n.label)+':\n      from: '+qd(n.pkg+"."+n.node);
-      o+=(n.backing==="cat"&&n.catalogueFile)?"  # assets/rosmodelscatalog/"+n.catalogueFile+"\n":"\n";
+      // provided by the subSystems: block above -- re-declaring it under this file's own
+      // nodes: is RM090 ("two distinct RosNode objects answer to the same name").
+      if(n.backing==="sub") return;
+      o+=cmtBlock(n,"before","    ")+'    '+qd(n.label)+':'+noteSuffix(cmtOf(n,"line"))+'\n';
+      o+='      from: '+qd(n.pkg+"."+n.node)
+        +noteSuffix(cmtOf(n,"from"),
+                    (n.backing==="cat"&&n.catalogueFile)?("assets/rosmodelscatalog/"+n.catalogueFile):"")
+        +'\n';
       // RosSystem.xtext:60-75 fixes from -> namespace -> interfaces -> parameters (RM039).
       var ns=String(n.namespace==null?"":n.namespace).trim();
       if(ns) o+='      namespace: '+qd(ns)+'\n';
@@ -1075,14 +1296,18 @@ var DATA = /*__DATA__*/null;
         return d||(a.name<b.name?-1:(a.name>b.name?1:0));});
       if(exposed.length){
         o+="      interfaces:\n";
-        exposed.forEach(function(f){o+='        - '+qd(labels[n.id+"/"+f.id])+': '+f.kind+'-> '+qd((n.artifact||"")+"::"+f.name)+'\n';});
+        exposed.forEach(function(f){
+          o+=cmtBlock(f,"before","        ")
+            +'        - '+qd(labels[n.id+"/"+f.id])+': '+f.kind+'-> '
+            +qd((n.artifact||"")+"::"+f.name)+noteSuffix(cmtOf(f,"line"))+'\n';});
       }
     });
     if(project.connections.length){
       o+="  connections:\n";
       project.connections.forEach(function(c){
         var fl=labels[c.from.n+"/"+c.from.i], tl=labels[c.to.n+"/"+c.to.i];
-        if(fl&&tl) o+='    - ['+qd(fl)+', '+qd(tl)+']\n';
+        if(fl&&tl) o+=cmtBlock(c,"before","    ")+'    - ['+qd(fl)+', '+qd(tl)+']'
+          +noteSuffix(cmtOf(c,"line"))+'\n';
       });
     }
     return o;
@@ -1121,11 +1346,12 @@ var DATA = /*__DATA__*/null;
     });
     return out;
   }
-  function typeComment(typ,comp){
+  // the RM089 disclosure BODY (no "# "); noteSuffix() merges it with whatever the author wrote
+  // on that line, so an edit cannot silently delete the disclosure.
+  function typeAutoNote(typ,comp){
     if(!typ||String(typ).indexOf("/")<0) return "";
     if(comp[String(typ).split("/")[0]]) return "";
-    var rel=TYPEFILES[typ];
-    return rel?("  # assets/roscommonobjects/"+rel):"";
+    return TYPEFILES[typ]?("assets/roscommonobjects/"+TYPEFILES[typ]):"";
   }
   // Python float(): anything it would reject becomes 0.0 in _fmt_param_value. This accepts the
   // plain numeral forms only -- float() also takes "inf", "1_0" and surrounding tabs, which no
@@ -1182,12 +1408,13 @@ var DATA = /*__DATA__*/null;
     var nodes=(g.by[pkg]||[]).slice().sort(function(a,b){
       var x=String(a.artifact||""), y=String(b.artifact||"");
       return x<y?-1:(x>y?1:0);});
-    var git=(project.packages[pkg]||{}).fromGitRepo;
-    var o=pkg+":\n";
+    var entry=project.packages[pkg]||{}, git=entry.fromGitRepo;
+    var o=cmtBlock(entry,"header","")+pkg+":\n";
     if(git) o+="  fromGitRepo: "+qd(git)+"\n";
     o+="  artifacts:\n";
     nodes.forEach(function(n){
-      o+="    "+(n.artifact||"")+":\n      node: "+n.node+"\n";
+      o+=cmtBlock(n,"ros2Before","    ")+"    "+(n.artifact||"")+":"
+        +noteSuffix(cmtOf(n,"ros2Line"))+"\n      node: "+n.node+"\n";
       KINDS.forEach(function(k){
         var fs=n.ifaces.filter(function(f){return f.kind===k;}).sort(function(a,b){
           return a.name<b.name?-1:(a.name>b.name?1:0);});
@@ -1195,7 +1422,10 @@ var DATA = /*__DATA__*/null;
         o+="      "+BLOCK[k]+":\n";
         fs.forEach(function(f){
           var typ=f.type||"TODO_pkg/msg/Type";
-          o+="        "+qs2(f.name)+":\n          type: "+qs2(typ)+typeComment(typ,comp)+"\n";
+          o+=cmtBlock(f,"ros2Before","        ")
+            +"        "+qs2(f.name)+":"+noteSuffix(cmtOf(f,"ros2Line"))
+            +"\n          type: "+qs2(typ)
+            +noteSuffix(cmtOf(f,"ros2Type"),typeAutoNote(typ,comp))+"\n";
           o+=genQos(f.qos,"          ");
         });
       });
@@ -1204,7 +1434,9 @@ var DATA = /*__DATA__*/null;
       if(ps.length){
         o+="      parameters:\n";
         ps.forEach(function(p){
-          o+="        "+qs2(p.name)+":\n          type: "+(p.ptype||"String")
+          o+=cmtBlock(p,"ros2Before","        ")
+            +"        "+qs2(p.name)+":"+noteSuffix(cmtOf(p,"ros2Line"))
+            +"\n          type: "+(p.ptype||"String")
             +"\n          default: "+fmtParamValue(p.ptype,p.value)+"\n";
         });
       }
@@ -1282,6 +1514,10 @@ var DATA = /*__DATA__*/null;
     if(e.key==="Escape"){[].slice.call(document.querySelectorAll(".scrim.on:not([data-locked])")).forEach(function(s){s.classList.remove("on");});selNode=null;selEdge=null;render();fillInspector();}
     if(mode==="view" && e.key>="1" && e.key<="4" && !typing){level=+e.key;setLevelButtons();render();}
     if((e.key==="Delete"||e.key==="Backspace")&&mode==="edit"&&selNode&&!typing){
+      // a subSystems: node is provided by the referenced file; deleting it here would strip the
+      // connections that name it while the subSystems: line still claimed to provide them. The
+      // inspector offers no Delete button for one either.
+      var sn=nodeById(selNode); if(sn&&sn.backing==="sub") return;
       pushUndo();
       project.connections=project.connections.filter(function(c){return c.from.n!==selNode&&c.to.n!==selNode;});
       project.nodes=project.nodes.filter(function(x){return x.id!==selNode;});selNode=null;render();fillInspector();}

@@ -11,7 +11,9 @@ language-server oracle (opt-in).
         Build a project.json. With a .rossystem argument, seed from it: reuse ros_plot's
         extractor for the system structure and open the sibling .ros2 files (via
         rosmodel_lint's compose) to recover each interface's type and the artifacts'
-        parameters. With no argument, emit a blank project.
+        parameters, and a line-oriented pass to recover the COMMENTS (PyYAML discards them).
+        Every comment that cannot be attached to a model element is reported. With no
+        argument, emit a blank project.
 
     ros_studio.py render project.json [--out ros-studio.html] [--open]
         Emit the self-contained editor HTML, with the three autocomplete datasets
@@ -33,6 +35,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -115,6 +118,293 @@ def _fmt_param_value(ptype, value):
     # String / Base64 and anything else: a quoted literal in .ros2. Prefer single quotes, but
     # a value with an embedded ' or \\ must use the double-quoted+escaped form (see _q_single).
     return _q_single(raw)
+
+
+# ========================================================================================
+# Comments: capture at seed, re-emit at generate
+#
+# `generate` used to write only its own provenance comments, so every explanatory comment the
+# author had written was deleted on the first edit cycle -- 30+ of them on the TurtleBot 3
+# example. PyYAML discards comments outright, so the linter's compose path cannot help; the
+# capture below is a separate line-oriented pass keyed by the ELEMENT a comment annotates
+# rather than by line number, because a line number does not survive an edit and an element
+# identity does.
+#
+# POLICY (asserted by tests/studio_roundtrip.py, stated in commands/ros-studio.md):
+#   PRESERVED   a leading comment block attaches to the next modeled element; a trailing
+#               comment attaches to the element on its own line. Modeled elements are: the
+#               system, each subSystems: entry, each node, each exposure, each connection; and
+#               in the .ros2 the package, each artifact, each interface (plus its `type:` line)
+#               and each parameter.
+#   NORMALISED  indentation follows the emitted element, not the source; the `# ` spacing is
+#               normalised; and a leading block that preceded a block KEY (`nodes:`,
+#               `interfaces:`, ...) re-emerges before the FIRST element inside that block,
+#               because the model has no slot for the key itself.
+#   DROPPED     everything the project model does not carry -- `processes:`, node-level
+#               .rossystem `parameters:`, `qos:` internals, and trailing comments on block keys.
+#               `init` REPORTS every one of these with its line number (SKILL.md rule 12)
+#               instead of discarding it silently.
+# ========================================================================================
+
+# A key line with nothing after the colon: 'nodes:', '"amcl":', "'nav_status':".
+RE_BARE_KEY = re.compile(r'^(?P<k>"[^"]*"|\'[^\']*\'|[^\s:#]+)\s*:\s*$')
+RE_EXPOSURE = re.compile(r'^-\s*(?P<k>"[^"]*"|\'[^\']*\'|[^\s:]+)\s*:\s*'
+                         r'(?P<kind>pub|sub|ss|sc|as|ac)->')
+# `-[a, b]` with no space after the dash is legal DSL (whitespace is hidden) and 3 corpus files
+# write it that way, so the dash and the bracket are not required to be separated.
+RE_CONNECTION = re.compile(r'^-\s*\[\s*(?P<a>"[^"]*"|\'[^\']*\'|[^\s,\]]+)\s*,'
+                           r'\s*(?P<b>"[^"]*"|\'[^\']*\'|[^\s,\]]+)\s*\]')
+ROS2_ITEM_BLOCKS = set(C.KIND_TO_BLOCK.values()) | {"parameters"}
+
+
+def _clean_comment(text):
+    """A comment is '#' to end of line (SL_COMMENT, Basics.xtext:386), so a newline inside one
+    would terminate it and turn the remainder of the text into code. Collapse every break."""
+    return re.sub(r"[\r\n]+", " ", "" if text is None else str(text)).rstrip()
+
+
+def _comment_list(value):
+    """A leading comment block, from either a JSON list or a textarea's newline-joined text.
+    Interior blank entries are kept (they are the author's paragraph breaks, and the TurtleBot 3
+    header uses them); leading/trailing ones are dropped, so a textarea's final newline does not
+    grow a stray '#' on every save."""
+    if value is None:
+        return []
+    items = value if isinstance(value, (list, tuple)) else str(value).split("\n")
+    out = []
+    for item in items:
+        for part in ("" if item is None else str(item)).split("\n"):
+            out.append(_clean_comment(part))
+    while out and out[-1] == "":
+        out.pop()
+    while out and out[0] == "":
+        out.pop(0)
+    return out
+
+
+def _comment_block(value, indent):
+    """The leading comment block as emitted lines. An empty entry is a bare '#', never '# '."""
+    return [indent + ("# " + t if t else "#") for t in _comment_list(value)]
+
+
+def _note_suffix(note, auto=None):
+    """A trailing comment for one emitted line. `auto` is the emitter's own provenance body
+    (RM088/RM089), which must not be lost to an edit: an authored comment REPLACES it when the
+    comment already names that file -- repeating the path teaches the reader nothing, and the
+    TurtleBot 3 example's own from: comments are exactly the provenance line -- and otherwise
+    the provenance is kept with the authored text appended."""
+    note = _clean_comment(note)
+    auto = (auto or "").strip()
+    if not note:
+        return "  # " + auto if auto else ""
+    if auto and auto.rsplit("/", 1)[-1] not in note:
+        note = auto + " -- " + note
+    return "  # " + note
+
+
+def _split_comment(raw):
+    """(code, comment-body or None) for one source line. Where the comment STARTS is decided by
+    rosmodel_lint.ros_split_comment so the studio and the checker agree that a '#' inside a
+    quoted EString is content -- `foo: # c` is a comment, `type: 'a#b'` is not."""
+    line = raw.rstrip("\r\n")
+    code, had = L.ros_split_comment(line)
+    if not had:
+        return line, None
+    body = line[len(code):]
+    if body.startswith("#"):
+        body = body[1:]
+    if body.startswith(" "):
+        body = body[1:]
+    return code, body.rstrip()
+
+
+def _iter_source(path):
+    """(lineno, code, comment-body-or-None, indent, stripped-code) per line, skipping lines that
+    carry no code and no comment."""
+    try:
+        handle = open(path, encoding="utf-8", errors="replace")
+    except (IOError, OSError):
+        return
+    with handle:
+        for lineno, raw in enumerate(handle, 1):
+            code, note = _split_comment(raw)
+            body = code.strip()
+            indent = len(code) - len(code.lstrip(" \t"))
+            yield lineno, code, note, indent, body
+
+
+def scan_rossystem_comments(path):
+    """{'header', 'fromFile', 'subSystems': {ref: {...}}, 'nodes': {label: {...}},
+    'connections': {(a,b): {...}}, 'dropped': [(line, what, text)]} for one .rossystem."""
+    res = {"header": [], "fromFile": "", "subSystems": {}, "nodes": {}, "connections": {},
+           "dropped": []}
+    pending = []
+    sect = node = sub = node_indent = None
+    root_seen = False
+    for lineno, _code, note, indent, body in _iter_source(path):
+        if not body:
+            if note is not None:
+                pending.append(note)
+            continue
+
+        key = RE_BARE_KEY.match(body)
+        kw = ros_plot._strip_quotes(key.group("k")) if key else None
+
+        if key and not root_seen and indent == 0:
+            root_seen = True
+            res["header"], pending = pending, []
+            if note:
+                res["dropped"].append((lineno, "the system key line", note))
+            continue
+        if body.startswith("fromFile:"):
+            res["fromFile"] = note or ""
+            continue
+        if key and kw in ("nodes", "connections", "subSystems", "processes"):
+            sect, node, sub, node_indent = kw, None, None, None
+            if note:
+                res["dropped"].append((lineno, "the '%s:' block key" % kw, note))
+            continue
+        if key and kw == "interfaces" and node is not None:
+            sub = "interfaces"
+            if note:
+                res["dropped"].append((lineno, "the 'interfaces:' block key", note))
+            continue
+        if key and kw == "parameters":
+            # node-level `parameters:` is not carried by the project model (the studio writes
+            # parameters into the .ros2 artifact, not into the .rossystem node), so everything
+            # inside it is reported rather than half-preserved.
+            if node is not None:
+                sub = "parameters"
+            else:
+                sect = "parameters"
+            if note:
+                res["dropped"].append((lineno, "the 'parameters:' block key", note))
+            continue
+        # A 'components+=SubSystem*' entry is one bare (optionally quoted) EString per indented
+        # line -- there is no `key:` and no bracket list (RM093), so RE_BARE_KEY cannot see it
+        # and it has to be matched positionally. The '- ' form is tolerated for the same reason
+        # check_subsystems tolerates a block sequence: the corpus writes both.
+        if sect == "subSystems" and not key and ":" not in body:
+            ref = body[1:].strip() if body.startswith("-") else body
+            ref = ros_plot._strip_quotes(ref)
+            if ref:
+                res["subSystems"][ref] = {"before": pending, "line": note or ""}
+                pending = []
+                continue
+
+        # `<=`, not `==`: the corpus indents with 3, 5, 6, 7 and 11 spaces and does not always
+        # keep sibling node keys on the same column. Anything DEEPER than the current node key
+        # belongs to that node, and nothing deeper is a bare key anyway (an exposure starts with
+        # '-', a parameter's `value:` carries a value).
+        if key and sect == "nodes" and (node_indent is None or indent <= node_indent):
+            node_indent = indent
+            node = {"before": pending, "line": note or "", "from": "", "ifaces": {}}
+            res["nodes"][kw], pending, sub = node, [], None
+            continue
+
+        m = RE_EXPOSURE.match(body)
+        if m and node is not None and sub == "interfaces":
+            node["ifaces"][ros_plot._strip_quotes(m.group("k"))] = {
+                "before": pending, "line": note or ""}
+            pending = []
+            continue
+        m = RE_CONNECTION.match(body)
+        if m and sect == "connections":
+            res["connections"][(ros_plot._strip_quotes(m.group("a")),
+                                ros_plot._strip_quotes(m.group("b")))] = {
+                "before": pending, "line": note or ""}
+            pending = []
+            continue
+        if body.startswith("from:") and node is not None and sub is None:
+            node["from"] = note or ""
+            continue
+        if note:
+            res["dropped"].append((lineno, "a line the project model does not carry", note))
+    for text in pending:
+        res["dropped"].append((0, "the end of the file, with no element after it", text))
+    return res
+
+
+def scan_ros2_comments(path):
+    """{'packages': {pkg: {'header', 'artifacts': {art: {...}}}}, 'dropped': [...]} for one
+    .ros2. Interfaces are keyed (block, name) because a publisher and a subscriber may share a
+    name -- and in the corpus they routinely do."""
+    res = {"packages": {}, "dropped": []}
+    pending = []
+    pkg = art = block = item = None
+    art_indent = item_indent = None
+    in_arts = False
+
+    def drop(lineno, what, note):
+        if note:
+            res["dropped"].append((lineno, what, note))
+
+    for lineno, _code, note, indent, body in _iter_source(path):
+        if not body:
+            if note is not None:
+                pending.append(note)
+            continue
+        key = RE_BARE_KEY.match(body)
+        kw = ros_plot._strip_quotes(key.group("k")) if key else None
+
+        if key and indent == 0:
+            pkg = {"header": pending, "artifacts": {}}
+            res["packages"][kw], pending = pkg, []
+            art = block = item = art_indent = item_indent = None
+            in_arts = False
+            drop(lineno, "the package key line", note)
+            continue
+        if key and kw == "artifacts" and pkg is not None:
+            in_arts, art, block, art_indent, item_indent = True, None, None, None, None
+            drop(lineno, "the 'artifacts:' block key", note)
+            continue
+        if key and kw in ROS2_ITEM_BLOCKS and art is not None:
+            block, item, item_indent = kw, None, None
+            drop(lineno, "the '%s:' block key" % kw, note)
+            continue
+        if key and kw == "qos":
+            item = None                     # qos field lines are values, not modeled elements
+            drop(lineno, "the 'qos:' block key", note)
+            continue
+        # `<=` for the same reason as the .rossystem node key above; the block keywords are
+        # matched by NAME before this, so a `publishers:` deeper down cannot land here.
+        if key and in_arts and (art_indent is None or indent <= art_indent) and pkg is not None:
+            art_indent = indent
+            art = {"before": pending, "line": note or "", "ifaces": {}, "params": {}}
+            pkg["artifacts"][kw], pending = art, []
+            block = item = item_indent = None
+            continue
+        if key and art is not None and block is not None \
+                and (item_indent is None or indent == item_indent):
+            item_indent = indent
+            item = {"before": pending, "line": note or "", "type": ""}
+            pending = []
+            if block == "parameters":
+                art["params"][kw] = item
+            else:
+                art["ifaces"][(block, kw)] = item
+            continue
+        if body.startswith("type:") and item is not None:
+            item["type"] = note or ""
+            continue
+        drop(lineno, "a line the project model does not carry", note)
+    for text in pending:
+        res["dropped"].append((0, "the end of the file, with no element after it", text))
+    return res
+
+
+def _comments(slots):
+    """A `comments` object with the empty slots left out, so an element with no comments is
+    byte-identical to a formatVersion-2 one and the JSON stays readable. Returns None, not {},
+    so the caller can skip the key entirely."""
+    out = {}
+    for key, value in slots.items():
+        if isinstance(value, (list, tuple)):
+            if _comment_list(value):
+                out[key] = list(value)
+        elif _clean_comment(value):
+            out[key] = _clean_comment(value)
+    return out or None
 
 
 # ========================================================================================
@@ -210,6 +500,73 @@ def parse_ros2(path):
     return out, pkg_git
 
 
+def resolve_subsystem(ref, base_dir):
+    """One `subSystems:` reference -> (catalogue file or None, {label: {'from', 'interfaces':
+    {name: kind}}}). {} when the reference resolves to nothing.
+
+    A subsystem's connectable interfaces are exactly what its OWN `interfaces:` block declares
+    -- never what the .ros2 behind its `from:` declares (checkIfInterfaceInSystem,
+    RosSystemValidator.xtend:87-109, and RM091's message says the same). Both branches below
+    read that block and nothing else.
+
+    assets/node_index.json is consulted FIRST because it is what rosmodel_lint's
+    check_subsystems resolves against, so the studio and the checker never disagree about what
+    a reference exposes. A project-local system the catalogue has never seen falls back to a
+    sibling `<ref>.rossystem`, which offline is the only other place the answer can come from.
+    """
+    entry = (L.load_system_index() or {}).get(ref)
+    if entry is not None and not entry.get("hasOwnSubsystems"):
+        # nested subSystems: is a ClassCastException in the real validator (RM091); refusing to
+        # walk it here means generate never re-emits a reference we could not read.
+        return entry.get("file"), entry.get("nodes") or {}
+
+    for cand in (ref, os.path.splitext(os.path.basename(ref))[0]):
+        sibling = os.path.join(base_dir, cand + ".rossystem")
+        if not os.path.isfile(sibling):
+            continue
+        sub_model = ros_plot.extract_model(sibling, use_catalogue=False)
+        out = {}
+        for mn in sub_model["nodes"]:
+            ifaces = {}
+            for i in mn["interfaces"]:
+                ifaces[i.get("ifaceName") or i["label"]] = i["kind"]
+            out[mn["label"]] = {"from": mn.get("from"), "interfaces": ifaces}
+        return None, out
+    return None, {}
+
+
+def _subsystem_project_nodes(ref, sub_nodes, nid):
+    """Materialise a resolved subsystem's nodes as read-only project nodes (`backing: "sub"`).
+
+    They are ordinary members of project["nodes"] so that a connection endpoint stays one
+    (node id, iface id) pair everywhere -- the label/name split this whole model rests on --
+    but emit_rossystem skips them in the `nodes:` block: re-declaring a node the subsystem
+    already provides is RM090.
+    """
+    index = L.load_node_index() or {}
+    out = []
+    for label in sorted(sub_nodes):
+        info = sub_nodes[label] or {}
+        frm = info.get("from") or ""
+        pkg, _, node_name = frm.partition(".")
+        cat = index.get(frm) or {}
+        ifaces = []
+        for name, kind in sorted((info.get("interfaces") or {}).items()):
+            if kind not in ARROW_KINDS:
+                continue
+            # `exposed` is False on purpose: this file does not expose them, the referenced one
+            # does. _exposure_labels still labels the ones a connection touches, which is what
+            # decides whether the connections: block can name them.
+            ifaces.append({"id": nid("i"), "name": name, "kind": kind, "type": None,
+                           "qos": None, "label": name, "exposed": False})
+        out.append({"id": nid("n"), "label": label, "backing": "sub", "subRef": ref,
+                    "pkg": pkg, "node": node_name or label,
+                    "artifact": cat.get("artifact") or node_name or label,
+                    "catalogueFile": cat.get("file"), "namespace": None,
+                    "x": 0, "y": 0, "ifaces": ifaces, "params": []})
+    return out
+
+
 def seed_from_rossystem(path):
     """Build a project dict from an existing .rossystem plus its sibling .ros2 files."""
     model = ros_plot.extract_model(path, use_catalogue=True)
@@ -217,6 +574,7 @@ def seed_from_rossystem(path):
 
     # index every .ros2 in the system directory and one level of common subdirs
     ros2_index, pkg_git = {}, {}
+    ros2_cmts, ros2_drops, dropped = {}, {}, []
     seen = set()
     globs = ["*.ros2", "rosnodes/*.ros2", "nodes/*.ros2", "*/*.ros2"]
     for g in globs:
@@ -228,6 +586,17 @@ def seed_from_rossystem(path):
             idx, git = parse_ros2(f)
             ros2_index.update(idx)
             pkg_git.update(git)
+            scanned = scan_ros2_comments(f)
+            ros2_cmts.update(scanned["packages"])
+            # held per file, not merged: a .ros2 sitting in the directory that no node in this
+            # system references contributes nothing to generation, so its comments are not
+            # "dropped by us" and reporting them would be noise.
+            ros2_drops[f] = (list(scanned["packages"].keys()),
+                             [(os.path.basename(f),) + d for d in scanned["dropped"]])
+
+    # comments live in the source TEXT, which the YAML compose path above throws away
+    sys_cmts = scan_rossystem_comments(path)
+    dropped += [(os.path.basename(path),) + d for d in sys_cmts["dropped"]]
 
     uid = [0]
 
@@ -236,6 +605,7 @@ def seed_from_rossystem(path):
         return "%s%d" % (prefix, uid[0])
 
     nodes = []
+    diagnostics_extra = []
     node_by_modelid = {}
     for mn in model["nodes"]:
         pkg = mn.get("package")
@@ -308,6 +678,41 @@ def seed_from_rossystem(path):
                        "value": p.get("value")} for p in mn.get("params", [])]
             artifact = artifact or (node_name or mn["label"])
 
+        # Attach the captured comments. The .rossystem side is keyed by the exposure LABEL and
+        # the .ros2 side by (block, interface name): the same two identities the emitter writes
+        # back out, so a comment cannot drift onto a different element across a round-trip.
+        ncmt = sys_cmts["nodes"].get(mn["label"]) or {}
+        acmt = {}
+        if rec is not None:
+            acmt = ((ros2_cmts.get(pkg) or {}).get("artifacts") or {}).get(artifact) or {}
+        used_sys_ifaces = set()
+        for f in ifaces:
+            lbl = f.get("label") or ""
+            sc = (ncmt.get("ifaces") or {}).get(lbl) or {}
+            if sc:
+                used_sys_ifaces.add(lbl)
+            rc = (acmt.get("ifaces") or {}).get((C.KIND_TO_BLOCK[f["kind"]], f["name"])) or {}
+            cmt = _comments({"before": sc.get("before"), "line": sc.get("line"),
+                             "ros2Before": rc.get("before"), "ros2Line": rc.get("line"),
+                             "ros2Type": rc.get("type")})
+            if cmt:
+                f["comments"] = cmt
+        for p in params:
+            rc = (acmt.get("params") or {}).get(p["name"]) or {}
+            cmt = _comments({"ros2Before": rc.get("before"), "ros2Line": rc.get("line")})
+            if cmt:
+                p["comments"] = cmt
+        for lbl, sc in sorted((ncmt.get("ifaces") or {}).items()):
+            if lbl in used_sys_ifaces:
+                continue
+            texts = _comment_list(sc.get("before"))
+            if sc.get("line"):
+                texts.append(sc["line"])
+            for text in texts:
+                dropped.append((os.path.basename(path), 0,
+                                "exposure '%s' of node '%s', which this project does not model"
+                                % (lbl, mn["label"]), text))
+
         # `namespace:` is an optional RosNode member (RosSystem.xtext:64) that ros_plot has
         # always read and ros_studio used to drop on the floor -- the same silent data loss as
         # the exposure label, and the one that matters for a multi-robot system.
@@ -316,35 +721,148 @@ def seed_from_rossystem(path):
                 "artifact": artifact, "catalogueFile": cat_file,
                 "namespace": mn.get("namespace"),
                 "x": 0, "y": 0, "ifaces": ifaces, "params": params}
+        cmt = _comments({"before": ncmt.get("before"), "line": ncmt.get("line"),
+                         "from": ncmt.get("from"),
+                         "ros2Before": acmt.get("before"), "ros2Line": acmt.get("line")})
+        if cmt:
+            node["comments"] = cmt
         nodes.append(node)
         node_by_modelid[mn["id"]] = node
 
+    # `subSystems:` reuses a whole pre-built composition. Its nodes are NOT in this file's
+    # nodes: block, so ros_plot resolved every connection endpoint that lands on one to a
+    # ghost -- and the seeder dropped those connections. On the TurtleBot 3 example that was 6
+    # of 9, silently, with `generate` still reporting "0 error(s)": the same class of loss the
+    # exposure LABEL fix closed, arriving through a different door.
+    sub_systems, sub_exposure = [], {}
+    for sub in model["subSystems"]:
+        ref = sub["ref"]
+        cat_file, sub_nodes = resolve_subsystem(ref, base_dir)
+        entry = {"ref": ref, "file": cat_file}
+        cmt = _comments(sys_cmts["subSystems"].get(ref) or {})
+        if cmt:
+            entry["comments"] = cmt
+        sub_systems.append(entry)
+        made = _subsystem_project_nodes(ref, sub_nodes, nid)
+        if not made:
+            diagnostics_extra.append(
+                "subSystems: '%s' exposes nothing this project could resolve — any connection "
+                "naming one of its interfaces cannot be re-linked and will NOT be re-emitted. "
+                "The reference itself is preserved." % ref)
+        for n in made:
+            nodes.append(n)
+            for f in n["ifaces"]:
+                # a connections: endpoint resolves by name only -- there is no artifact-
+                # qualified form -- so a label two subsystem nodes both declare (turtlebot's
+                # "tf") is genuinely ambiguous (RM065). Bind the first in sorted node order:
+                # either binding emits the identical connections: line, so the choice only has
+                # to be deterministic.
+                sub_exposure.setdefault(f["name"], (n, f))
+
     # rebuild connections from the model edges, resolving label -> (node, iface)
-    conns = []
+    conns, used_conns = [], set()
     for e in model["edges"]:
         fn = node_by_modelid.get(e["fromNode"])
         tn = node_by_modelid.get(e["toNode"])
-        if not fn or not tn:
+        fi = _match_iface(fn, e["fromLabel"], e.get("kind")) if fn else None
+        ti = _match_iface(tn, e["toLabel"], None) if tn else None
+        if not (fn and fi):
+            fn, fi = sub_exposure.get(e["fromLabel"], (None, None))
+        if not (tn and ti):
+            tn, ti = sub_exposure.get(e["toLabel"], (None, None))
+        if fn and ti and fi and tn:
+            conn = {"id": nid("c"), "from": {"n": fn["id"], "i": fi["id"]},
+                    "to": {"n": tn["id"], "i": ti["id"]}}
+            # a connection has no name of its own -- the LABEL PAIR is its identity, in the
+            # source and in emit_rossystem alike, so that is the key the comments hang off.
+            key = (e["fromLabel"], e["toLabel"])
+            cc = sys_cmts["connections"].get(key)
+            if cc is not None:
+                used_conns.add(key)
+                cmt = _comments({"before": cc.get("before"), "line": cc.get("line")})
+                if cmt:
+                    conn["comments"] = cmt
+            conns.append(conn)
+    for key, cc in sorted(sys_cmts["connections"].items()):
+        if key in used_conns:
             continue
-        fi = _match_iface(fn, e["fromLabel"], e.get("kind"))
-        ti = _match_iface(tn, e["toLabel"], None)
-        if fi and ti:
-            conns.append({"id": nid("c"), "from": {"n": fn["id"], "i": fi["id"]},
-                          "to": {"n": tn["id"], "i": ti["id"]}})
+        texts = _comment_list(cc.get("before"))
+        if cc.get("line"):
+            texts.append(cc["line"])
+        for text in texts:
+            dropped.append((os.path.basename(path), 0,
+                            "connection [%s, %s], which this project does not model"
+                            % key, text))
 
     _grid_layout(nodes)
-    packages = {n["pkg"]: {"fromGitRepo": pkg_git.get(n["pkg"])}
-                for n in nodes if n["backing"] == "hand" and n["pkg"]}
+    packages = {}
+    for n in nodes:
+        if n["backing"] != "hand" or not n["pkg"]:
+            continue
+        entry = {"fromGitRepo": pkg_git.get(n["pkg"])}
+        cmt = _comments({"header": (ros2_cmts.get(n["pkg"]) or {}).get("header")})
+        if cmt:
+            entry["comments"] = cmt
+        packages[n["pkg"]] = entry
+    used_pkgs = set(packages)
+    for f, (pkgs, drops) in sorted(ros2_drops.items()):
+        if used_pkgs.intersection(pkgs):
+            dropped += drops
 
-    return {
-        "formatVersion": 2,
+    for label in sorted(set(sys_cmts["nodes"]) - set(n["label"] for n in nodes)):
+        nc = sys_cmts["nodes"][label]
+        texts = _comment_list(nc.get("before"))
+        for slot in ("line", "from"):
+            if nc.get(slot):
+                texts.append(nc[slot])
+        for text in texts:
+            dropped.append((os.path.basename(path), 0,
+                            "node '%s', which this project does not model" % label, text))
+
+    # ros_plot's _resolve() only knows this file's own nodes:, so it reports every subSystems:
+    # endpoint as "dangling" -- true for the read-only viewer, false here now that the reference
+    # is resolved. Matched on the label it names rather than on the whole sentence, so a reword
+    # in ros_plot drops the filter (noisy) instead of silencing a real dangling endpoint.
+    diagnostics = [d for d in model.get("diagnostics", [])
+                   if not any("endpoint '%s' matches no declared interface" % lbl in d
+                              for lbl in sub_exposure)]
+    diagnostics += diagnostics_extra
+    diagnostics += _dropped_comment_diagnostics(dropped)
+
+    project = {
+        # 3: elements carry a `comments` object (see the comment policy above) and the system
+        # carries `subSystems`. A formatVersion-2 project simply has neither and loads
+        # unchanged -- every reader below uses .get() with an empty default.
+        "formatVersion": 3,
         "system": {"name": model["systemName"], "fromFile": model.get("fromFile")},
+        "subSystems": sub_systems,
         "packages": packages,
         "nodes": nodes,
         "connections": conns,
         "seededFrom": os.path.abspath(path),
-        "diagnostics": {"global": list(model.get("diagnostics", [])), "byNode": {}},
+        "diagnostics": {"global": diagnostics, "byNode": {}},
     }
+    cmt = _comments({"header": sys_cmts.get("header"), "fromFile": sys_cmts.get("fromFile")})
+    if cmt:
+        project["comments"] = cmt
+    return project
+
+
+def _dropped_comment_diagnostics(dropped, limit=12):
+    """SKILL.md rule 12: a comment the emitter will not reproduce must be REPORTED, never
+    silently discarded. One line per comment, naming the file, the line and what it annotated,
+    so the author can re-place it by hand instead of discovering the loss in a diff."""
+    if not dropped:
+        return []
+    out = ["%d comment(s) could not be attached to a model element and will NOT be re-emitted "
+           "(see commands/ros-studio.md for which positions are preserved):" % len(dropped)]
+    for item in dropped[:limit]:
+        fname, line, what, text = item
+        where = "%s:%d" % (fname, line) if line else fname
+        out.append("  %s  on %s -- \"%s\"" % (where, what, _clean_comment(text)))
+    if len(dropped) > limit:
+        out.append("  … and %d more." % (len(dropped) - limit))
+    return out
 
 
 def _match_iface(node, label, kind):
@@ -382,8 +900,9 @@ def _grid_layout(nodes):
 
 def blank_project(name="new_system"):
     return {
-        "formatVersion": 2,
+        "formatVersion": 3,
         "system": {"name": name, "fromFile": None},
+        "subSystems": [],
         "packages": {},
         "nodes": [],
         "connections": [],
@@ -447,25 +966,30 @@ def _companion_types(project):
     return out
 
 
-def _type_comment(typ, companion_pkgs):
-    """Disclosure comment for a type reference (RM089), unless we emit its companion .ros."""
+def _type_auto_note(typ, companion_pkgs):
+    """The RM089 disclosure BODY for a type reference (no '# '), or "" when the type resolves to
+    nothing or we are about to emit its companion .ros. _note_suffix() merges it with whatever
+    the author wrote on that line, so the disclosure survives an edit."""
     if not typ or "/" not in typ:
         return ""
     pkg = typ.split("/")[0]
     if pkg in companion_pkgs:
         return ""
     rel = _type_catalogue_file(typ)
-    return "  # assets/roscommonobjects/%s" % rel if rel else ""
+    return "assets/roscommonobjects/%s" % rel if rel else ""
 
 
-def emit_ros2(package, git, art_records, companion_pkgs):
+def emit_ros2(package, git, art_records, companion_pkgs, pkg_comments=None):
     """One AmentPackage block with N artifacts (sorted). art_records: list of node dicts."""
-    lines = [package + ":"]
+    lines = _comment_block((pkg_comments or {}).get("header"), "")
+    lines.append(package + ":")
     if git:
         lines.append("  fromGitRepo: " + _q_double(git))
     lines.append("  artifacts:")
     for node in sorted(art_records, key=lambda n: n["artifact"]):
-        lines.append("    " + node["artifact"] + ":")
+        nc = node.get("comments") or {}
+        lines.extend(_comment_block(nc.get("ros2Before"), "    "))
+        lines.append("    " + node["artifact"] + ":" + _note_suffix(nc.get("ros2Line")))
         lines.append("      node: " + node["node"])
         for kind in ARROW_KINDS:
             group = sorted([f for f in node["ifaces"] if f["kind"] == kind],
@@ -474,16 +998,23 @@ def emit_ros2(package, git, art_records, companion_pkgs):
                 continue
             lines.append("      " + C.KIND_TO_BLOCK[kind] + ":")
             for f in group:
-                lines.append("        " + _q_single(f["name"]) + ":")
+                fc = f.get("comments") or {}
+                lines.extend(_comment_block(fc.get("ros2Before"), "        "))
+                lines.append("        " + _q_single(f["name"]) + ":"
+                             + _note_suffix(fc.get("ros2Line")))
                 typ = f.get("type") or "TODO_pkg/msg/Type"
                 lines.append("          type: " + _q_single(typ)
-                             + _type_comment(typ, companion_pkgs))
+                             + _note_suffix(fc.get("ros2Type"),
+                                            _type_auto_note(typ, companion_pkgs)))
                 _emit_qos(lines, f.get("qos"), "          ")
         params = node.get("params") or []
         if params:
             lines.append("      parameters:")
             for p in sorted(params, key=lambda p: p["name"]):
-                lines.append("        " + _q_single(p["name"]) + ":")
+                pc = p.get("comments") or {}
+                lines.extend(_comment_block(pc.get("ros2Before"), "        "))
+                lines.append("        " + _q_single(p["name"]) + ":"
+                             + _note_suffix(pc.get("ros2Line")))
                 lines.append("          type: " + (p.get("ptype") or "String"))
                 lines.append("          default: " + _fmt_param_value(p.get("ptype"),
                                                                       p.get("value")))
@@ -566,6 +1097,20 @@ def _exposure_labels(project):
 
     labels, used = {}, set()
 
+    # pass 0: a `subSystems:` node's exposure label belongs to the REFERENCED file. It cannot be
+    # renamed here -- it is the exact string a connections: endpoint has to spell -- so it claims
+    # its name before any local exposure can take it. Two subsystem nodes declaring the same
+    # label (turtlebot's "tf") both map to that one string: that ambiguity is the source file's
+    # (RM065), and inventing a distinguishing label here would emit an endpoint that resolves to
+    # nothing.
+    for n, f in wanted:
+        if n.get("backing") != "sub":
+            continue
+        lbl = (f.get("label") or f.get("name") or "").strip()
+        if lbl:
+            labels[(n["id"], f["id"])] = lbl
+            used.add(lbl)
+
     # pass 1: source labels are authoritative
     for n, f in wanted:
         lbl = (f.get("label") or "").strip()
@@ -596,19 +1141,39 @@ def _exposure_labels(project):
 
 def emit_rossystem(project):
     labels = _exposure_labels(project)
+    pc = project.get("comments") or {}
     sysname = project["system"].get("name") or "system"
-    lines = [sysname + ":"]
+    lines = _comment_block(pc.get("header"), "")
+    lines.append(sysname + ":")
     from_file = project["system"].get("fromFile")
     if from_file:
-        lines.append("  fromFile: " + _q_double(from_file))
+        lines.append("  fromFile: " + _q_double(from_file) + _note_suffix(pc.get("fromFile")))
+    # ROSSYSTEM_TOP_KEYS: fromFile -> subSystems -> processes -> nodes -> parameters ->
+    # connections (rule 25). 'components+=SubSystem*' is a repetition, so each entry is one bare
+    # (optionally quoted) EString on its own indented line -- there is no bracket form (RM093).
+    subs = project.get("subSystems") or []
+    if subs:
+        lines.append("  subSystems:")
+        for s in subs:
+            sc = s.get("comments") or {}
+            lines.extend(_comment_block(sc.get("before"), "    "))
+            auto = "assets/rosmodelscatalog/%s" % s["file"] if s.get("file") else ""
+            lines.append("    " + _q_double(s["ref"]) + _note_suffix(sc.get("line"), auto))
     lines.append("  nodes:")
     for n in project["nodes"]:
-        lines.append("    " + _q_double(n["label"]) + ":")
+        # provided by the subSystems: block above -- re-declaring it under this file's own
+        # nodes: is RM090 ("two distinct RosNode objects answer to the same name").
+        if n.get("backing") == "sub":
+            continue
+        nc = n.get("comments") or {}
+        lines.extend(_comment_block(nc.get("before"), "    "))
+        lines.append("    " + _q_double(n["label"]) + ":" + _note_suffix(nc.get("line")))
         from_val = "%s.%s" % (n["pkg"], n["node"])
-        comment = ""
+        auto = ""
         if n["backing"] == "cat" and n.get("catalogueFile"):
-            comment = "  # assets/rosmodelscatalog/%s" % n["catalogueFile"]
-        lines.append("      from: " + _q_double(from_val) + comment)
+            auto = "assets/rosmodelscatalog/%s" % n["catalogueFile"]
+        lines.append("      from: " + _q_double(from_val)
+                     + _note_suffix(nc.get("from"), auto))
         # ROSSYSTEM_NODE_KEYS fixes from -> namespace -> interfaces -> parameters
         # (RosSystem.xtext:60-75); emitting it anywhere else is RM039. The value is a plain
         # EString, so it is quoted like every other EString we write.
@@ -620,19 +1185,22 @@ def emit_rossystem(project):
         if exposed:
             lines.append("      interfaces:")
             for f in exposed:
+                fc = f.get("comments") or {}
                 lbl = labels[(n["id"], f["id"])]
                 tgt = "%s::%s" % (n["artifact"], f["name"])
+                lines.extend(_comment_block(fc.get("before"), "        "))
                 lines.append("        - " + _q_double(lbl) + ": " + f["kind"] + "-> "
-                             + _q_double(tgt))
+                             + _q_double(tgt) + _note_suffix(fc.get("line")))
     if project["connections"]:
         lines.append("  connections:")
         for c in project["connections"]:
-            fn = _node_by_id(project, c["from"]["n"])
-            tn = _node_by_id(project, c["to"]["n"])
             fl = labels.get((c["from"]["n"], c["from"]["i"]))
             tl = labels.get((c["to"]["n"], c["to"]["i"]))
             if fl and tl:
-                lines.append("    - [" + _q_double(fl) + ", " + _q_double(tl) + "]")
+                cc = c.get("comments") or {}
+                lines.extend(_comment_block(cc.get("before"), "    "))
+                lines.append("    - [" + _q_double(fl) + ", " + _q_double(tl) + "]"
+                             + _note_suffix(cc.get("line")))
     return "\n".join(lines) + "\n"
 
 
@@ -657,12 +1225,15 @@ def _catalogue_artifact_types(cat_file, artifact, cache):
 
 
 def _effective_iface_type(node, iface, cache):
-    """The interface's own type, or -- for a catalogue-backed node whose interface is type-less
-    -- the type recovered from the catalogue .ros2. Empty string when genuinely unknown."""
+    """The interface's own type, or -- for a catalogue- or subSystems-backed node whose
+    interface is type-less -- the type recovered from the catalogue .ros2. Empty string when
+    genuinely unknown. A `sub` node is included because node_index carries only the kind for a
+    subsystem's exposures, so without this every connection to one would slip past the
+    same-type gate that the language server does enforce."""
     t = (iface.get("type") or "").strip()
     if t:
         return t
-    if node.get("backing") == "cat" and node.get("catalogueFile"):
+    if node.get("backing") in ("cat", "sub") and node.get("catalogueFile"):
         m = _catalogue_artifact_types(node["catalogueFile"], node.get("artifact"), cache)
         return (m.get(iface.get("name")) or "").strip()
     return ""
@@ -691,8 +1262,10 @@ def validate_project(project):
     def flag(nid_, msg):
         by_node.setdefault(nid_, []).append(msg)
 
-    # B3: an empty `nodes:` block is "missing RULE_BEGIN" to the server.
-    if not project.get("nodes"):
+    # B3: an empty `nodes:` block is "missing RULE_BEGIN" to the server. Counted over the nodes
+    # that are actually WRITTEN into it: a `subSystems:` node is skipped by emit_rossystem, so a
+    # project holding only those would still open a bodiless nodes: block here.
+    if not [n for n in project.get("nodes") or [] if n.get("backing") != "sub"]:
         glob_errs.append("System has no nodes — the language server rejects an empty "
                          "'nodes:' block. Add at least one node before generating.")
 
@@ -755,8 +1328,9 @@ def generate_files(project):
         if n["backing"] == "hand" and n["pkg"]:
             by_pkg.setdefault(n["pkg"], []).append(n)
     for pkg, recs in sorted(by_pkg.items()):
-        git = (project.get("packages", {}).get(pkg) or {}).get("fromGitRepo")
-        files[pkg + ".ros2"] = emit_ros2(pkg, git, recs, companion_pkgs)
+        entry = project.get("packages", {}).get(pkg) or {}
+        files[pkg + ".ros2"] = emit_ros2(pkg, entry.get("fromGitRepo"), recs, companion_pkgs,
+                                         entry.get("comments"))
 
     for pkg, blocks in sorted(companions.items()):
         files[pkg + ".ros"] = _companion_ros(pkg, blocks)
@@ -995,6 +1569,54 @@ def cmd_render(args):
     return 0
 
 
+def _stage_local_subsystems(project, outdir):
+    """Copy a project-local `subSystems:` target into the output directory, unchanged.
+
+    The generated directory is meant to be a model set the checker and the language server can
+    consume on their own. A catalogued reference resolves through assets/, but a project-local
+    one resolves only by sitting NEXT TO the referencing file -- so without this every endpoint
+    it provides raises RM050 there and `generate` refuses its own correct output. collect_deps
+    already stages the same file for the --oracle run (its docstring, "subSystems: entries are
+    staged and re-linted the same way"); this puts it in place one step earlier, for the lint.
+
+    Its OWN project-local .ros2 files come with it: the real language server resolved neither
+    the node nor its interfaces without them (oracle run on tests/fixtures/subsystems, REJECTED
+    with "Couldn't resolve reference to Node 'sub_probe_base.base_driver'" until they were
+    staged), and an unresolved node then reports as a same-type connection error two lines
+    further down, which is a thoroughly misleading way to learn a file is missing.
+
+    Copied, never rewritten: it is a different model with its own author. A name the studio
+    itself generated always wins, so staging can never overwrite this project's own output.
+    Returns what it wrote."""
+    seeded = project.get("seededFrom")
+    if not seeded:
+        return []
+    base = os.path.dirname(os.path.abspath(seeded))
+    out = []
+
+    def stage(src):
+        dst = os.path.join(outdir, os.path.basename(src))
+        if (not os.path.isfile(src) or os.path.exists(dst)
+                or os.path.abspath(src) == os.path.abspath(dst)):
+            return None
+        shutil.copyfile(src, dst)
+        out.append(dst)
+        return dst
+
+    for s in project.get("subSystems") or []:
+        if s.get("file"):
+            continue                      # catalogued: assets/ resolves it, nothing to stage
+        for cand in (s.get("ref") or "", os.path.basename(s.get("ref") or "")):
+            src = os.path.join(base, os.path.splitext(cand)[0] + ".rossystem")
+            if not stage(src):
+                continue
+            for mn in ros_plot.extract_model(src, use_catalogue=False)["nodes"]:
+                if mn.get("package"):
+                    stage(os.path.join(base, mn["package"] + ".ros2"))
+            break
+    return out
+
+
 def cmd_generate(args):
     project = _load_project(args.project)
     outdir = os.path.abspath(args.outdir or os.path.join(
@@ -1030,6 +1652,12 @@ def cmd_generate(args):
         written.append(p)
         print("wrote %s" % p)
 
+    staged = _stage_local_subsystems(project, outdir)
+    for p in staged:
+        print("staged %s (subSystems: dependency, copied unchanged)" % p)
+
+    # lint covers what THIS project wrote; a staged file is someone else's model and its
+    # findings are not this run's to report.
     errs, warns, infos, findings = run_lint(written)
     print("\nrosmodel_lint: %d error(s), %d warning(s), %d info(s)"
           % (len(errs), len(warns), len(infos)))
@@ -1052,7 +1680,9 @@ def cmd_generate(args):
 
     if args.oracle:
         print("\n--- oracle (real language server) ---")
-        ok, text = run_oracle(outdir, written)
+        # a staged subSystems: target is walked too -- it can carry catalogue references of its
+        # own that collect_deps still has to vendor in before the server sees the directory.
+        ok, text = run_oracle(outdir, written + staged)
         print(text)
         if not ok:
             print("oracle did NOT return a clean ACCEPTED.", file=sys.stderr)

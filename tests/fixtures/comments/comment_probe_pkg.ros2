@@ -1,0 +1,22 @@
+# comment_probe_pkg -- the .ros2 half of the comment round-trip witness.
+# The file header, an artifact, an interface, a `type:` line and a parameter each carry one
+# comment, because those are the five .ros2 positions the policy preserves.
+comment_probe_pkg:
+  artifacts:
+    # PRESERVED block above an artifact
+    listener: # PRESERVED trailing on the artifact key
+      node: listener
+      subscribers:
+        # PRESERVED block above a .ros2 interface
+        'chatter': # PRESERVED trailing on a .ros2 interface key
+          type: 'std_msgs/msg/String' # PRESERVED trailing on the type: line
+      parameters:
+        # PRESERVED block above a .ros2 parameter
+        'queue_size': # PRESERVED trailing on a .ros2 parameter key
+          type: Integer
+          default: 10
+    talker:
+      node: talker
+      publishers:
+        'chatter':
+          type: 'std_msgs/msg/String'

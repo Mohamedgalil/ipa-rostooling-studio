@@ -1,0 +1,25 @@
+# comment_probe -- the round-trip witness for /ros-studio's comment policy.
+#
+# Every comment in this file and in its sibling comment_probe_pkg.ros2 sits in a position the
+# policy names (commands/ros-studio.md, "What happens to comments"), so studio_roundtrip.py's
+# COMMENTS check has one carrier for each. Two of them are in positions the policy DROPS, and
+# are marked as such: `init` must REPORT those, not swallow them.
+#
+# Deliberately tiny: the point is comment placement, not topology.
+comment_probe:
+  fromFile: "comment_probe/launch/probe.launch.py" # PRESERVED trailing on fromFile:
+  nodes: # DROPPED trailing on a block key -- the model has no slot for the key itself
+    # PRESERVED block above a node
+    "talker": # PRESERVED trailing on the node key line
+      from: "comment_probe_pkg.talker" # PRESERVED trailing on from:
+      interfaces:
+        # PRESERVED block above an exposure
+        - "chatter_pub": pub-> "talker::chatter" # PRESERVED trailing on an exposure
+    "listener":
+      from: "comment_probe_pkg.listener"
+      interfaces:
+        - "chatter_sub": sub-> "listener::chatter"
+  connections:
+    # PRESERVED block above a connection
+    - [chatter_pub, chatter_sub] # PRESERVED trailing on a connection
+# DROPPED block at the end of the file -- no element follows it to attach to

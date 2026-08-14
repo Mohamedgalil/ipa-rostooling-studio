@@ -1,0 +1,10 @@
+sub_probe_base:
+  artifacts:
+    base_driver:
+      node: base_driver
+      publishers:
+        'odom':
+          type: 'nav_msgs/msg/Odometry'
+      subscribers:
+        'cmd_vel':
+          type: 'geometry_msgs/msg/Twist'
