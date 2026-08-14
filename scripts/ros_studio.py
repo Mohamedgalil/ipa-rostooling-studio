@@ -506,7 +506,17 @@ def parse_ros2(path):
                                    "ptype": ptype or "String", "value": pdefault})
             rec = {"artifact": artifact, "node": node_name, "package": package,
                    "interfaces": ifaces, "params": params}
-            out[(package, node_name)] = rec
+            # The ARTIFACT key is unique by construction (RM009 catches a repeat). The NODE key
+            # is not: several artifacts may declare the same `node:`, which is legal and which
+            # the oracle accepts. Letting the last one win silently deleted the others' artifacts
+            # from the regenerated .ros2 and re-pointed the author's `driver_a::scan` arrow at
+            # driver_b's `scan` -- a different interface, with a different message type, reported
+            # as 0 errors. Mark the key ambiguous instead, and let the caller prefer the explicit
+            # artifact it was actually given.
+            if (package, node_name) in out and out[(package, node_name)] is not rec:
+                out[(package, node_name)] = AMBIGUOUS_NODE
+            elif (package, node_name) not in out:
+                out[(package, node_name)] = rec
             out[(package, artifact)] = rec
     return out, pkg_git
 
@@ -515,6 +525,28 @@ def parse_ros2(path):
 # name spells. RosQNP.xtend names every spec '<pkg>/msg/<Name>' (or /srv/, /action/), so the
 # project key and the file layout are two views of one identity.
 ROS_BLOCK_TO_TYPE_SEG = {v: k for k, v in C.TYPE_SEG_TO_ROS_BLOCK.items()}
+
+
+# Sentinel for a (package, node) key that several artifacts answer to. Never a record: any
+# code that reaches for one has to decide what to do about the ambiguity rather than be handed
+# an arbitrary winner.
+AMBIGUOUS_NODE = object()
+
+
+def resolve_artifact(ros2_index, pkg, node_name, artifact):
+    """The .ros2 artifact record a `from: pkg.NODE` + `ARTIFACT::iface` pair names.
+
+    The ARTIFACT the arrows spell is the specific evidence and wins outright. The node name is
+    a fallback for the arrow-less case, and is refused when it is ambiguous -- picking one of
+    several artifacts that declare that `node:` is how a model came back pointing at a
+    different interface of a different type, silently.
+    """
+    if artifact:
+        rec = ros2_index.get((pkg, artifact))
+        if rec is not None and rec is not AMBIGUOUS_NODE:
+            return rec
+    rec = ros2_index.get((pkg, node_name))
+    return None if rec is AMBIGUOUS_NODE else rec
 
 
 def parse_ros(path):
@@ -615,13 +647,14 @@ def resolve_subsystem(ref, base_dir):
     if entry is not None and not entry.get("hasOwnSubsystems"):
         # nested subSystems: is a ClassCastException in the real validator (RM091); refusing to
         # walk it here means generate never re-emits a reference we could not read.
-        return entry.get("file"), entry.get("nodes") or {}
+        return entry.get("file"), entry.get("nodes") or {}, None
 
     for cand in (ref, os.path.splitext(os.path.basename(ref))[0]):
         sibling = os.path.join(base_dir, cand + ".rossystem")
         if not os.path.isfile(sibling):
             continue
         sub_model = ros_plot.extract_model(sibling, use_catalogue=False)
+        resolved_path = os.path.abspath(sibling)
         out = {}
         for mn in sub_model["nodes"]:
             ifaces = {}
@@ -638,8 +671,12 @@ def resolve_subsystem(ref, base_dir):
                 # deliberately does not.
                 ifaces[i["label"]] = i["kind"]
             out[mn["label"]] = {"from": mn.get("from"), "interfaces": ifaces}
-        return None, out
-    return None, {}
+        # the PATH, not just "not catalogued": several directories in one workspace can hold a
+        # `common.rossystem`, and both the merge (which decides whether a reference names a
+        # system it also carries inline) and `generate` (which stages the target next to its
+        # output) were picking one of them by name alone.
+        return None, out, resolved_path
+    return None, {}, None
 
 
 def _subsystem_project_nodes(ref, sub_nodes, nid):
@@ -704,19 +741,23 @@ def _drop_catalogued_types(types):
 def seed_from_rossystem(path, base_index=None):
     """Build a project dict from an existing .rossystem plus its sibling .ros2/.ros files.
 
-    `base_index` is the multi-file seeder's shared workspace index, (ros2_index, pkg_git,
-    types); the file's OWN directory is indexed on top of it, so a sibling always beats a
-    namesake found elsewhere in the tree. Left None, the behaviour is exactly the single-file
-    one: only this file's directory and the three conventional subdirs are opened.
+    `base_index` is the multi-file seeder's shared workspace index -- (ros2_index, pkg_git,
+    types, ros2_comments, extras, dropped_types); the file's OWN directory is indexed on top of
+    it, so a sibling always beats a namesake found elsewhere in the tree. Left None, the
+    behaviour is exactly the single-file one: only this file's directory and the three
+    conventional subdirs are opened.
     """
     model = ros_plot.extract_model(path, use_catalogue=True)
     base_dir = os.path.dirname(os.path.abspath(path))
 
-    workspace = base_index or ({}, {}, {})
+    workspace = base_index or ({}, {}, {}, {}, [], {})
 
     # index every .ros2 in the system directory and one level of common subdirs
     ros2_index, pkg_git = dict(workspace[0]), dict(workspace[1])
-    ros2_cmts, ros2_drops, dropped = {}, {}, []
+    # The tree walk's comments come FIRST so a file in this directory overwrites its namesake
+    # from elsewhere, matching how the index itself resolves.
+    ros2_cmts, ros2_drops, dropped = dict(workspace[3]), {}, []
+    workspace_extras = list(workspace[4])
     seen = set()
     for g in SEED_GLOBS:
         for f in glob.glob(os.path.join(base_dir, g)):
@@ -739,7 +780,10 @@ def seed_from_rossystem(path, base_index=None):
     # regenerated it wrote back the type NAMES with empty bodies -- STATUS.md sec 8 defect 2,
     # the same silent loss the exposure label fix closed one level up.
     ros_types = dict(workspace[2])
-    ros_extras = []
+    # A .ros or .ros2 the TREE walk opened reports its unmodelled members too. Same content,
+    # same loss, and the walk is exactly the case where the author is least likely to be
+    # looking at the file.
+    ros_extras = [(e[0], e[2], e[3]) if len(e) > 3 else e for e in workspace_extras]
     for g in SEED_ROS_GLOBS:
         for f in sorted(glob.glob(os.path.join(base_dir, g))):
             found, extras = parse_ros(os.path.abspath(f))
@@ -771,8 +815,7 @@ def seed_from_rossystem(path, base_index=None):
                 break
         rec = None
         if pkg and node_name:
-            rec = ros2_index.get((pkg, node_name)) or (
-                ros2_index.get((pkg, artifact)) if artifact else None)
+            rec = resolve_artifact(ros2_index, pkg, node_name, artifact)
         backing = "hand"
         cat_file = None
         if rec is None and mn.get("resolved"):
@@ -795,8 +838,16 @@ def seed_from_rossystem(path, base_index=None):
             artifact = rec["artifact"]
             claimed = set()
             for i in rec["interfaces"]:
-                src = (exposures.get((i["name"], i["kind"]))
-                       or exposures_by_name.get(i["name"]))
+                # (name, kind) FIRST and the name-only index only as a fallback -- and never
+                # when an exposure of that name exists under a DIFFERENT kind. A publisher and a
+                # subscriber sharing one interface name is routine in the corpus
+                # (scan_ros2_comments' docstring says so), and the unqualified fallback matched
+                # the subscriber against the publisher's exposure record: the subscriber came
+                # back `exposed`, so `generate` wrote an exposure the author had deliberately
+                # withheld and the system grew a public interface it never declared.
+                src = exposures.get((i["name"], i["kind"]))
+                if src is None and not any((i["name"], k) in exposures for k in ARROW_KINDS):
+                    src = exposures_by_name.get(i["name"])
                 if src is not None:
                     claimed.add(src["label"])
                 ifaces.append({"id": nid("i"), "name": i["name"], "kind": i["kind"],
@@ -891,8 +942,12 @@ def seed_from_rossystem(path, base_index=None):
     sub_systems, sub_exposure = [], {}
     for sub in model["subSystems"]:
         ref = sub["ref"]
-        cat_file, sub_nodes = resolve_subsystem(ref, base_dir)
+        cat_file, sub_nodes, local_path = resolve_subsystem(ref, base_dir)
         entry = {"ref": ref, "file": cat_file}
+        if local_path:
+            # relative to the project, so a project.json stays portable between machines
+            entry["localFile"] = os.path.relpath(local_path, base_dir).replace(os.sep, "/")
+            entry["localDir"] = base_dir
         cmt = _comments(sys_cmts["subSystems"].get(ref) or {})
         if cmt:
             entry["comments"] = cmt
@@ -993,6 +1048,32 @@ def seed_from_rossystem(path, base_index=None):
             "be re-emitted." % (fname, line, text))
     diagnostics += _dropped_comment_diagnostics(dropped)
 
+    # A .ros2 may declare artifacts this system does not use -- one package commonly serves
+    # several systems. `generate` rebuilds each .ros2 from the project's NODES, so those
+    # artifacts are not in the output; and because source_facts() filters by the same rule,
+    # `--diff` cancels the loss out on both sides and reports "no model-level change". Silent
+    # either way, which is what rule 12 exists to forbid. Name them here instead: this project
+    # is a system, the other artifacts are not its content, and the author has to know that
+    # regenerating over the original file would drop them.
+    used_arts = {}
+    for n in nodes:
+        if n.get("backing") == "hand" and n.get("pkg") and n.get("artifact"):
+            used_arts.setdefault(n["pkg"], set()).add(n["artifact"])
+    seen_extra = set()
+    for key, art_rec in sorted(ros2_index.items(), key=lambda kv: (kv[0][0], str(kv[0][1]))):
+        if art_rec is AMBIGUOUS_NODE or not isinstance(art_rec, dict):
+            continue
+        pkg_name, art_name = key
+        if pkg_name not in used_arts or art_rec.get("artifact") != art_name:
+            continue                      # not our package, or this is the (pkg, node) alias
+        if art_name in used_arts[pkg_name] or (pkg_name, art_name) in seen_extra:
+            continue
+        seen_extra.add((pkg_name, art_name))
+        diagnostics.append(
+            "%s.ros2 declares artifact '%s', which no node of this system references; "
+            "`generate` rebuilds that file from this project and will NOT re-emit it."
+            % (pkg_name, art_name))
+
     project = {
         # 3: elements carry a `comments` object (see the comment policy above) and the system
         # carries `subSystems`. 4: `types` carries the message FIELDS of locally defined specs
@@ -1063,6 +1144,11 @@ def _index_workspace(roots):
     that genuinely appears twice resolves the same way every run; the file's OWN directory is
     indexed on top of this afterwards, so a sibling always wins."""
     ros2_index, pkg_git, types = {}, {}, {}
+    # The COMMENTS of a .ros2 found out here, and every member of a .ros this walk slurps that
+    # the project has no slot for. Widening artifact resolution to whole trees without widening
+    # these two made a node whose .ros2 lives in a sibling directory -- the entire reason this
+    # function exists -- lose every comment in that file, unreported.
+    ros2_cmts, extras = {}, []
     for root in roots:
         for base, dirs, names in os.walk(root):
             dirs.sort()
@@ -1072,11 +1158,15 @@ def _index_workspace(roots):
                     idx, git = parse_ros2(path)
                     ros2_index.update(idx)
                     pkg_git.update(git)
+                    scanned = scan_ros2_comments(path)
+                    ros2_cmts.update(scanned["packages"])
+                    extras += [(name,) + d for d in scanned["dropped"]]
                 elif name.endswith(".ros"):
-                    found, _extras = parse_ros(path)
+                    found, found_extras = parse_ros(path)
                     types.update(found)
-    types, _dropped = _drop_catalogued_types(types)
-    return ros2_index, pkg_git, types
+                    extras += [(name,) + e for e in found_extras]
+    types, dropped_types = _drop_catalogued_types(types)
+    return ros2_index, pkg_git, types, ros2_cmts, extras, dropped_types
 
 
 def _unique_label(label, used, hint):
@@ -1134,9 +1224,11 @@ def seed_from_many(paths, roots=None, name=None):
 
     # --- pass A: every real node, re-identified and de-duplicated by label ----------------
     label_used = set()
+    exposure_used = set()  # labels claimed across the MERGED file (see pass A below)
     node_map = {}          # (source index, old node id) -> merged node
     iface_map = {}         # (source index, old node id, old iface id) -> merged iface
     real_index = {}        # system key -> {label: merged node}
+    real_by_path = {}      # abspath of a seeded .rossystem -> {label: merged node}
     for si, (path, project) in enumerate(seeds):
         sysname = project["system"].get("name") or os.path.basename(path)
         for n in project["nodes"]:
@@ -1159,10 +1251,33 @@ def seed_from_many(paths, roots=None, name=None):
                 new["ifaces"].append(nf)
                 iface_map[(si, n["id"], f["id"])] = nf
             new["params"] = [dict(p, id=nid("p")) for p in n.get("params") or []]
+            # An exposure label is unique within its NODE, not within the file (RM065), so two
+            # merged systems routinely arrive with the same one -- and a connections: endpoint
+            # naming it would now be ambiguous where in the source files it was not. The MERGE
+            # is what created that ambiguity, so the merge is what resolves it: rename here,
+            # where the source is still identifiable, rather than in _exposure_labels, which
+            # cannot tell a merged duplicate from one the author deliberately wrote.
+            for nf in new["ifaces"]:
+                lbl = (nf.get("label") or "").strip()
+                if not lbl:
+                    continue
+                fixed = _unique_label(lbl, exposure_used, sysname)
+                if fixed != lbl:
+                    nf["label"] = fixed
+                    diags.append("%s: exposure '%s' on node '%s' collides with one already "
+                                 "merged and was renamed to '%s' -- a connections: endpoint "
+                                 "naming it would otherwise resolve to two nodes (RM065)."
+                                 % (os.path.basename(path), lbl, label, fixed))
+                exposure_used.add(fixed)
             merged["nodes"].append(new)
             node_map[(si, n["id"])] = new
             for key in _system_keys(project, path):
                 real_index.setdefault(key, {})[n["label"]] = new
+            # keyed by the file itself too: two directories in one workspace can each hold a
+            # `common.rossystem`, and a name-only index handed pass B whichever was merged last
+            # -- so a reference resolved against THIS directory could collapse onto an unrelated
+            # system's node and silently rewire the connection to it.
+            real_by_path.setdefault(os.path.abspath(path), {})[n["label"]] = new
 
     # --- pass B: subSystems: shadows -----------------------------------------------------
     # A shadow is a read-only stand-in (backing "sub") for a node the referenced file declares,
@@ -1180,10 +1295,19 @@ def seed_from_many(paths, roots=None, name=None):
                 continue
             ref = n.get("subRef") or ""
             hit = None
-            for key in (ref, os.path.splitext(os.path.basename(ref))[0]):
-                hit = (real_index.get(key) or {}).get(n["label"])
-                if hit is not None:
-                    break
+            # the file this reference actually resolved to, when seeding recorded one
+            for entry in (project.get("subSystems") or []):
+                if entry.get("ref") != ref or not entry.get("localDir"):
+                    continue
+                target = os.path.abspath(os.path.join(
+                    entry["localDir"], (entry.get("localFile") or "").replace("/", os.sep)))
+                hit = (real_by_path.get(target) or {}).get(n["label"])
+                break
+            if hit is None:
+                for key in (ref, os.path.splitext(os.path.basename(ref))[0]):
+                    hit = (real_index.get(key) or {}).get(n["label"])
+                    if hit is not None:
+                        break
             if hit is None:
                 unresolved.add(ref)
             else:
@@ -1203,6 +1327,15 @@ def seed_from_many(paths, roots=None, name=None):
                 new = dict(n)
                 new["id"] = nid("n")
                 label = _unique_label(n["label"], label_used, ref)
+                if label != n["label"]:
+                    # Pass A reports its renames; this one used to be silent, and it is the
+                    # more surprising of the two -- the node it collides with is one the author
+                    # declared directly, so the merged file has both, and the post-write linter
+                    # is the first thing that says so (RM090).
+                    diags.append("%s: node '%s' provided by subSystems: '%s' collides with a "
+                                 "node declared directly and was renamed to '%s'. Declaring "
+                                 "the same label both ways is RM090."
+                                 % (os.path.basename(path), n["label"], ref, label))
                 label_used.add(label)
                 new["label"] = label
                 new["ifaces"] = []
@@ -1228,7 +1361,7 @@ def seed_from_many(paths, roots=None, name=None):
                     iface_map[(si, n["id"], f["id"])] = tf
 
     # --- pass C: connections --------------------------------------------------------------
-    seen_conn = set()
+    seen_conn = {}
     for si, (path, project) in enumerate(seeds):
         for c in project.get("connections") or []:
             fn = node_map.get((si, c["from"]["n"]))
@@ -1242,12 +1375,28 @@ def seed_from_many(paths, roots=None, name=None):
                 continue
             key = (fn["id"], ff["id"], tn["id"], tf["id"])
             if key in seen_conn:
-                continue                      # the same edge reached through two sources
-            seen_conn.add(key)
+                # the same edge reached through two sources. The edge is a duplicate; its
+                # COMMENTS are not -- the second source may annotate it differently, and
+                # dropping that text without a word is the thing rule 12 forbids. Fold what
+                # can be folded, report what cannot.
+                kept = seen_conn[key]
+                for slot, text in (c.get("comments") or {}).items():
+                    if not text:
+                        continue
+                    have = (kept.get("comments") or {}).get(slot)
+                    if not have:
+                        kept.setdefault("comments", {})[slot] = text
+                    elif _comment_list(have) != _comment_list(text):
+                        diags.append("%s: this connection is already carried from another "
+                                     "source with a different comment, so %r was NOT re-emitted."
+                                     % (os.path.basename(path), text))
+                continue
+            seen_conn[key] = None             # replaced by `new` below, once it exists
             new = dict(c)
             new["id"] = nid("c")
             new["from"] = {"n": fn["id"], "i": ff["id"]}
             new["to"] = {"n": tn["id"], "i": tf["id"]}
+            seen_conn[key] = new
             merged["connections"].append(new)
 
     # --- pass D: subSystems entries, packages, types ---------------------------------------
@@ -1637,7 +1786,24 @@ def _exposure_labels(project):
             if n and f:
                 want(n, f)
 
-    labels, used = {}, set()
+    # An exposure label's SCOPE IS THE NODE -- it is a key inside that node's `interfaces:` list,
+    # so two nodes may both expose "scan" and the corpus does it throughout. RM065's own hint
+    # says as much ("Declaring the same local name in different nodes is fine on its own... it
+    # only becomes a problem once a connection references it"). A file-wide `used` set made the
+    # second node's label collide with the first's, and pass 2 then renamed an author's label to
+    # something they never wrote -- silently, visible only under `--diff`.
+    #
+    # `sub_labels` stays file-wide on purpose: a subsystem's labels come from the referenced
+    # file and a DERIVED label that happened to match one would produce an endpoint resolving to
+    # the wrong node. Author-written labels are still taken verbatim even then -- that ambiguity
+    # is the source's own (RM065 reports it) and inventing a name would change their model.
+    labels, used_by_node, sub_labels = {}, {}, set()
+
+    def claim(node, lbl):
+        used_by_node.setdefault(node["id"], set()).add(lbl)
+
+    def taken(node, lbl):
+        return lbl in used_by_node.get(node["id"], ())
 
     # pass 0: a `subSystems:` node's exposure label belongs to the REFERENCED file. It cannot be
     # renamed here -- it is the exact string a connections: endpoint has to spell -- so it claims
@@ -1651,13 +1817,15 @@ def _exposure_labels(project):
         lbl = (f.get("label") or f.get("name") or "").strip()
         if lbl:
             labels[(n["id"], f["id"])] = lbl
-            used.add(lbl)
+            claim(n, lbl)
+            sub_labels.add(lbl)
 
-    # pass 1: source labels are authoritative
+    # pass 1: source labels are authoritative -- verbatim, and only a collision INSIDE the same
+    # node can displace one (two identical keys in one interfaces: list is not expressible).
     for n, f in wanted:
         lbl = (f.get("label") or "").strip()
-        if lbl and lbl not in used:
-            used.add(lbl)
+        if lbl and not taken(n, lbl):
+            claim(n, lbl)
             labels[(n["id"], f["id"])] = lbl
 
     # pass 2: derive the rest from the interface name, disambiguating against pass 1
@@ -1666,17 +1834,21 @@ def _exposure_labels(project):
     for n, f in rest:
         base_counts[f["name"]] = base_counts.get(f["name"], 0) + 1
     for n, f in rest:
+        def clash(cand):
+            # inside this node it would be a duplicate key; against a subsystem label it would
+            # resolve to the referenced file's node instead of this one.
+            return taken(n, cand) or cand in sub_labels
         if base_counts[f["name"]] == 1:
             lbl = f["name"]
         else:
             lbl = f["name"] + "_" + f["kind"]
-        if lbl in used:
+        if clash(lbl):
             lbl = f["name"] + "_" + f["kind"] + "_" + _sanitise(n["label"])
         suffix = 2
-        while lbl in used:                       # last resort: never emit a duplicate key
+        while clash(lbl):                        # last resort: never emit a duplicate key
             lbl = "%s_%s_%s_%d" % (f["name"], f["kind"], _sanitise(n["label"]), suffix)
             suffix += 1
-        used.add(lbl)
+        claim(n, lbl)
         labels[(n["id"], f["id"])] = lbl
     return labels
 
@@ -1827,28 +1999,54 @@ def validate_project(project):
     # carries one artifact block for both. That is only safe while they agree about it: if one
     # says 'scan' is a LaserScan and the other says Odometry, folding silently keeps the first
     # and the second node's interface quietly changes type. Report instead.
+    # _fold_artifacts writes ONE artifact block for every node that shares a
+    # `from: pkg.ARTIFACT`, keeping the first writer of each interface and parameter. That is
+    # only safe while the sharers agree about the artifact. Compare against EVERY earlier
+    # sharer, not just the first: with three nodes, a field the first one does not declare left
+    # the other two free to contradict each other unchecked. And compare the whole slot -- type,
+    # qos, parameter type and default -- because folding keeps one of each and the other simply
+    # ceases to exist in the output.
     seen_art = {}
     for n in project.get("nodes", []):
         if n.get("backing") != "hand" or not n.get("pkg"):
             continue
         key = (n["pkg"], n.get("artifact"))
-        first = seen_art.setdefault(key, n)
-        if first is n:
-            continue
-        if first.get("node") != n.get("node"):
-            flag(n["id"], "node '%s' and '%s' both declare artifact '%s.%s' but name different "
-                          "ROS nodes (%r vs %r) — one artifact cannot be both."
-                 % (first.get("label", "?"), n.get("label", "?"), n["pkg"], n.get("artifact"),
-                    first.get("node"), n.get("node")))
-        types = {(f["kind"], f["name"]): f.get("type") for f in first.get("ifaces") or []}
-        for f in n.get("ifaces") or []:
-            other = types.get((f["kind"], f["name"]))
-            if other is not None and f.get("type") and other != f.get("type"):
-                flag(n["id"], "interface '%s' (%s) is %s here but %s on node '%s', which shares "
-                              "artifact '%s.%s' — the generated .ros2 declares it once, so the "
-                              "two must agree."
-                     % (f.get("name", "?"), f.get("kind", "?"), f.get("type"), other,
-                        first.get("label", "?"), n["pkg"], n.get("artifact")))
+        earlier = seen_art.setdefault(key, [])
+        who = "'%s.%s'" % (n["pkg"], n.get("artifact"))
+        for prev in earlier:
+            if prev.get("node") != n.get("node"):
+                flag(n["id"], "node '%s' and '%s' both declare artifact %s but name different "
+                              "ROS nodes (%r vs %r) — one artifact cannot be both."
+                     % (prev.get("label", "?"), n.get("label", "?"), who,
+                        prev.get("node"), n.get("node")))
+            pifaces = {(f["kind"], f["name"]): f for f in prev.get("ifaces") or []}
+            for f in n.get("ifaces") or []:
+                other = pifaces.get((f["kind"], f["name"]))
+                if other is None:
+                    continue
+                if f.get("type") and other.get("type") and other["type"] != f["type"]:
+                    flag(n["id"], "interface '%s' (%s) is %s here but %s on node '%s', which "
+                                  "shares artifact %s — the generated .ros2 declares it once, "
+                                  "so the two must agree."
+                         % (f.get("name", "?"), f.get("kind", "?"), f.get("type"),
+                            other.get("type"), prev.get("label", "?"), who))
+                if (f.get("qos") or None) != (other.get("qos") or None):
+                    flag(n["id"], "interface '%s' (%s) carries a different qos: block than the "
+                                  "one on node '%s', which shares artifact %s — only one "
+                                  "survives into the .ros2, so the other would be lost."
+                         % (f.get("name", "?"), f.get("kind", "?"), prev.get("label", "?"), who))
+            pparams = {p["name"]: p for p in prev.get("params") or []}
+            for pr in n.get("params") or []:
+                other = pparams.get(pr["name"])
+                if other is None:
+                    continue
+                if (other.get("ptype"), other.get("value")) != (pr.get("ptype"), pr.get("value")):
+                    flag(n["id"], "parameter '%s' is %s=%r here but %s=%r on node '%s', which "
+                                  "shares artifact %s — the .ros2 declares it once."
+                         % (pr.get("name", "?"), pr.get("ptype"), pr.get("value"),
+                            other.get("ptype"), other.get("value"),
+                            prev.get("label", "?"), who))
+        earlier.append(n)
 
     # Seeding kept an exposure whose target the backing artifact does not declare. Emitting it
     # would produce "Couldn't resolve reference to <Kind>" from the server, so block here —
@@ -2157,8 +2355,7 @@ def source_facts(path):
         pkg, node_name = mn.get("package"), mn.get("nodeName")
         art = None
         if pkg and node_name:
-            art = ros2_index.get((pkg, node_name)) or (
-                ros2_index.get((pkg, artifact)) if artifact else None)
+            art = resolve_artifact(ros2_index, pkg, node_name, artifact)
         if art is None:
             continue                      # catalogue-backed or unresolved: writes no .ros2
         pentry = facts["packages"].setdefault(
@@ -2727,19 +2924,26 @@ def _stage_local_subsystems(project, outdir):
     for s in project.get("subSystems") or []:
         if s.get("file"):
             continue                      # catalogued: assets/ resolves it, nothing to stage
-        done = False
+        # The path SEEDING actually read, when the project records one. Searching `bases` by
+        # name instead staged whichever same-named .rossystem sat in the alphabetically first
+        # seed directory -- so a decoy next to an unrelated source could be copied in place of
+        # the file this reference resolves to, and the generated directory then described a
+        # model nobody wrote. The search remains as the fallback for a project.json seeded
+        # before this was recorded.
+        cands = []
+        if s.get("localDir") and s.get("localFile"):
+            cands.append(os.path.join(s["localDir"], s["localFile"].replace("/", os.sep)))
         for base in bases:
-            if done:
-                break
             for cand in (s.get("ref") or "", os.path.basename(s.get("ref") or "")):
-                src = os.path.join(base, os.path.splitext(cand)[0] + ".rossystem")
-                if not stage(src):
-                    continue
-                for mn in ros_plot.extract_model(src, use_catalogue=False)["nodes"]:
-                    if mn.get("package"):
-                        stage(os.path.join(base, mn["package"] + ".ros2"))
-                done = True
-                break
+                cands.append(os.path.join(base, os.path.splitext(cand)[0] + ".rossystem"))
+        for src in cands:
+            if not stage(src):
+                continue
+            base = os.path.dirname(os.path.abspath(src))
+            for mn in ros_plot.extract_model(src, use_catalogue=False)["nodes"]:
+                if mn.get("package"):
+                    stage(os.path.join(base, mn["package"] + ".ros2"))
+            break
     return out
 
 

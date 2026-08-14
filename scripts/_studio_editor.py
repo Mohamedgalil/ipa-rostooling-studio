@@ -1978,28 +1978,36 @@ var DATA = /*__DATA__*/null;
         if(n&&f) want(n,f);
       });
     });
-    var labels={}, used={};
+    // MIRRORS ros_studio._exposure_labels. An exposure label's SCOPE IS THE NODE -- it is a key
+    // inside that node's interfaces: list, and two nodes may both expose "scan" (RM065's hint
+    // says so, and the corpus does it throughout). A file-wide used-set renamed the second
+    // node's label to something the author never wrote. subLabels stays file-wide: those come
+    // from the referenced file, and a DERIVED label matching one would resolve to the wrong node.
+    var labels={}, usedByNode={}, subLabels={};
+    function claim(n,lbl){ (usedByNode[n.id]=usedByNode[n.id]||{})[lbl]=1; }
+    function taken(n,lbl){ return !!(usedByNode[n.id]&&usedByNode[n.id][lbl]); }
     // pass 0: a subSystems: node's label belongs to the REFERENCED file and cannot be renamed
-    // here -- it is the exact string a connections: endpoint has to spell -- so it claims its
-    // name before any local exposure can take it. Two subsystem nodes sharing a label (the
-    // catalogued turtlebot's "tf") both map to that one string: that ambiguity is the source
-    // file's (RM065), and inventing a distinct label would emit an endpoint resolving to nothing.
+    // here -- it is the exact string a connections: endpoint has to spell. Two subsystem nodes
+    // sharing a label (the catalogued turtlebot's "tf") both map to that one string: that
+    // ambiguity is the source file's (RM065), and inventing a distinct label would emit an
+    // endpoint resolving to nothing.
     wanted.forEach(function(p){
       if(p[0].backing!=="sub") return;
       var lbl=String(p[1].label||p[1].name||"").trim();
-      if(lbl){ labels[p[0].id+"/"+p[1].id]=lbl; used[lbl]=1; }
+      if(lbl){ labels[p[0].id+"/"+p[1].id]=lbl; claim(p[0],lbl); subLabels[lbl]=1; }
     });
     wanted.forEach(function(p){                       // pass 1: source labels are authoritative
       var lbl=(p[1].label||"").trim();
-      if(lbl&&!used[lbl]){used[lbl]=1;labels[p[0].id+"/"+p[1].id]=lbl;}
+      if(lbl&&!taken(p[0],lbl)){claim(p[0],lbl);labels[p[0].id+"/"+p[1].id]=lbl;}
     });
     var rest=wanted.filter(function(p){return !labels[p[0].id+"/"+p[1].id];});
     var counts={}; rest.forEach(function(p){counts[p[1].name]=(counts[p[1].name]||0)+1;});
     rest.forEach(function(p){                         // pass 2: derive, avoiding pass-1 names
       var n=p[0], f=p[1], lbl=(counts[f.name]>1)?f.name+"_"+f.kind:f.name;
-      if(used[lbl]) lbl=f.name+"_"+f.kind+"_"+n.label.replace(/[^A-Za-z0-9_]/g,"_");
-      var sfx=2; while(used[lbl]){lbl=f.name+"_"+f.kind+"_"+n.label.replace(/[^A-Za-z0-9_]/g,"_")+"_"+sfx; sfx++;}
-      used[lbl]=1; labels[n.id+"/"+f.id]=lbl;
+      function clash(c){ return taken(n,c)||!!subLabels[c]; }
+      if(clash(lbl)) lbl=f.name+"_"+f.kind+"_"+n.label.replace(/[^A-Za-z0-9_]/g,"_");
+      var sfx=2; while(clash(lbl)){lbl=f.name+"_"+f.kind+"_"+n.label.replace(/[^A-Za-z0-9_]/g,"_")+"_"+sfx; sfx++;}
+      claim(n,lbl); labels[n.id+"/"+f.id]=lbl;
     });
     return labels;
   }
