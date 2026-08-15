@@ -275,6 +275,37 @@ file, and its comments live there. The
 be written — `tests/studio_parity.js` holds all three previews to the Python emitter's bytes, and
 the fourth tab, **changed since the seed**, to `diff`'s.
 
+## Opening files in the page
+
+The page can now **read** models, not just write them. **Open** in the topbar (or drag files onto
+the canvas) accepts:
+
+- **a `project.json`** — loaded exactly as saved. This is the page's own format, so nothing is
+  re-derived; it is how you resume a session, or hand a project to someone who has no Python.
+- **a `.rossystem` together with its `.ros2` and `.ros` files** — select them all at once (the
+  dialog is multi-select) and the page seeds a project from them in the browser, with no
+  companion involved. Catalogue-backed nodes and catalogued `subSystems:` references resolve
+  against the datasets embedded in the page, so a model reusing `turtlebot` works offline.
+
+`init` remains the **authoritative** seeder: it walks sibling directories, resolves a
+project-local `subSystems:` target that was not opened, and reports everything it could not
+carry. The in-page loader does the same job on exactly the files it is handed, and says what it
+could not do — a subsystem whose file you did not open, a node whose `.ros2` is missing, a
+connection whose endpoint therefore cannot be re-linked — in the banner, rather than seeding
+less and staying quiet about it.
+
+That makes it a **second implementation of the seeder**, which is the shape that has silently
+truncated this project's models three times. It is held to the Python one by
+`tests/studio_parity.js`'s **`[in-page seed]`** cases: for every checked-in fixture and for the
+TurtleBot 3 example, the loader is handed the same file set `init` reads and its project must
+match `init`'s fact-for-fact — nodes, exposures, connections, subSystems, namespaces, parameters,
+qos and types — **and comment-for-comment**, since the fact tree deliberately carries no comments
+and a loader that dropped them all would otherwise pass. It caught two real losses while being
+written (the `.ros2` artifact comments, and every node a catalogued `subSystems:` provides).
+
+Loading replaces the current project, so it asks first when there are unsaved changes, and the
+load itself is undoable.
+
 ## The commit hand-off
 
 Inside the editor, **Commit** opens a modal that downloads the `project.json` (a Blob via a

@@ -2733,8 +2733,16 @@ def load_autocomplete():
     # can type-check catalogue connections offline (node_index carries only the kind).
     cat_types = catalogue_types_map(catalogue)
 
+    # The catalogued SYSTEM table, the same one L.load_system_index() serves. Without it the
+    # page could resolve a catalogued `from:` but not a catalogued `subSystems:` -- so a model
+    # opened in the browser lost every node a reused composition provides, and with them every
+    # connection that named one. That is the defect 1b837a2 fixed on the Python side; shipping
+    # the table keeps the two seeders answering the same question the same way.
+    systems = L.load_system_index() or {}
+
     return {"types": types, "typeFiles": type_files, "packages": sorted(packages),
-            "catalogue": catalogue, "catalogueTypes": cat_types, "warnings": warnings}
+            "catalogue": catalogue, "catalogueTypes": cat_types, "systems": systems,
+            "warnings": warnings}
 
 
 # ========================================================================================
@@ -2773,6 +2781,7 @@ def render_editor(project, diagnostics=None, banner=None):
         "packages": ac["packages"],
         "catalogue": ac["catalogue"],
         "catalogueTypes": ac.get("catalogueTypes", {}),
+        "systems": ac.get("systems", {}),
         "kindOrder": ARROW_KINDS,
         "kindLabels": {k: C.KIND_LABELS[k] for k in ARROW_KINDS},
         "blocks": {k: C.KIND_TO_BLOCK[k] for k in ARROW_KINDS},

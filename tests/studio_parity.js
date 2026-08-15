@@ -54,7 +54,13 @@ var STUDIO = path.join(ROOT, "scripts", "ros_studio.py");
 // the author never made -- or, far worse, stay silent about one they did. Nothing else in the
 // suite compares the two: both sides are internally consistent and both keep linting clean,
 // exactly as with genSystem().
-var WANTED = ["qd", "qs2", "nodeById", "ifaceById", "ifaceConnected", "exposureLabels",
+// The sixth group is the in-page LOADER. It re-seeds a project from raw .rossystem/.ros2/.ros
+// text, which is a second implementation of ros_studio.seed_from_rossystem -- the exact shape
+// that has silently truncated this project's models three times. The SEED cases below hold it
+// to the Python seeder's own output, fact for fact, on every checked-in fixture.
+var WANTED = ["splitLines", "indentOf", "splitComment", "cleanNote", "unq", "cmtSet",
+  "parseRos2", "parseRos", "parseRossystem", "seedFromFiles",
+  "qd", "qs2", "nodeById", "ifaceById", "ifaceConnected", "exposureLabels",
   "genSystem",
   "handPkgNodes", "foldArtifacts", "localTypePkgs", "companionTypes", "companionPkgs",
   "typeAutoNote",
@@ -176,6 +182,13 @@ function loadShipped(html, project) {
     "var ROSSEG = {}; Object.keys(SEGBLOCK).forEach(function(s){ROSSEG[SEGBLOCK[s]]=s;});\n" +
     "var QOS = DATA.qos;\n" +
     "var QOS_DUR = {}; (QOS.durations||[]).forEach(function(k){QOS_DUR[k]=1;});\n" +
+    // the loader resolves catalogue-backed nodes against the same two embedded datasets the
+    // page uses, so the sandbox has to hand it the real ones rather than empty stand-ins --
+    // otherwise a seed of a catalogue-backed fixture would "match" only because both sides
+    // resolved nothing.
+    "var CATALOGUE = DATA.catalogue || {};\n" +
+    "var CATTYPES = DATA.catalogueTypes || {};\n" +
+    "var SYSTEMS = DATA.systems || {};\n" +
     sliceVar(script, "FACT_SECTIONS") + "\n" +
     sliceVar(script, "FACT_MISSING") + "\n" +
     sliceVar(script, "DIFF_OP_MARK") + "\n" +
@@ -253,6 +266,120 @@ function wroteExt(stdout, ext) {
     if (m) out.push(path.basename(m[1]).replace(new RegExp("\\." + ext + "$"), ""));
   });
   return out.sort();
+}
+
+// Seed the SAME source files in the page's own loader and compare the resulting fact tree with
+// the one ros_studio.py produced from them. Facts, not bytes: ids and canvas coordinates are
+// allowed to differ (they are per-run), everything the model MEANS is not.
+// Every comment either project carries, keyed by the element it annotates rather than by
+// position, so the two can be compared without depending on ids or ordering.
+function commentIndex(project) {
+  var out = {};
+  function take(where, obj) {
+    var c = obj && obj.comments;
+    if (!c) return;
+    Object.keys(c).forEach(function (slot) {
+      var v = c[slot];
+      if (v == null || v === "" || (Array.isArray(v) && !v.length)) return;
+      out[where + "|" + slot] = Array.isArray(v) ? v.join(" ⏎ ") : String(v);
+    });
+  }
+  take("system", project);
+  take("system", (project.system || {}));
+  (project.subSystems || []).forEach(function (s) { take("subSystems/" + s.ref, s); });
+  (project.nodes || []).forEach(function (n) {
+    take("node/" + n.label, n);
+    (n.ifaces || []).forEach(function (f) {
+      take("node/" + n.label + "/iface/" + f.kind + " " + f.name, f);
+    });
+    (n.params || []).forEach(function (p) {
+      take("node/" + n.label + "/param/" + p.name, p);
+    });
+  });
+  // a connection is identified by the labels of its endpoints, which is what a reader sees
+  (project.connections || []).forEach(function (c) {
+    function endp(e) {
+      var n = (project.nodes || []).filter(function (x) { return x.id === e.n; })[0];
+      var f = n && (n.ifaces || []).filter(function (x) { return x.id === e.i; })[0];
+      return f ? (f.label || f.name) : "?";
+    }
+    take("conn/" + endp(c.from) + "->" + endp(c.to), c);
+  });
+  Object.keys(project.packages || {}).forEach(function (p) {
+    take("package/" + p, project.packages[p]);
+  });
+  return out;
+}
+
+function compareComments(pyProject, jsProject) {
+  var want = commentIndex(pyProject), got = commentIndex(jsProject), problems = [];
+  Object.keys(want).sort().forEach(function (k) {
+    if (!(k in got)) problems.push("in-page seed LOST the comment at " + k + ": " + JSON.stringify(want[k]));
+    else if (got[k] !== want[k])
+      problems.push("in-page seed changed the comment at " + k + ": python "
+        + JSON.stringify(want[k]) + " vs loader " + JSON.stringify(got[k]));
+  });
+  Object.keys(got).sort().forEach(function (k) {
+    if (!(k in want)) problems.push("in-page seed INVENTED a comment at " + k + ": " + JSON.stringify(got[k]));
+  });
+  return problems.slice(0, 6);
+}
+
+function compareSeed(fixture, projectPath, htmlPath) {
+  var project = JSON.parse(fs.readFileSync(projectPath, "utf8"));
+  var html = fs.readFileSync(htmlPath, "utf8");
+  var fns = loadShipped(html, project);
+  // The same file set `init` opens: the fixture's own directory plus one level of
+  // subdirectories (ros_studio.SEED_GLOBS covers rosnodes/, nodes/ and */). A user selecting
+  // "the model and its artifacts" in the file dialog picks exactly these; handing the loader
+  // less would test it against an easier problem than the one it is compared to.
+  var dir = path.dirname(fixture);
+  var files = [];
+  function collect(d, prefix) {
+    fs.readdirSync(d).forEach(function (f) {
+      var full = path.join(d, f);
+      if (fs.statSync(full).isDirectory()) {
+        if (!prefix) collect(full, f + "/");
+        return;
+      }
+      if (!/\.(rossystem|ros2|ros)$/.test(f)) return;
+      files.push({ name: f, text: fs.readFileSync(full, "utf8") });
+    });
+  }
+  collect(dir, "");
+  files.sort(function (a, b) { return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0); });
+  // the fixture itself must be the FIRST .rossystem, since that is the one Python seeded
+  files.sort(function (a, b) {
+    var af = a.name === path.basename(fixture) ? 0 : 1;
+    var bf = b.name === path.basename(fixture) ? 0 : 1;
+    return af - bf || (a.name < b.name ? -1 : 1);
+  });
+
+  var res = fns.seedFromFiles(files);
+  if (res.error) return ["the in-page loader refused the fixture: " + res.error];
+
+  var problems = [];
+  var want = fns.projectFacts(project);
+  var got = fns.projectFacts(res.project);
+  // projectFacts() is a MODEL fact tree and carries no comments -- by design, so the seed-diff
+  // tab can tell an edit from a reformat. A loader that dropped every comment would therefore
+  // pass the comparison below and lose the author's words on the next Commit, which is the
+  // defect 1b837a2 exists to prevent. Compare them separately.
+  var cmtProblems = compareComments(project, res.project);
+  if (cmtProblems.length) return cmtProblems;
+
+  var NL = String.fromCharCode(10);
+  var wantJ = JSON.stringify(want, null, 1).split(NL);
+  var gotJ = JSON.stringify(got, null, 1).split(NL);
+  for (var i = 0; i < Math.max(wantJ.length, gotJ.length); i++) {
+    if (wantJ[i] !== gotJ[i]) {
+      problems.push("in-page seed differs from `init` at fact line " + (i + 1) + ":" + NL
+        + "      python: " + JSON.stringify(wantJ[i] || "(end)") + NL
+        + "      loader: " + JSON.stringify(gotJ[i] || "(end)"));
+      break;
+    }
+  }
+  return problems;
 }
 
 function compare(projectPath, htmlPath, expectPath, knownWrote) {
@@ -451,6 +578,7 @@ function main(argv) {
       var base = buildInputs(f, d);
       cases.push({ name: path.basename(f), paths: base });
       cases.push({ name: path.basename(f) + " [ifaces permuted]", paths: permutedCase(base, d) });
+      cases.push({ name: path.basename(f) + " [in-page seed]", seed: f, paths: base });
     });
   }
 
@@ -459,7 +587,9 @@ function main(argv) {
     cases.forEach(function (c) {
       var problems;
       try {
-        problems = compare(c.paths.project, c.paths.html, c.paths.expect, c.paths.wrote);
+        problems = c.seed
+          ? compareSeed(c.seed, c.paths.project, c.paths.html)
+          : compare(c.paths.project, c.paths.html, c.paths.expect, c.paths.wrote);
       } catch (e) {
         problems = ["harness error: " + e.message];
       }

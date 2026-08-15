@@ -79,6 +79,7 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .node input.inline{font:inherit;font-size:.8rem;padding:.05em .25em;border:1px solid var(--accent);
     border-radius:3px;background:var(--surface);color:var(--ink);min-width:60px;max-width:22ch}
   .canvas-wrap.panning{cursor:grabbing}
+  .canvas-wrap.dropping{outline:2px dashed var(--accent);outline-offset:-6px}
   /* floating over the transformed layer, so they keep their size at every zoom level */
   .findbar,.viewbar{position:absolute;z-index:6;display:flex;align-items:center;gap:.3rem;background:var(--surface);border:1px solid var(--rule);border-radius:8px;box-shadow:var(--shadow);padding:.3rem .35rem}
   .findbar{top:.6rem;left:.6rem}
@@ -252,6 +253,8 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   <span class="savestate" id="saveState"></span>
   <button class="tbtn" id="reset">Reset layout</button>
   <button class="tbtn" id="theme">&#9680; Theme</button>
+  <button class="tbtn" id="openBtn" title="Open a project.json, or a .rossystem with its .ros2/.ros files (several at once). You can also drag them onto the canvas.">&#8679; Open</button>
+  <input type="file" id="openInput" multiple accept=".rossystem,.ros2,.ros,.json" style="display:none">
   <button class="tbtn primary" id="commit">&#8681; Commit</button>
 </div>
 
@@ -387,6 +390,7 @@ var DATA = /*__DATA__*/null;
   var PACKAGES=DATA.packages||[];
   var CATALOGUE=DATA.catalogue||{};
   var CATTYPES=DATA.catalogueTypes||{};   // {pkg.node: {ifaceName: type}} from the vendored .ros2
+  var SYSTEMS=DATA.systems||{};           // catalogued systems, for a subSystems: reference
 
   var project=DATA.project;
   project.nodes=project.nodes||[];
@@ -811,6 +815,526 @@ var DATA = /*__DATA__*/null;
     if(dx<-20) return "l";
     return def;
   }
+
+  // ============================ opening files in the page ============================
+  // The companion's `init` is the AUTHORITATIVE seeder and stays that way: it resolves the
+  // vendored catalogue, walks sibling directories, and reports what it could not carry. This is
+  // the same job done offline, on the files the browser is handed, for the case the whole page
+  // exists to serve -- someone opens ros-studio.html and wants to look at a model without
+  // going back to a shell.
+  //
+  // Two implementations of one seeder is exactly the shape that has silently truncated this
+  // project's models three times, so this one is held to the Python one file-for-file by
+  // tests/studio_parity.js (SEED cases): same nodes, exposures, connections, subSystems,
+  // namespaces, parameters, qos, types and comments, or the test fails. Where it CANNOT match
+  // -- a catalogue node the page's embedded index does not carry, a subSystems: target whose
+  // file was not opened -- it says so in the load report rather than quietly seeding less.
+
+  function splitLines(text){
+    return String(text).replace(/\r\n/g,"\n").replace(/\r/g,"\n").split("\n");
+  }
+  function indentOf(line){
+    var m=/^[ \t]*/.exec(line)[0], col=0;
+    for(var i=0;i<m.length;i++) col = m[i]==="\t" ? ((col>>3)+1)*8 : col+1;
+    return col;
+  }
+  // A comment runs to end of line, and a '#' inside quotes is not one. Mirrors
+  // ros_studio._split_comment.
+  function splitComment(line){
+    var q=null;
+    for(var i=0;i<line.length;i++){
+      var ch=line[i];
+      if(q){ if(ch===q) q=null; continue; }
+      if(ch==='"'||ch==="'"){ q=ch; continue; }
+      if(ch==="#") return [line.slice(0,i), line.slice(i+1)];
+    }
+    return [line,null];
+  }
+  function cleanNote(t){ return t==null?null:String(t).replace(/^ /,"").replace(/\s+$/,""); }
+  function unq(s){
+    s=String(s==null?"":s).trim();
+    if(s.length>1&&((s[0]==='"'&&s[s.length-1]==='"')||(s[0]==="'"&&s[s.length-1]==="'")))
+      return s.slice(1,-1);
+    return s;
+  }
+  function cmtSet(obj,slot,val){
+    if(val==null||(Array.isArray(val)&&!val.length)||val==="") return;
+    (obj.comments=obj.comments||{})[slot]=val;
+  }
+
+  // ---- .ros2 ---------------------------------------------------------------------------
+  function parseRos2(text){
+    var BLOCK_TO_KIND={};
+    Object.keys(BLOCK).forEach(function(k){ BLOCK_TO_KIND[BLOCK[k]]=k; });
+    var lines=splitLines(text), out={pkg:null,git:null,artifacts:[],comments:{}}, lead=[];
+    var art=null, sect=null, iface=null, param=null, qos=null, seenRoot=false;
+    for(var i=0;i<lines.length;i++){
+      var raw=lines[i], parts=splitComment(raw), code=parts[0], note=cleanNote(parts[1]);
+      var body=code.trim();
+      if(!body){ if(note!=null) lead.push(note); continue; }
+      var ind=indentOf(code), key=/^("[^"]*"|'[^']*'|[^:#]+?)\s*:\s*(.*)$/.exec(body);
+      var kw=key?unq(key[1]):null, val=key?key[2].trim():null;
+      if(!seenRoot&&key&&!val){
+        out.pkg=kw; seenRoot=true;
+        if(lead.length){ out.comments.header=lead.slice(); lead=[]; }
+        continue;
+      }
+      if(!seenRoot) continue;
+      if(key&&kw==="fromGitRepo"){ out.git=unq(val); lead=[]; continue; }
+      if(key&&kw==="artifacts"&&!val){ sect="artifacts"; continue; }
+      if(sect!=="artifacts") continue;
+      if(key&&!val&&ind<=4&&kw!=="qos"){
+        art={name:kw,node:null,ifaces:[],params:[]};
+        cmtSet(art,"ros2Before",lead.slice()); cmtSet(art,"ros2Line",note);
+        lead=[]; out.artifacts.push(art); iface=null; param=null; qos=null;
+        continue;
+      }
+      if(!art) continue;
+      if(key&&kw==="node"&&val){ art.node=unq(val); lead=[]; continue; }
+      if(key&&!val&&BLOCK_TO_KIND[kw]){ art.block=BLOCK_TO_KIND[kw]; art.inParams=false;
+                                        iface=null; param=null; qos=null; continue; }
+      if(key&&!val&&kw==="parameters"){ art.inParams=true; art.block=null;
+                                        iface=null; param=null; qos=null; continue; }
+      if(key&&!val&&kw==="qos"){ qos=(iface&&iface.qos)?iface.qos:{}; if(iface) iface.qos=qos;
+                                 continue; }
+      if(qos&&key&&val){ qos[kw]=unq(val); continue; }
+      if(key&&!val&&art.block){
+        iface={id:null,name:kw,kind:art.block,type:null,qos:null,label:null,exposed:false};
+        cmtSet(iface,"ros2Before",lead.slice()); cmtSet(iface,"ros2Line",note);
+        lead=[]; art.ifaces.push(iface); param=null; qos=null; continue;
+      }
+      if(key&&!val&&art.inParams){
+        param={name:kw,ptype:"String",value:null};
+        cmtSet(param,"ros2Before",lead.slice()); cmtSet(param,"ros2Line",note);
+        lead=[]; art.params.push(param); iface=null; qos=null; continue;
+      }
+      if(key&&val&&iface&&kw==="type"){ iface.type=unq(val); cmtSet(iface,"ros2Type",note);
+                                        lead=[]; continue; }
+      if(key&&val&&param&&kw==="type"){ param.ptype=unq(val); lead=[]; continue; }
+      if(key&&val&&param&&(kw==="default"||kw==="value")){ param.value=unq(val); param.slot=kw;
+                                                           lead=[]; continue; }
+      lead=[];
+    }
+    return out;
+  }
+
+  // ---- .ros ----------------------------------------------------------------------------
+  function parseRos(text){
+    var lines=splitLines(text), types={}, pkg=null, block=null, spec=null, bodyKw=null;
+    var blockNames=(ROS.blocks||["msgs","srvs","actions"]);
+    var SEG={msgs:"msg",srvs:"srv",actions:"action"};
+    for(var i=0;i<lines.length;i++){
+      var code=splitComment(lines[i])[0], body=code.trim();
+      if(!body) continue;
+      var key=/^([^:#]+?)\s*:\s*(.*)$/.exec(body), kw=key?key[1].trim():null;
+      if(key&&!key[2]&&indentOf(code)===0){ pkg=kw; block=null; spec=null; bodyKw=null; continue; }
+      if(!pkg) continue;
+      if(key&&!key[2]&&blockNames.indexOf(kw)>=0){ block=kw; spec=null; bodyKw=null; continue; }
+      if(!block) continue;
+      var bodies=(ROS.bodies&&ROS.bodies[block])||[];
+      if(bodies.indexOf(body)>=0){ bodyKw=body; if(spec) spec.fields[bodyKw]=spec.fields[bodyKw]||[];
+                                   continue; }
+      if(!key&&/^[A-Za-z_][A-Za-z0-9_]*$/.test(body)){
+        spec={fields:{}}; bodyKw=null;
+        types[pkg+"/"+SEG[block]+"/"+body]=spec; continue;
+      }
+      if(spec&&bodyKw){
+        var tok=body.split(/\s+/);
+        if(tok.length===2) spec.fields[bodyKw].push({type:tok[0],name:tok[1]});
+        else if(tok.length===1&&tok[0].indexOf("=")>0) spec.fields[bodyKw].push({type:"",name:tok[0]});
+      }
+    }
+    return types;
+  }
+
+  // ---- .rossystem ----------------------------------------------------------------------
+  function parseRossystem(text){
+    var ARROW_RE=/^\s*-?\s*("[^"]*"|'[^']*'|[^:]+?)\s*:\s*(pub|sub|ss|sc|as|ac)->\s*(.*)$/;
+    var lines=splitLines(text);
+    var out={name:null,fromFile:null,subSystems:[],nodes:[],connections:[],comments:{}};
+    var lead=[], sect=null, node=null, sub=false, seenRoot=false;
+    for(var i=0;i<lines.length;i++){
+      var raw=lines[i], parts=splitComment(raw), code=parts[0], note=cleanNote(parts[1]);
+      var body=code.trim();
+      if(!body){ if(note!=null) lead.push(note); continue; }
+      var ind=indentOf(code);
+      var key=/^("[^"]*"|'[^']*'|[^:#]+?)\s*:\s*(.*)$/.exec(body);
+      var kw=key?unq(key[1]):null, val=key?key[2].trim():null;
+
+      if(!seenRoot&&key&&!val){
+        out.name=kw; seenRoot=true;
+        if(lead.length){ out.comments.header=lead.slice(); lead=[]; }
+        continue;
+      }
+      if(!seenRoot) continue;
+
+      if(key&&kw==="fromFile"&&val){ out.fromFile=unq(val); cmtSet(out,"fromFile",note);
+                                     lead=[]; continue; }
+      if(key&&!val&&(kw==="nodes"||kw==="connections"||kw==="subSystems"||kw==="processes")){
+        sect=kw; node=null; sub=(kw==="subSystems"); lead=[]; continue;
+      }
+      // a subSystems: entry is one bare (optionally quoted) name, positionally recognised
+      if(sub&&!key&&body.indexOf(":")<0){
+        var ref=unq(body.replace(/^-\s*/,""));
+        if(ref){ var e={ref:ref,file:null};
+                 cmtSet(e,"before",lead.slice()); cmtSet(e,"line",note);
+                 lead=[]; out.subSystems.push(e); continue; }
+      }
+      if(sect==="connections"){
+        var m=/^-\s*\[\s*("?[^,\]"]+"?)\s*,\s*("?[^,\]"]+"?)\s*\]/.exec(body);
+        if(m){ var c={from:unq(m[1]),to:unq(m[2])};
+               cmtSet(c,"before",lead.slice()); cmtSet(c,"line",note);
+               lead=[]; out.connections.push(c); continue; }
+      }
+      if(sect==="nodes"){
+        var arrow=ARROW_RE.exec(body);
+        if(arrow&&node){
+          var tgt=unq(arrow[3]), bits=tgt.split("::");
+          var f={label:unq(arrow[1]),kind:arrow[2],
+                 artifact:bits.length>1?bits[0]:null,
+                 ifaceName:bits.length>1?bits[1]:bits[0]};
+          cmtSet(f,"before",lead.slice()); cmtSet(f,"line",note);
+          lead=[]; node.ifaces.push(f); continue;
+        }
+        if(key&&!val&&ind<=4&&!arrow){
+          node={label:kw,from:null,namespace:null,ifaces:[],params:[]};
+          cmtSet(node,"before",lead.slice()); cmtSet(node,"line",note);
+          lead=[]; out.nodes.push(node); continue;
+        }
+        if(node&&key&&val&&kw==="from"){ node.from=unq(val); cmtSet(node,"from",note);
+                                         lead=[]; continue; }
+        if(node&&key&&val&&kw==="namespace"){ node.namespace=unq(val); lead=[]; continue; }
+      }
+      lead=[];
+    }
+    return out;
+  }
+
+  // ---- seeding ---------------------------------------------------------------------------
+  // Mirrors ros_studio.seed_from_rossystem. Every rule that fixed a silent truncation is
+  // repeated here on purpose, with the same reasoning, because this path can lose a model the
+  // same way the Python one used to:
+  //   * the exposure LABEL and the interface NAME are different slots, both preserved;
+  //   * `exposed` is independent of connectivity;
+  //   * an exposure the backing artifact does not declare is kept and flagged `orphan`;
+  //   * a (name, kind) match wins, and the name-only fallback is refused when the same name
+  //     exists under another kind (a pub/sub pair would otherwise invent an exposure);
+  //   * the ARTIFACT the arrow spells beats the node name when several artifacts share a node.
+  function seedFromFiles(files){
+    var sysFiles=[], ros2=[], rosTypes={}, report=[], uid=0;
+    function nid(p){ uid++; return p+uid; }
+
+    files.forEach(function(f){
+      if(/\.rossystem$/i.test(f.name)) sysFiles.push({name:f.name,model:parseRossystem(f.text)});
+      else if(/\.ros2$/i.test(f.name)) ros2.push({name:f.name,pkg:parseRos2(f.text)});
+      else if(/\.ros$/i.test(f.name)){
+        var t=parseRos(f.text);
+        Object.keys(t).forEach(function(k){ rosTypes[k]=t[k]; });
+      }
+    });
+    if(!sysFiles.length) return {error:"no .rossystem among the opened files"};
+
+    // index every artifact by (package, artifact) and by (package, node); an ambiguous node
+    // key is refused rather than resolved to an arbitrary winner (ros_studio.resolve_artifact)
+    var byArt={}, byNode={}, pkgGit={}, ros2Cmts={};
+    ros2.forEach(function(entry){
+      var p=entry.pkg;
+      if(!p.pkg) return;
+      if(p.git) pkgGit[p.pkg]=p.git;
+      ros2Cmts[p.pkg]=p.comments||{};
+      p.artifacts.forEach(function(a){
+        byArt[p.pkg+" "+a.name]={pkg:p.pkg,art:a};
+        var k=p.pkg+" "+a.node;
+        if(byNode[k]===undefined) byNode[k]={pkg:p.pkg,art:a};
+        else if(byNode[k]&&byNode[k].art!==a) byNode[k]=null;   // ambiguous
+      });
+    });
+    function resolveArtifact(pkg,nodeName,artifact){
+      if(artifact){ var hit=byArt[pkg+" "+artifact]; if(hit) return hit; }
+      var byN=byNode[pkg+" "+nodeName];
+      return byN||null;
+    }
+
+    var primary=sysFiles[0];
+    if(sysFiles.length>1)
+      report.push(sysFiles.length+" .rossystem files were opened; '"+primary.name+"' is the "
+        +"project and the others are available as subSystems: targets. Merging several systems "
+        +"into one is `init <dir>` in the companion, not this loader.");
+
+    var model=primary.model, nodes=[], conns=[], subSystems=[], packages={}, types={};
+    var subExposure={};
+
+    // subSystems: resolved against the OTHER opened .rossystem files, then the embedded
+    // catalogue. Unresolved is reported, never silently skipped.
+    model.subSystems.forEach(function(entry){
+      var target=null;
+      for(var i=1;i<sysFiles.length;i++){
+        var cand=sysFiles[i], base=cand.name.replace(/\.rossystem$/i,"");
+        if(base===entry.ref||cand.model.name===entry.ref){ target=cand; break; }
+      }
+      var cat=SYSTEMS[entry.ref];
+      var rec={ref:entry.ref,file:(!target&&cat)?(cat.file||null):null};
+      if(entry.comments) rec.comments=entry.comments;
+      subSystems.push(rec);
+      if(!target&&cat&&!cat.hasOwnSubsystems){
+        // catalogued: the same table L.load_system_index() serves the companion
+        Object.keys(cat.nodes||{}).sort().forEach(function(label){
+          var info=cat.nodes[label]||{}, frm=info.from||"", dot=frm.indexOf(".");
+          var n={id:nid("n"),label:label,backing:"sub",subRef:entry.ref,
+                 pkg:dot>0?frm.slice(0,dot):"",node:dot>0?frm.slice(dot+1):"",
+                 artifact:null,catalogueFile:null,namespace:null,
+                 x:120+nodes.length*40,y:520,ifaces:[],params:[]};
+          Object.keys(info.interfaces||{}).sort().forEach(function(nm){
+            var k=info.interfaces[nm];
+            if(KINDS.indexOf(k)<0) return;
+            var nf={id:nid("i"),name:nm,kind:k,type:null,qos:null,label:nm,exposed:true};
+            n.ifaces.push(nf);
+            if(subExposure[nm]===undefined) subExposure[nm]=[n,nf];
+          });
+          nodes.push(n);
+        });
+        return;
+      }
+      if(!target){
+        report.push("subSystems: '"+entry.ref+"' is neither among the opened files nor in the "
+          +"vendored catalogue, so the nodes it provides are missing and any connection naming "
+          +"one of them cannot be re-linked. Open "+entry.ref+".rossystem alongside this file, "
+          +"or seed with the companion.");
+        return;
+      }
+      target.model.nodes.forEach(function(sn){
+        var frm=sn.from||"", dot=frm.indexOf("."), n={
+          id:nid("n"), label:sn.label, backing:"sub", subRef:entry.ref,
+          pkg:dot>0?frm.slice(0,dot):"", node:dot>0?frm.slice(dot+1):"",
+          artifact:null, catalogueFile:null, namespace:null,
+          x:120+nodes.length*40, y:520, ifaces:[], params:[]
+        };
+        sn.ifaces.forEach(function(f){
+          var nf={id:nid("i"),name:f.label,kind:f.kind,type:null,qos:null,
+                  label:f.label,exposed:true};
+          n.ifaces.push(nf);
+          if(subExposure[f.label]===undefined) subExposure[f.label]=[n,nf];
+        });
+        nodes.push(n);
+      });
+    });
+
+    model.nodes.forEach(function(mn,idx){
+      var frm=mn.from||"", dot=frm.indexOf(".");
+      var pkg=dot>0?frm.slice(0,dot):"", nodeName=dot>0?frm.slice(dot+1):"";
+      var artifact=null;
+      for(var i=0;i<mn.ifaces.length;i++){ if(mn.ifaces[i].artifact){ artifact=mn.ifaces[i].artifact; break; } }
+      var hit=resolveArtifact(pkg,nodeName,artifact);
+      var cat=CATALOGUE[frm];
+      var n={id:nid("n"), label:mn.label, backing:hit?"hand":(cat?"cat":"hand"),
+             pkg:pkg, node:nodeName, artifact:artifact||(hit?hit.art.name:(cat?cat.artifact:nodeName)),
+             catalogueFile:(!hit&&cat)?cat.file:null, namespace:mn.namespace||null,
+             x:120+(idx%4)*260, y:120+Math.floor(idx/4)*200, ifaces:[], params:[]};
+      if(mn.comments) n.comments=mn.comments;
+      // the node carries BOTH its .rossystem comments (before/line/from) and the backing
+      // artifact's own (ros2Before/ros2Line) -- they annotate one element across two files,
+      // and emit_ros2 writes the second pair back into the .ros2
+      if(hit&&hit.art.comments){
+        n.comments=n.comments||{};
+        Object.keys(hit.art.comments).forEach(function(k){ n.comments[k]=hit.art.comments[k]; });
+      }
+
+      // exposures indexed by the interface NAME they target, per kind, so the LABEL survives
+      var byPair={}, byName={}, kindsFor={};
+      mn.ifaces.forEach(function(f){
+        var tgt=f.ifaceName||f.label;
+        if(byPair[tgt+" "+f.kind]===undefined) byPair[tgt+" "+f.kind]=f;
+        if(byName[tgt]===undefined) byName[tgt]=f;
+        (kindsFor[tgt]=kindsFor[tgt]||{})[f.kind]=1;
+      });
+
+      var claimed={};
+      var declared=hit?hit.art.ifaces:(cat?catIfaces(frm):null);
+      if(declared){
+        declared.forEach(function(d){
+          var src=byPair[d.name+" "+d.kind];
+          if(src===undefined){
+            var only=Object.keys(kindsFor[d.name]||{});
+            if(!only.length) src=byName[d.name];        // no exposure of that name at all
+            else src=undefined;                          // exists under another kind: not ours
+          }
+          if(src) claimed[src.label]=1;
+          var nf={id:nid("i"),name:d.name,kind:d.kind,type:d.type||null,
+                  qos:d.qos||null,label:src?src.label:null,exposed:!!src};
+          if(src&&src.comments) nf.comments=src.comments;
+          if(d.comments){ nf.comments=nf.comments||{};
+                          Object.keys(d.comments).forEach(function(k){ nf.comments[k]=d.comments[k]; }); }
+          n.ifaces.push(nf);
+        });
+        mn.ifaces.forEach(function(f){
+          if(claimed[f.label]) return;
+          var nf={id:nid("i"),name:f.ifaceName||f.label,kind:f.kind,type:null,qos:null,
+                  label:f.label,exposed:true,orphan:true};
+          if(f.comments) nf.comments=f.comments;
+          n.ifaces.push(nf);
+        });
+        if(hit) hit.art.params.forEach(function(p){
+          var np={id:nid("p"),name:p.name,ptype:p.ptype,value:p.value};
+          if(p.comments) np.comments=p.comments;
+          n.params.push(np);
+        });
+      } else {
+        // nothing backs it: keep exactly what the .rossystem exposed
+        mn.ifaces.forEach(function(f){
+          var nf={id:nid("i"),name:f.ifaceName||f.label,kind:f.kind,type:null,qos:null,
+                  label:f.label,exposed:true};
+          if(f.comments) nf.comments=f.comments;
+          n.ifaces.push(nf);
+        });
+        if(!cat) report.push("node '"+mn.label+"' has no .ros2 among the opened files, so its "
+          +"interface TYPES and parameters are unknown. Open "+(pkg||"its package")+".ros2 too.");
+      }
+      if(n.backing==="hand"&&pkg){
+        packages[pkg]=packages[pkg]||{fromGitRepo:pkgGit[pkg]||null};
+        if(ros2Cmts[pkg]&&ros2Cmts[pkg].header)
+          packages[pkg].comments={header:ros2Cmts[pkg].header};
+      }
+      nodes.push(n);
+    });
+
+    function catIfaces(frm){
+      var entry=CATALOGUE[frm]; if(!entry) return null;
+      var typemap=CATTYPES[frm]||{}, out=[];
+      Object.keys(entry.interfaces||{}).sort().forEach(function(name){
+        out.push({name:name,kind:entry.interfaces[name],type:typemap[name]||null,qos:null});
+      });
+      return out;
+    }
+
+    // connections: endpoints name LABELS, resolved against local exposures then subsystems
+    var byLabel={};
+    nodes.forEach(function(n){ n.ifaces.forEach(function(f){
+      if(f.label&&byLabel[f.label]===undefined) byLabel[f.label]=[n,f]; }); });
+    model.connections.forEach(function(c){
+      var a=byLabel[c.from]||subExposure[c.from], b=byLabel[c.to]||subExposure[c.to];
+      if(!a||!b){
+        report.push("connection ["+c.from+", "+c.to+"] could not be re-linked: "
+          +(!a?("'"+c.from+"'"):("'"+c.to+"'"))+" matches no exposure among the opened files. "
+          +"It is NOT carried into the project.");
+        return;
+      }
+      var rec={id:nid("c"),from:{n:a[0].id,i:a[1].id},to:{n:b[0].id,i:b[1].id}};
+      if(c.comments) rec.comments=c.comments;
+      conns.push(rec);
+    });
+
+    Object.keys(rosTypes).forEach(function(k){ types[k]=rosTypes[k]; });
+
+    var project={
+      formatVersion:4,
+      system:{name:model.name||"system",fromFile:model.fromFile||null},
+      subSystems:subSystems, nodes:nodes, connections:conns,
+      packages:packages, types:types,
+      diagnostics:{global:report.slice(),byNode:{}},
+      seededFrom:primary.name, seededInBrowser:true
+    };
+    if(model.comments&&Object.keys(model.comments).length) project.comments=model.comments;
+    return {project:project, report:report, name:primary.name};
+  }
+
+  // ---- the Open control ------------------------------------------------------------------
+  function readFiles(fileList, done){
+    var files=Array.prototype.slice.call(fileList||[]), out=[], left=files.length;
+    if(!left){ done([]); return; }
+    files.forEach(function(f,idx){
+      var r=new FileReader();
+      r.onload=function(){ out[idx]={name:f.name,text:String(r.result||"")};
+                           if(--left===0) done(out.filter(Boolean)); };
+      r.onerror=function(){ out[idx]=null; if(--left===0) done(out.filter(Boolean)); };
+      r.readAsText(f);
+    });
+  }
+
+  function applyLoadedProject(next, sourceName, report){
+    // Same guard the autosave prompt uses: replacing the model is not undoable past the stack,
+    // so unsaved work gets a chance to survive.
+    if(dirty && !window.confirm("Replace the current project with "+sourceName+"?\n\n"
+        +"There are changes since the last Commit. Loading discards them.")) return false;
+    pushUndo("load:"+sourceName);
+    project=next;
+    selNode=null; selEdge=null;
+    if(project.system&&project.system.name)
+      document.getElementById("sysname").value=project.system.name;
+    fillNsList();
+    sizeCanvas(); render(); fillInspector(); fitView();
+    var b=document.getElementById("banner");
+    if(report&&report.length){
+      b.className="banner warn";
+      b.innerHTML="<b>Loaded "+esc(sourceName)+"</b> with "+report.length
+        +" note(s) — the companion's <code>init</code> is the authoritative seeder:<br>"
+        +report.map(function(r){return "• "+esc(r);}).join("<br>");
+    } else {
+      b.className="banner";
+      b.innerHTML="<b>Loaded "+esc(sourceName)+".</b> Edit, then <b>Commit</b> to hand the "
+        +"project.json back to the Python companion for generation and validation.";
+    }
+    return true;
+  }
+
+  function openFiles(fileList){
+    readFiles(fileList, function(files){
+      if(!files.length) return;
+      var proj=null, projName=null;
+      files.forEach(function(f){
+        if(!/\.json$/i.test(f.name)) return;
+        try{
+          var parsed=JSON.parse(f.text);
+          if(parsed&&parsed.nodes&&parsed.system){ proj=parsed; projName=f.name; }
+        }catch(e){
+          window.alert(f.name+" is not readable JSON: "+((e&&e.message)||e));
+        }
+      });
+      if(proj){
+        // a project.json is the page's OWN format -- loaded exactly, never re-seeded
+        applyLoadedProject(proj, projName, (proj.diagnostics&&proj.diagnostics.global)||[]);
+        return;
+      }
+      var res=seedFromFiles(files);
+      if(res.error){ window.alert("Could not load: "+res.error); return; }
+      applyLoadedProject(res.project, res.name, res.report);
+    });
+  }
+
+  (function wireOpen(){
+    var input=document.getElementById("openInput"), btn=document.getElementById("openBtn");
+    if(btn&&input){
+      btn.onclick=function(){ input.value=""; input.click(); };
+      input.onchange=function(){ openFiles(input.files); };
+    }
+    // Drag a whole model set onto the canvas. The default browser behaviour for a dropped file
+    // is to NAVIGATE to it, which would discard the session, so both handlers are required.
+    var zone=document.getElementById("canvasWrap")||document.body;
+    ["dragenter","dragover"].forEach(function(ev){
+      zone.addEventListener(ev,function(e){
+        if(!e.dataTransfer||!e.dataTransfer.types) return;
+        if(Array.prototype.indexOf.call(e.dataTransfer.types,"Files")<0) return;
+        e.preventDefault(); e.stopPropagation();
+        e.dataTransfer.dropEffect="copy";
+        zone.classList.add("dropping");
+      });
+    });
+    ["dragleave","dragend"].forEach(function(ev){
+      zone.addEventListener(ev,function(){ zone.classList.remove("dropping"); });
+    });
+    zone.addEventListener("drop",function(e){
+      if(!e.dataTransfer||!e.dataTransfer.files||!e.dataTransfer.files.length) return;
+      e.preventDefault(); e.stopPropagation();
+      zone.classList.remove("dropping");
+      openFiles(e.dataTransfer.files);
+    });
+    window.addEventListener("dragover",function(e){
+      if(e.dataTransfer&&Array.prototype.indexOf.call(e.dataTransfer.types||[],"Files")>=0)
+        e.preventDefault();
+    });
+    window.addEventListener("drop",function(e){
+      if(e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files.length) e.preventDefault();
+    });
+  })();
 
   // ============================ inline editing on the card ============================
   // The inspector remains the complete surface -- every field lives there. This covers the two
