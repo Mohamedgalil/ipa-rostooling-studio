@@ -117,6 +117,19 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .iface .kd{font-family:var(--mono);font-size:.56rem;font-weight:700;text-transform:uppercase;width:2.2em;text-align:center;border-radius:3px;padding:.05em 0;color:#fff}
   .iface .inm{font-weight:600}
   .iface .ity{font-family:var(--mono);font-size:.63rem;color:var(--ink-3);margin-left:auto;max-width:12ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* Parameters are NOT connectable -- no arrow kind, no port, no edge. They are drawn as a
+     separate band below the interfaces so a node whose only content is parameters stops
+     rendering as an empty box. */
+  .params{border-top:1px dashed var(--rule);padding:.1rem 0 .15rem}
+  .params .phead{font-size:.55rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding:.1rem .6rem .05rem}
+  .prow{display:flex;align-items:center;gap:.4rem;padding:.1rem .6rem;font-size:.72rem}
+  .prow .pk{font-family:var(--mono);font-size:.52rem;font-weight:700;text-transform:uppercase;width:2.2em;text-align:center;border-radius:3px;padding:.05em 0;color:#fff;background:var(--k-param);flex:none}
+  .prow .pnm{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .prow .plb{font-family:var(--mono);font-size:.58rem;color:var(--k-param);flex:none}
+  .prow .pvl{font-family:var(--mono);font-size:.62rem;color:var(--ink-3);margin-left:auto;max-width:11ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .prow.orphan .pnm{text-decoration:underline wavy var(--bad)}
+  .node.sysparams{border-style:dashed;border-color:var(--k-param)}
+  .canvas.lvl2 .prow .pvl,.canvas.lvl2 .params .phead{display:none}
   .kd.pub{background:var(--k-pub)} .kd.sub{background:var(--k-sub)} .kd.ss{background:var(--k-ss)}
   .kd.sc{background:var(--k-sc)} .kd.as{background:var(--k-as)} .kd.ac{background:var(--k-ac)}
   .port{position:absolute;top:50%;width:12px;height:12px;border-radius:50%;border:2px solid var(--surface);transform:translateY(-50%);cursor:crosshair;z-index:3}
@@ -416,6 +429,13 @@ var DATA = /*__DATA__*/null;
   // package -- and only the first two of those have an id at all.
   var cmtReg={};
   var kindShown={}; KINDS.forEach(function(k){kindShown[k]=true;});
+  // `param` is a pseudo-kind: it has its own filter toggle but no port and no edge, because a
+  // parameter is not an interaction.
+  var paramShown=true;
+  // The ParameterTypes the emitter can write a value for. List/Struct/Base64/Array exist in the
+  // grammar (Basics.xtext:51-52) but _fmt_param_value has no representation for them, so
+  // offering them here would let the author author a value the emitter cannot spell.
+  var PTYPES=["String","Boolean","Integer","Double"];
 
   document.getElementById("sysname").value=(project.system&&project.system.name)||"system";
   if(DATA.banner){ var b=document.getElementById("banner"); b.className="banner err"; b.innerHTML="<b>"+esc(DATA.banner)+"</b>"; }
@@ -682,6 +702,30 @@ var DATA = /*__DATA__*/null;
         +'<span class="ity" title="'+esc(f.type||"")+'">'+esc(f.type||"—")+'</span>'
         +'<span class="port '+(src?"src":"snk")+sideCls+' '+f.kind+'" data-n="'+n.id+'" data-i="'+f.id+'" data-kind="'+f.kind+'" data-src="'+src+'" data-type="'+esc(f.type||"")+'"></span>';
       box.appendChild(row);
+    }
+    // The parameter band. Two facts are shown per row that nothing else on the canvas showed:
+    // the exposure LABEL when it differs from the artifact parameter name (the split that made
+    // these vanish on every round-trip), and the EFFECTIVE value -- the .rossystem override
+    // where there is one, otherwise the artifact's declared default.
+    var ps=(n.params||[]).filter(function(p){return paramShown;});
+    if(ps.length){
+      var pbox=document.createElement("div");
+      pbox.className="params";
+      var ph='<div class="phead">parameters ('+ps.length+')</div>';
+      ps.forEach(function(p){
+        var over=(p.sysValue!=null&&p.sysValue!=="");
+        var val=over?p.sysValue:p.value;
+        var t=String(p.ptype||"").trim()||inferPtype(over?p.sysValue:p.value);
+        var lbl=(p.exposed&&p.label&&p.label!==p.name)?('<span class="plb" title="exposed to this system as &quot;'+esc(p.label)+'&quot;">'+esc(p.label)+'</span>'):"";
+        ph+='<div class="prow'+(p.orphan?" orphan":"")+'" data-p="'+p.id+'"'
+          +' title="'+esc(p.name+" : "+t+(over?("  (overridden here: "+val+")"):("  = "+(val==null?"—":val))))
+          +(p.orphan?"  — the backing artifact does not declare this parameter":"")+'">'
+          +'<span class="pk">'+esc(t.slice(0,3))+'</span>'
+          +'<span class="pnm">'+esc(p.name)+'</span>'+lbl
+          +'<span class="pvl">'+esc(val==null||val===""?"—":String(val))+(over?" *":"")+'</span></div>';
+      });
+      pbox.innerHTML=ph;
+      el.appendChild(pbox);
     }
     if(DIAG[n.id]&&DIAG[n.id].length){
       var d=document.createElement("div"); d.className="diagflag";
@@ -1904,8 +1948,16 @@ var DATA = /*__DATA__*/null;
     iface:[["before","block above the exposure (.rossystem)"],["line","trailing on the exposure"],
            ["ros2Before","block above the interface (.ros2)"],
            ["ros2Line","trailing on the interface (.ros2)"],["ros2Type","trailing on type: (.ros2)"]],
-    param:[["ros2Before","block above the parameter (.ros2)"],
+    // a node parameter appears in BOTH files, like an interface: the exposure in the
+    // .rossystem and the declaration in the .ros2, with different text in each
+    param:[["before","block above the exposure (.rossystem)"],
+           ["line","trailing on the exposure"],
+           ["ros2Before","block above the parameter (.ros2)"],
            ["ros2Line","trailing on the parameter (.ros2)"]],
+    sysparam:[["before","block above the parameter (.rossystem)"],
+              ["line","trailing on the parameter line"],
+              ["type","trailing on type:"],["value","trailing on value:"],
+              ["ns","trailing on ns:"]],
     conn:[["before","block above the connection (.rossystem)"],["line","trailing on the connection"]],
     system:[["header","file header block (.rossystem)"],["fromFile","trailing on fromFile:"]],
     sub:[["before","block above the subSystems: entry"],["line","trailing on the entry"]],
@@ -2000,14 +2052,30 @@ var DATA = /*__DATA__*/null;
       +'<div class="typestate" id="ni_ts"></div>'
       +'<button class="minibtn" id="ni_add">+ add interface</button></div></div>';
     ih+='<div class="insec"><h4>parameters</h4>';
+    // Two halves, shown as two lines, because they are two grammar slots and treating them as
+    // one is what deleted every override on round-trip:
+    //   .ros2   `name: / type: T / default: D`      the artifact DECLARES it
+    //   .rossys `- "label": "artifact::name" / value: V`  this system EXPOSES and OVERRIDES it
     for(var p=0;p<n.params.length;p++){var pp=n.params[p];
-      ih+='<div class="iedit"><span class="kd" style="background:var(--k-param)">'+(pp.ptype||"Str").slice(0,3)+'</span>'
-        +'<span class="grow"><span class="inm2">'+esc(pp.name)+'</span> <span class="ity2">= '+esc(String(pp.value))+'</span></span>'
+      var pt=String(pp.ptype||"").trim()||inferPtype(pp.sysValue!=null?pp.sysValue:pp.value);
+      ih+='<div class="iedit'+(pp.orphan?" orphan":"")+'" data-p="'+pp.id+'">'
+        +'<span class="kd" style="background:var(--k-param)" title="'+esc(pt)+'">'+esc(pt.slice(0,3))+'</span>'
+        +'<span class="grow"><span class="inm2">'+esc(pp.name)+'</span> '
+        +'<span class="ity2">'+esc(pt)+(pp.value==null||pp.value===""?"":" default "+esc(String(pp.value)))
+        +' · "'+esc(n.artifact||"")+'::'+esc(pp.name)+'"</span>'
+        +(pp.orphan?'<br><span class="hint w">the backing artifact declares no such parameter — '
+          +'the arrow target will not resolve. Fix the name, or drop the exposure.</span>':"")
+        +'<span class="lblrow">'
+        +'<input class="ilbl" data-undo="1" data-plbl="'+pp.id+'" value="'+esc(pp.label||"")+'" placeholder="'+esc(pp.name)+'" title="exposure label — the key written into the .rossystem. Blank derives it from the parameter name.">'
+        +'<input class="ilbl" data-undo="1" data-pover="'+pp.id+'" value="'+esc(pp.sysValue==null?"":String(pp.sysValue))+'" placeholder="override value" title="written into this node’s parameters: block as `value:` — it overrides the artifact default for THIS instance and does not change the .ros2.">'
+        +'<label class="expchk" title="write this parameter into the .rossystem as an exposure with an override value">'
+        +'<input type="checkbox" data-pexp="'+pp.id+'"'+(pp.exposed?" checked":"")+'>expose</label>'
         +cmtChip(pp,"p:"+pp.id)
+        +'</span></span>'
         +'<span class="del" data-delp="'+pp.id+'">✕</span></div>'+cmtPanel(pp,"param","p:"+pp.id);
     }
     ih+='<div class="addform"><input id="np_name" placeholder="param name">'
-      +'<select id="np_type"><option>Integer</option><option>Double</option><option>String</option><option>Boolean</option></select>'
+      +'<select id="np_type">'+PTYPES.map(function(o){return '<option>'+o+'</option>';}).join("")+'</select>'
       +'<input id="np_val" placeholder="value (typed-safe: no True/int traps)">'
       +'<button class="minibtn" id="np_add">+ add parameter</button></div></div>';
     // the node's own comments, always open: a leading block is the one an author reaches for
@@ -2192,6 +2260,41 @@ var DATA = /*__DATA__*/null;
       pushUndo(); fieldList(p[0],p[1]).splice(+p[2],1); fillSystemInspector(); runIssues();};});
     inspector.querySelectorAll("[data-tdel]").forEach(function(x){x.onclick=function(){
       pushUndo(); delete project.types[x.dataset.tdel]; fillSystemInspector(); runIssues();};});
+    // ---- system-level parameters ----------------------------------------------------------
+    function sysParamById(id){
+      var l=project.params||[];
+      for(var i=0;i<l.length;i++) if(l[i].id===id) return l[i];
+      return null;
+    }
+    inspector.querySelectorAll("[data-spt]").forEach(function(x){x.onchange=function(){
+      var sp=sysParamById(x.dataset.spt); if(!sp) return;
+      pushUndo(); sp.ptype=x.value; fillSystemInspector(); render(); runIssues();};});
+    inspector.querySelectorAll("[data-spd]").forEach(function(x){x.oninput=function(){
+      var sp=sysParamById(x.dataset.spd); if(!sp) return;
+      pushUndo("spd:"+sp.id);
+      // `default:` belongs to the ParameterType and `value:` to the Parameter -- two slots, so
+      // they get two boxes and neither writes into the other.
+      sp["default"]=x.value.trim()||null; render();};});
+    inspector.querySelectorAll("[data-spv]").forEach(function(x){x.oninput=function(){
+      var sp=sysParamById(x.dataset.spv); if(!sp) return;
+      pushUndo("spv:"+sp.id); sp.value=x.value.trim()||null; render();};});
+    inspector.querySelectorAll("[data-spns]").forEach(function(x){x.onchange=function(){
+      var sp=sysParamById(x.dataset.spns); if(!sp) return;
+      pushUndo(); sp.ns=x.value||null; render();};});
+    inspector.querySelectorAll("[data-spdel]").forEach(function(x){x.onclick=function(){
+      pushUndo();
+      project.params=(project.params||[]).filter(function(q){return q.id!==x.dataset.spdel;});
+      fillSystemInspector(); render(); runIssues();};});
+    var spAdd=document.getElementById("sp_add");
+    if(spAdd) spAdd.onclick=function(){
+      var nm=document.getElementById("sp_name").value.trim(); if(!nm) return;
+      var t=document.getElementById("sp_type").value;
+      var raw=document.getElementById("sp_val").value.trim();
+      pushUndo();
+      project.params=project.params||[];
+      project.params.push({id:nid(),name:nm,ptype:t,"default":null,
+                           value:raw||null,ns:null});
+      fillSystemInspector(); render(); runIssues();};
     var add=document.getElementById("ntAdd");
     if(add) add.onclick=function(){
       var msg=document.getElementById("nt_msg");
@@ -2256,6 +2359,47 @@ var DATA = /*__DATA__*/null;
       });
       h+='</div>';
     }
+
+    // The system-level `parameters:` block: a peer of nodes: and connections:, not a node and
+    // not a member of one. It had no UI at all because it had no slot in the project -- five of
+    // them on ur_robot.rossystem were read, dropped, and reported as phantom NODES.
+    var sps=project.params||[];
+    h+='<div class="insec"><h4>system parameters ('+sps.length+')</h4>';
+    if(!sps.length) h+='<div class="roinfo">None. A system parameter is declared once for the '
+      +'whole composition (<code>name: / type: T</code>), unlike a node parameter, which '
+      +'exposes and overrides one parameter of one artifact.</div>';
+    sps.forEach(function(sp,i){
+      var t=String(sp.ptype||"").trim()||inferPtype((sp["default"]!=null&&sp["default"]!=="")?sp["default"]:sp.value);
+      if(edit){
+        h+='<div class="pkgrow"><div class="pn">'+esc(sp.name)+'</div>'
+          +'<div class="prow3">'
+          +'<select data-spt="'+sp.id+'" data-undo="1">'
+          +PTYPES.map(function(o){return '<option'+(o===t?" selected":"")+'>'+o+'</option>';}).join("")
+          +'</select>'
+          +'<input data-spd="'+sp.id+'" data-undo="1" value="'+esc(sp["default"]==null?"":sp["default"])+'" placeholder="default (of the type)">'
+          +'<input data-spv="'+sp.id+'" data-undo="1" value="'+esc(sp.value==null?"":sp.value)+'" placeholder="value (of the parameter)">'
+          +'<span class="del" data-spdel="'+sp.id+'">✕</span></div>'
+          // `ns:` is a Namespace KEYWORD, not free text -- offering a text box here would invite
+          // exactly the quoted string the real server rejects.
+          +'<div class="prow3"><label class="mini">ns</label><select data-spns="'+sp.id+'" data-undo="1">'
+          +["","GlobalNamespace","RelativeNamespace","PrivateNamespace"].map(function(o){
+              return '<option value="'+o+'"'+((sp.ns||"")===o?" selected":"")+'>'+(o||"(none)")+'</option>';}).join("")
+          +'</select><span class="hint">one of three keywords (Basics.xtext:13-32); RM044 notes zero corpus use</span></div>'
+          +cmtRows(sp,"sysparam","sp:"+sp.id)+'</div>';
+      }else{
+        h+='<div class="pkgrow"><div class="pn">'+esc(sp.name)+'</div><div class="roinfo">'
+          +'type: '+esc(t)
+          +(sp.ns?('  · ns: '+esc(sp.ns)):"")
+          +(sp["default"]!=null&&sp["default"]!==""?('<br>default: '+esc(String(sp["default"]))):"")
+          +(sp.value!=null&&sp.value!==""?('<br>value: '+esc(String(sp.value))):"")
+          +'</div></div>';
+      }
+    });
+    if(edit) h+='<div class="addform"><input id="sp_name" placeholder="parameter name">'
+      +'<select id="sp_type">'+PTYPES.map(function(o){return '<option>'+o+'</option>';}).join("")+'</select>'
+      +'<input id="sp_val" placeholder="value (optional)">'
+      +'<button class="minibtn" id="sp_add">+ add system parameter</button></div>';
+    h+='</div>';
 
     h+='<div class="insec"><h4>packages (.ros2)</h4>';
     if(!pkgs.length) h+='<div class="roinfo">No hand-authored package yet — catalogue nodes '
@@ -2401,6 +2545,35 @@ var DATA = /*__DATA__*/null;
       var f=ifaceById(n,x.dataset.exp); if(!f) return;
       pushUndo();
       f.exposed=x.checked; render();fillInspector();};});
+    // The .rossystem half of a parameter. Editing the label or the override does NOT touch the
+    // artifact's declared type or default -- those are the .ros2 half and are edited (for a
+    // hand-backed node) through the add form.
+    function paramById(id){
+      for(var i=0;i<(n.params||[]).length;i++) if(n.params[i].id===id) return n.params[i];
+      return null;
+    }
+    inspector.querySelectorAll("[data-plbl]").forEach(function(x){x.oninput=function(){
+      var pp=paramById(x.dataset.plbl); if(!pp) return;
+      pushUndo("plbl:"+pp.id);
+      pp.label=x.value.trim()||null; render();};});
+    inspector.querySelectorAll("[data-pover]").forEach(function(x){x.oninput=function(){
+      var pp=paramById(x.dataset.pover); if(!pp) return;
+      pushUndo("pover:"+pp.id);
+      var v=x.value.trim();
+      pp.sysValue=v||null;
+      // an override with nothing exposing it would never be written, so typing one turns the
+      // exposure on rather than silently discarding the edit
+      if(v&&!pp.exposed){ pp.exposed=true; fillInspector(); }
+      render();};});
+    inspector.querySelectorAll("[data-pexp]").forEach(function(x){x.onchange=function(){
+      var pp=paramById(x.dataset.pexp); if(!pp) return;
+      pushUndo();
+      pp.exposed=x.checked;
+      // RosParameter has a MANDATORY `value:` (RosSystem.xtext:78-82), so an exposure with no
+      // override cannot be emitted. Seed it from the artifact default rather than writing an
+      // incomplete block.
+      if(pp.exposed&&(pp.sysValue==null||pp.sysValue==="")) pp.sysValue=pp.value;
+      render();fillInspector();};});
     var kseg=document.getElementById("kseg");
     if(kseg) kseg.querySelectorAll("button").forEach(function(b){b.onclick=function(){addKind=b.dataset.k;kseg.querySelectorAll("button").forEach(function(x){x.classList.remove("on");});b.classList.add("on");};});
     var tyIn=document.getElementById("ni_type"), ts=document.getElementById("ni_ts");
@@ -2427,7 +2600,8 @@ var DATA = /*__DATA__*/null;
       if(t==="Boolean") val=/^(t|1|y|true)/i.test(raw)?"true":"false";
       else if(t==="Integer") val=String(parseInt(raw||"0",10)||0);
       else if(t==="Double") val=(raw.indexOf(".")>=0?raw:String((parseFloat(raw||"0")||0).toFixed(1)));
-      n.params.push({id:nid(),name:nm,ptype:t,value:val});
+      n.params.push({id:nid(),name:nm,ptype:t,value:val,
+                     label:null,exposed:false,sysValue:null});
       render();fillInspector();};
     wireComments();
     var del=document.getElementById("delNode");
@@ -2481,14 +2655,19 @@ var DATA = /*__DATA__*/null;
   var KCOL={pub:"--k-pub",sub:"--k-sub",ss:"--k-ss",sc:"--k-sc",as:"--k-as",ac:"--k-ac"};
   (function(){
     var fb=document.getElementById("filterBox");
-    // only the six arrow kinds -- params are never drawn on the editor canvas, so a `param`
-    // toggle would be a no-op.
     KINDS.forEach(function(k){
       var l=document.createElement("label");
       l.innerHTML='<input type="checkbox" checked data-k="'+k+'"><span class="sw" style="background:var('+KCOL[k]+')"></span>'+k;
       l.querySelector("input").onchange=function(e){kindShown[k]=e.target.checked;render();};
       fb.appendChild(l);
     });
+    // `param` toggles a BAND, not ports: it hides no edge, because a parameter is not an
+    // interaction. It is here because a node's parameters are often the bulkiest thing on its
+    // card and reading the wiring is easier without them.
+    var pl=document.createElement("label");
+    pl.innerHTML='<input type="checkbox" checked data-k="param"><span class="sw" style="background:var(--k-param)"></span>param';
+    pl.querySelector("input").onchange=function(e){paramShown=e.target.checked;render();};
+    fb.appendChild(pl);
     var lg=document.getElementById("legend");
     [["pub → sub","Topic — one-way ▶"],["ss → sc","Service — request ⇄ response"],["as → ac","Action — request ⇄ response"]]
       .forEach(function(pair){var d=document.createElement("div");d.innerHTML='<b style="font-family:var(--mono);font-size:.66rem">'+pair[0]+'</b> — '+pair[1];lg.appendChild(d);});
