@@ -270,6 +270,70 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   textarea.copybox{width:100%;height:160px;font-family:var(--mono);font-size:.7rem;background:var(--surface-2);border:1px solid var(--rule);border-radius:7px;color:var(--ink);padding:.6rem;margin-top:.6rem}
   .gennote{font-size:.72rem;color:var(--warn);background:var(--warn-wash);border-radius:5px;padding:.4rem .55rem;margin-bottom:.6rem;font-family:var(--mono)}
   .modalbtns{display:flex;gap:.5rem;margin-top:.7rem;flex-wrap:wrap}
+  /* ================================ small screens ================================
+     The desktop layout is three columns: a 190px rail, the canvas, a 298px inspector. That is
+     ~490px of chrome before any graph, so on a phone there was nothing left to draw on and the
+     canvas was squeezed to a sliver.
+
+     Below 860px the two side panels become OVERLAY DRAWERS instead: the canvas gets the whole
+     viewport and each panel slides in over it, one at a time, behind a backdrop. Nothing is
+     removed -- every control stays reachable -- because a model you can only half-inspect on
+     the device you have with you is worse than a slightly awkward drawer. */
+  .drawerbtn{display:none}
+  .scrim.drawer{display:none;background:rgba(0,0,0,.34);z-index:39}
+  @media (max-width:860px){
+    body{font-size:15px}                 /* 14px is below comfortable reading size on a phone */
+    .drawerbtn{display:inline-flex;align-items:center;gap:.3rem}
+    /* One row that SCROLLS SIDEWAYS rather than a wrapping block. Twelve controls wrapped on a
+       390px screen is four rows -- half the viewport gone before the graph starts. Scrolling
+       keeps every control reachable at one row tall, and costs a swipe instead of the canvas. */
+    .topbar{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;gap:.4rem;padding:.4rem .55rem;
+            -webkit-overflow-scrolling:touch;scrollbar-width:none}
+    .topbar::-webkit-scrollbar{display:none}
+    .topbar>*{flex:none}                 /* or the segmented controls compress to unreadable */
+    .brand{font-size:.95rem}
+    .sysname{font-size:.76rem}
+    .sysname input{width:11ch}
+    .spacer{display:none}                /* a flex spacer in a scrolling row would stretch it
+                                            to infinity; the row ends after the last control */
+    .main{position:relative}
+    /* Off-canvas. `position:absolute` inside .main (not fixed) so the drawer is clipped to the
+       app area and cannot slide under the topbar. */
+    .rail,.inspector{position:absolute;top:0;bottom:0;z-index:40;width:min(84vw,320px);
+                     box-shadow:var(--shadow-lift);transition:transform .18s ease}
+    .rail{left:0;transform:translateX(-101%)}
+    .inspector{right:0;transform:translateX(101%)}
+    body.drawer-l .rail{transform:translateX(0)}
+    body.drawer-r .inspector{transform:translateX(0)}
+    body.drawer-l .scrim.drawer,body.drawer-r .scrim.drawer{display:block}
+    /* The floating bars stack instead of sitting at opposite corners, and scroll sideways --
+       the viewbar alone is wider than a phone. */
+    .findbar,.viewbar{max-width:calc(100vw - 1.2rem);overflow-x:auto;flex-wrap:nowrap}
+    .findbar input{width:9ch}
+    .viewbar{bottom:.5rem;left:.5rem;right:.5rem}
+    .modal{width:96vw;max-height:90vh}
+  }
+  @media (max-width:520px){
+    /* At true phone width the wordmark is the one thing on the bar that does no work, and
+       dropping it moves the controls that DO into thumb reach without a swipe. */
+    .brand{display:none}
+    #levelSeg button{font-size:.7rem;padding:.34rem .45rem}
+    .findbar{top:.5rem;left:.5rem;right:.5rem}
+    .banner{font-size:.68rem;padding:.3rem .5rem}
+  }
+  /* A finger is not a mouse pointer: 12px ports were unhittable. The visible dot stays the same
+     size -- growing it would change how the graph reads -- and an invisible ::after enlarges the
+     TOUCH TARGET around it instead. Same trick for the small square buttons. */
+  @media (pointer:coarse){
+    .port::after{content:"";position:absolute;left:50%;top:50%;width:34px;height:34px;
+                 transform:translate(-50%,-50%);border-radius:50%}
+    .cbtn,.tbtn,.minibtn{min-height:32px}
+    .seg button{min-height:32px}
+    .iedit .del,.pkgrow .del,.subtog{min-width:30px;min-height:30px;display:inline-flex;
+                                     align-items:center;justify-content:center}
+    /* :hover sticks after a tap on touch and leaves controls looking permanently focused */
+    .railbtn:hover,.cbtn:hover,.tbtn:hover{border-color:var(--rule)}
+  }
   @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -278,6 +342,7 @@ EDITOR_TEMPLATE = r'''<!doctype html>
 
 <div class="topbar">
   <div class="brand">RosTooling <span class="sub">/ros-studio</span></div>
+  <button class="tbtn drawerbtn" id="railToggle" title="Add, filters, issues and legend">&#9776; Tools</button>
   <div class="sysname">system <input id="sysname" value=""></div>
   <div class="seg" id="modeSeg">
     <button data-mode="view">View</button><button data-mode="edit" class="on">Edit</button>
@@ -294,6 +359,7 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   <button class="tbtn" id="theme">&#9680; Theme</button>
   <button class="tbtn" id="openBtn" title="Open a project.json, or a .rossystem with its .ros2/.ros files (several at once). You can also drag them onto the canvas.">&#8679; Open</button>
   <input type="file" id="openInput" multiple accept=".rossystem,.ros2,.ros,.json" style="display:none">
+  <button class="tbtn drawerbtn" id="inspToggle" title="Inspector for the current selection">&#9998; Inspect</button>
   <button class="tbtn primary" id="commit">&#8681; Commit</button>
 </div>
 
@@ -343,6 +409,8 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   </div>
 
   <aside class="inspector empty" id="inspector">Select a node to edit it, or add one from the rail.</aside>
+  <!-- Only ever visible under the ≤860px rules; tapping it closes whichever drawer is open. -->
+  <div class="scrim drawer" id="drawerScrim"></div>
 </div>
 
 <datalist id="typelist"></datalist>
@@ -1948,11 +2016,12 @@ var DATA = /*__DATA__*/null;
       if(sref){
         // a click on the box selects it and shows the system panel, where its view state and
         // its "open" button live; a drag just leaves it where it was dropped (no undo entry)
-        if(wasClick){ selSub=sref; selNode=null; selEdge=null; render(); fillInspector(); }
+        if(wasClick){ selSub=sref; selNode=null; selEdge=null; render(); fillInspector();
+                      revealInspector(); }
         else sizeCanvas();
         return;
       }
-      if(wasClick){selNode=n.id;selEdge=null;selSub=null;render();fillInspector();}
+      if(wasClick){selNode=n.id;selEdge=null;selSub=null;render();fillInspector();revealInspector();}
       else {sizeCanvas();pushSnapshot(snap);}
     });
     // Background drag = PAN. It shares its pointerdown with "click empty space to deselect",
@@ -2021,6 +2090,103 @@ var DATA = /*__DATA__*/null;
   var dragState=null, wire=null, panState=null;
   wireCanvas();
   wireInline();
+
+  // ============================ small screens ============================
+  // The two side panels become overlay drawers below 860px (see the media query). Everything
+  // here is inert on a desktop: the buttons are display:none and the class on <body> selects
+  // nothing, so there is one layout in the DOM and only its presentation changes.
+  var NARROW="(max-width:860px)";
+  function isNarrow(){
+    return typeof matchMedia==="function" && matchMedia(NARROW).matches;
+  }
+  function closeDrawers(){ document.body.classList.remove("drawer-l","drawer-r"); }
+  function openDrawer(side){
+    // one at a time: two overlapping drawers on a 390px screen leaves no canvas at all
+    document.body.classList.remove("drawer-l","drawer-r");
+    document.body.classList.add(side==="l"?"drawer-l":"drawer-r");
+  }
+  // Tapping a node on a phone should SHOW you the node, not silently repaint a panel that is
+  // off screen. Only on a narrow viewport, and only from a deliberate tap -- render() runs on
+  // every edit and a drawer that reopened each time would be unusable.
+  function revealInspector(){ if(isNarrow()) openDrawer("r"); }
+  function toggleDrawer(side){
+    var cls=(side==="l")?"drawer-l":"drawer-r";
+    if(document.body.classList.contains(cls)) closeDrawers(); else openDrawer(side);
+  }
+  (function(){
+    var rt=document.getElementById("railToggle"), it=document.getElementById("inspToggle"),
+        sc=document.getElementById("drawerScrim");
+    if(rt) rt.onclick=function(){ toggleDrawer("l"); };
+    if(it) it.onclick=function(){ toggleDrawer("r"); };
+    if(sc) sc.onclick=closeDrawers;
+    // A drawer left open across a rotation into landscape/desktop width would be a panel
+    // stuck over the canvas with no visible way to shut it -- the button that opened it is
+    // display:none above the breakpoint.
+    if(typeof matchMedia==="function"){
+      var mq=matchMedia(NARROW);
+      var onChange=function(){ if(!mq.matches) closeDrawers(); };
+      if(mq.addEventListener) mq.addEventListener("change",onChange);
+      else if(mq.addListener) mq.addListener(onChange);
+    }
+  })();
+
+  // ---- pinch to zoom, two-finger pan -------------------------------------------------------
+  // .canvas-wrap sets touch-action:none, which hands the browser's own pan/pinch to us -- so
+  // without this a phone could pan and drag but had NO way to zoom at all (the desktop gesture
+  // is ctrl/⌘+wheel, and the buttons step in fixed increments).
+  //
+  // Tracked on the wrap, not the canvas: the canvas is the element being transformed, and a
+  // pointer that starts on a node still belongs to the gesture.
+  var touches={}, pinch=null;
+  canvasWrap.addEventListener("pointerdown",function(ev){
+    if(ev.pointerType==="mouse") return;
+    touches[ev.pointerId]={x:ev.clientX,y:ev.clientY};
+    var ids=Object.keys(touches);
+    if(ids.length===2){
+      // A second finger CANCELS whatever one finger had started -- otherwise the node under
+      // the first finger is dragged across the canvas while the user is only zooming.
+      if(dragState){
+        if(dragState.n){ dragState.n.x=dragState.ox; dragState.n.y=dragState.oy; }
+        else if(dragState.sub&&subPos[dragState.sub]){
+          subPos[dragState.sub].x=dragState.ox; subPos[dragState.sub].y=dragState.oy;
+        }
+        dragState=null; render();
+      }
+      panState=null; wire=null;
+      canvasWrap.classList.remove("panning");
+      var a=touches[ids[0]], b=touches[ids[1]];
+      pinch={d:Math.hypot(b.x-a.x,b.y-a.y)||1,
+             cx:(a.x+b.x)/2, cy:(a.y+b.y)/2, k:view.k, tx:view.tx, ty:view.ty};
+      markMoving();
+    }
+  },{passive:false});
+  canvasWrap.addEventListener("pointermove",function(ev){
+    if(ev.pointerType==="mouse"||!touches[ev.pointerId]) return;
+    touches[ev.pointerId]={x:ev.clientX,y:ev.clientY};
+    if(!pinch) return;
+    var ids=Object.keys(touches);
+    if(ids.length<2) return;
+    ev.preventDefault();
+    var a=touches[ids[0]], b=touches[ids[1]];
+    var d=Math.hypot(b.x-a.x,b.y-a.y)||1;
+    var cx=(a.x+b.x)/2, cy=(a.y+b.y)/2;
+    var r=canvasWrap.getBoundingClientRect();
+    var k2=clampZ(pinch.k*(d/pinch.d));
+    // Zoom about the pinch centre AND follow it, so a two-finger drag pans at the same time --
+    // which is what every map does and therefore what a thumb expects.
+    var px=pinch.cx-r.left, py=pinch.cy-r.top;
+    view.k=k2;
+    view.tx=(px-(px-pinch.tx)*(k2/pinch.k))+(cx-pinch.cx);
+    view.ty=(py-(py-pinch.ty)*(k2/pinch.k))+(cy-pinch.cy);
+    applyView(); markMoving();
+  },{passive:false});
+  function endTouch(ev){
+    if(ev.pointerType==="mouse") return;
+    delete touches[ev.pointerId];
+    if(Object.keys(touches).length<2) pinch=null;
+  }
+  canvasWrap.addEventListener("pointerup",endTouch);
+  canvasWrap.addEventListener("pointercancel",endTouch);
 
   // ============================ wheel: pan, ctrl/pinch: zoom ============================
   // Trackpad semantics, and the only ones that work for both input devices: a two-finger
