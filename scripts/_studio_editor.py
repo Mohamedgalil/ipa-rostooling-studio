@@ -272,58 +272,76 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .modalbtns{display:flex;gap:.5rem;margin-top:.7rem;flex-wrap:wrap}
   /* ================================ small screens ================================
      The desktop layout is three columns: a 190px rail, the canvas, a 298px inspector. That is
-     ~490px of chrome before any graph, so on a phone there was nothing left to draw on and the
-     canvas was squeezed to a sliver.
+     ~490px of chrome before any graph, so on a phone there was nothing left to draw on.
 
-     Below 860px the two side panels become OVERLAY DRAWERS instead: the canvas gets the whole
-     viewport and each panel slides in over it, one at a time, behind a backdrop. Nothing is
-     removed -- every control stays reachable -- because a model you can only half-inspect on
-     the device you have with you is worse than a slightly awkward drawer. */
+     Below the breakpoint the two side panels become OVERLAY DRAWERS: the canvas gets the whole
+     viewport and each panel slides in over it, one at a time, behind a backdrop.
+
+     Keyed off `body.narrow`, NOT a media query. The first attempt used @media (max-width:860px)
+     while the JS asked matchMedia separately -- two independent judgements of one question,
+     which is a bug waiting to happen and duly happened: on a phone the buttons appeared (so the
+     query had matched for THAT rule) while the panels stayed in column flow. A class set once,
+     from one measurement, cannot disagree with itself. It also survives a webview that ignores
+     the viewport meta and lays the page out at some notional desktop width, because the
+     measurement below consults screen.width too. */
   .drawerbtn{display:none}
-  .scrim.drawer{display:none;background:rgba(0,0,0,.34);z-index:39}
-  @media (max-width:860px){
-    body{font-size:15px}                 /* 14px is below comfortable reading size on a phone */
-    .drawerbtn{display:inline-flex;align-items:center;gap:.3rem}
-    /* One row that SCROLLS SIDEWAYS rather than a wrapping block. Twelve controls wrapped on a
-       390px screen is four rows -- half the viewport gone before the graph starts. Scrolling
-       keeps every control reachable at one row tall, and costs a swipe instead of the canvas. */
-    .topbar{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;gap:.4rem;padding:.4rem .55rem;
-            -webkit-overflow-scrolling:touch;scrollbar-width:none}
-    .topbar::-webkit-scrollbar{display:none}
-    .topbar>*{flex:none}                 /* or the segmented controls compress to unreadable */
-    .brand{font-size:.95rem}
-    .sysname{font-size:.76rem}
-    .sysname input{width:11ch}
-    .spacer{display:none}                /* a flex spacer in a scrolling row would stretch it
-                                            to infinity; the row ends after the last control */
-    .main{position:relative}
-    /* Off-canvas. `position:absolute` inside .main (not fixed) so the drawer is clipped to the
-       app area and cannot slide under the topbar. */
-    .rail,.inspector{position:absolute;top:0;bottom:0;z-index:40;width:min(84vw,320px);
-                     box-shadow:var(--shadow-lift);transition:transform .18s ease}
-    .rail{left:0;transform:translateX(-101%)}
-    .inspector{right:0;transform:translateX(101%)}
-    body.drawer-l .rail{transform:translateX(0)}
-    body.drawer-r .inspector{transform:translateX(0)}
-    body.drawer-l .scrim.drawer,body.drawer-r .scrim.drawer{display:block}
-    /* The floating bars stack instead of sitting at opposite corners, and scroll sideways --
-       the viewbar alone is wider than a phone. */
-    .findbar,.viewbar{max-width:calc(100vw - 1.2rem);overflow-x:auto;flex-wrap:nowrap}
-    .findbar input{width:9ch}
-    .viewbar{bottom:.5rem;left:.5rem;right:.5rem}
-    .modal{width:96vw;max-height:90vh}
-  }
-  @media (max-width:520px){
-    /* At true phone width the wordmark is the one thing on the bar that does no work, and
-       dropping it moves the controls that DO into thumb reach without a swipe. */
-    .brand{display:none}
-    #levelSeg button{font-size:.7rem;padding:.34rem .45rem}
-    .findbar{top:.5rem;left:.5rem;right:.5rem}
-    .banner{font-size:.68rem;padding:.3rem .5rem}
-  }
-  /* A finger is not a mouse pointer: 12px ports were unhittable. The visible dot stays the same
-     size -- growing it would change how the graph reads -- and an invisible ::after enlarges the
-     TOUCH TARGET around it instead. Same trick for the small square buttons. */
+  .scrim.drawer{display:none}
+  #drawerClose{display:none}
+  body.narrow{font-size:15px}            /* 14px is below comfortable reading size on a phone */
+  body.narrow .drawerbtn{display:inline-flex;align-items:center;gap:.3rem}
+  /* One row that SCROLLS SIDEWAYS rather than a wrapping block. Twelve controls wrapped on a
+     390px screen is four rows -- half the viewport gone before the graph starts. */
+  body.narrow .topbar{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;gap:.4rem;
+                      padding:.4rem .55rem;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  body.narrow .topbar::-webkit-scrollbar{display:none}
+  body.narrow .topbar>*{flex:none}       /* or the segmented controls compress to unreadable */
+  body.narrow .brand{font-size:.95rem}
+  body.narrow .sysname{font-size:.76rem}
+  body.narrow .sysname input{width:11ch}
+  body.narrow .spacer{display:none}      /* a flex spacer in a scrolling row stretches forever */
+  body.narrow .main{position:relative}
+  /* Off-canvas, inside .main (not fixed) so a drawer is clipped to the app area and cannot
+     slide up over the toolbar. */
+  body.narrow .rail,body.narrow .inspector{
+      position:absolute;top:0;bottom:0;z-index:40;width:min(84vw,320px);
+      box-shadow:var(--shadow-lift);transition:transform .18s ease}
+  /* Belt and braces: `visibility` and `pointer-events` as well as the transform. A closed
+     drawer that is merely translated away is still a live, visible box if anything overrides
+     `transform` -- a webview's injected stylesheet, a future rule of our own -- and the failure
+     mode is the panel sitting open across the canvas with no obvious way out. Three properties
+     have to be defeated for that to happen instead of one. */
+  body.narrow .rail,body.narrow .inspector{visibility:hidden;pointer-events:none}
+  body.narrow .rail{left:0;transform:translateX(-101%)}
+  body.narrow .inspector{right:0;transform:translateX(101%)}
+  body.narrow.drawer-l .rail{transform:translateX(0);visibility:visible;pointer-events:auto}
+  body.narrow.drawer-r .inspector{transform:translateX(0);visibility:visible;pointer-events:auto}
+  body.narrow .main{overflow:hidden}     /* an off-canvas panel must not make .main scrollable */
+  /* The backdrop covers .main ONLY. As a fixed full-page element it sat over the toolbar and
+     swallowed taps on the very buttons that open and close the drawers. */
+  body.narrow.drawer-l .scrim.drawer,body.narrow.drawer-r .scrim.drawer{
+      display:block;position:absolute;inset:0;background:rgba(0,0,0,.34);z-index:39}
+  /* An explicit close control, pinned to the drawer's inner edge. The backdrop and the toolbar
+     button both close it too -- three independent ways out, because "I can never dismiss it"
+     is the one failure mode that makes the whole panel worse than not having it. */
+  #drawerClose{position:absolute;top:.5rem;z-index:41;font-size:1rem;line-height:1;
+               padding:.35rem .5rem;min-width:34px;min-height:34px}
+  body.narrow.drawer-l #drawerClose{display:block;left:calc(min(84vw,320px) - 2.9rem)}
+  body.narrow.drawer-r #drawerClose{display:block;right:calc(min(84vw,320px) - 2.9rem)}
+  /* The floating bars stack instead of sitting at opposite corners, and scroll sideways --
+     the viewbar alone is wider than a phone. */
+  body.narrow .findbar,body.narrow .viewbar{max-width:calc(100vw - 1.2rem);overflow-x:auto;
+                                            flex-wrap:nowrap}
+  body.narrow .findbar input{width:9ch}
+  body.narrow .viewbar{bottom:.5rem;left:.5rem;right:.5rem}
+  body.narrow .modal{width:96vw;max-height:90vh}
+  /* At true phone width the wordmark is the one thing on the bar that does no work. */
+  body.tiny .brand{display:none}
+  body.tiny #levelSeg button{font-size:.7rem;padding:.34rem .45rem}
+  body.tiny .findbar{top:.5rem;left:.5rem;right:.5rem}
+  body.tiny .banner{font-size:.68rem;padding:.3rem .5rem}
+  /* A finger is not a mouse pointer: 12px ports were unhittable. The visible dot keeps its size
+     -- growing it would change how the graph reads -- and an invisible ::after enlarges the
+     TOUCH TARGET around it instead. */
   @media (pointer:coarse){
     .port::after{content:"";position:absolute;left:50%;top:50%;width:34px;height:34px;
                  transform:translate(-50%,-50%);border-radius:50%}
@@ -409,8 +427,9 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   </div>
 
   <aside class="inspector empty" id="inspector">Select a node to edit it, or add one from the rail.</aside>
-  <!-- Only ever visible under the ≤860px rules; tapping it closes whichever drawer is open. -->
+  <!-- Both only exist under body.narrow; either one closes whichever drawer is open. -->
   <div class="scrim drawer" id="drawerScrim"></div>
+  <button class="tbtn" id="drawerClose" title="Close this panel" aria-label="Close panel">&#10005;</button>
 </div>
 
 <datalist id="typelist"></datalist>
@@ -2095,10 +2114,26 @@ var DATA = /*__DATA__*/null;
   // The two side panels become overlay drawers below 860px (see the media query). Everything
   // here is inert on a desktop: the buttons are display:none and the class on <body> selects
   // nothing, so there is one layout in the DOM and only its presentation changes.
-  var NARROW="(max-width:860px)";
-  function isNarrow(){
-    return typeof matchMedia==="function" && matchMedia(NARROW).matches;
+  // ONE measurement, one class, consulted by both the stylesheet and the code below. screen.width
+  // is in the list because an in-app webview may ignore the viewport meta and lay the page out
+  // at a notional desktop width -- the CSS pixels then say "desktop" while the device in the
+  // user's hand is 390px across, which is exactly the case that shipped broken.
+  var NARROW_PX=860, TINY_PX=520;
+  function viewportW(){
+    var w=[];
+    if(document.documentElement&&document.documentElement.clientWidth)
+      w.push(document.documentElement.clientWidth);
+    if(window.innerWidth) w.push(window.innerWidth);
+    if(window.screen&&window.screen.width) w.push(window.screen.width);
+    return w.length?Math.min.apply(Math,w):1200;
   }
+  function syncNarrow(){
+    var w=viewportW(), narrow=w<=NARROW_PX;
+    document.body.classList.toggle("narrow",narrow);
+    document.body.classList.toggle("tiny",narrow&&w<=TINY_PX);
+    if(!narrow) closeDrawers();          // the button that would close it is hidden up there
+  }
+  function isNarrow(){ return document.body.classList.contains("narrow"); }
   function closeDrawers(){ document.body.classList.remove("drawer-l","drawer-r"); }
   function openDrawer(side){
     // one at a time: two overlapping drawers on a 390px screen leaves no canvas at all
@@ -2115,19 +2150,22 @@ var DATA = /*__DATA__*/null;
   }
   (function(){
     var rt=document.getElementById("railToggle"), it=document.getElementById("inspToggle"),
-        sc=document.getElementById("drawerScrim");
+        sc=document.getElementById("drawerScrim"), cl=document.getElementById("drawerClose");
     if(rt) rt.onclick=function(){ toggleDrawer("l"); };
     if(it) it.onclick=function(){ toggleDrawer("r"); };
     if(sc) sc.onclick=closeDrawers;
-    // A drawer left open across a rotation into landscape/desktop width would be a panel
-    // stuck over the canvas with no visible way to shut it -- the button that opened it is
-    // display:none above the breakpoint.
-    if(typeof matchMedia==="function"){
-      var mq=matchMedia(NARROW);
-      var onChange=function(){ if(!mq.matches) closeDrawers(); };
-      if(mq.addEventListener) mq.addEventListener("change",onChange);
-      else if(mq.addListener) mq.addListener(onChange);
-    }
+    if(cl) cl.onclick=closeDrawers;
+    // Escape is the fourth way out, and the one that works when a panel has somehow ended up
+    // covering its own controls.
+    document.addEventListener("keydown",function(ev){
+      if(ev.key==="Escape"&&(document.body.classList.contains("drawer-l")
+                             ||document.body.classList.contains("drawer-r"))){
+        closeDrawers(); ev.stopPropagation();
+      }
+    },true);
+    syncNarrow();
+    window.addEventListener("resize",syncNarrow);
+    window.addEventListener("orientationchange",syncNarrow);
   })();
 
   // ---- pinch to zoom, two-finger pan -------------------------------------------------------
