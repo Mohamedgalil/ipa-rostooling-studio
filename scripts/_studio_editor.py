@@ -4102,7 +4102,12 @@ var DATA = /*__DATA__*/null;
   modeSeg.querySelectorAll("button").forEach(function(b){b.onclick=function(){
     mode=b.dataset.mode;
     modeSeg.querySelectorAll("button").forEach(function(x){x.classList.toggle("on",x===b);});
-    document.body.className=mode==="edit"?"mode-edit":"mode-view";
+    // classList, NOT `className=`. A wholesale assignment here wiped every other class on
+    // <body> -- which since the responsive layer moved onto `narrow`/`tiny`/`drawer-*` meant
+    // that tapping View or Edit on a phone destroyed the layout and dropped the page back into
+    // the desktop three-column form, mid-session, with a drawer possibly open.
+    document.body.classList.toggle("mode-edit",mode==="edit");
+    document.body.classList.toggle("mode-view",mode!=="edit");
     levelSeg.style.display=mode==="edit"?"none":"inline-flex";
     if(mode==="edit"){ level=3; setLevelButtons(); }
     selEdge=null; render(); fillInspector();

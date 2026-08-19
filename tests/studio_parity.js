@@ -431,6 +431,39 @@ function compareViewStates(projectPath, htmlPath, expectPath) {
   return problems;
 }
 
+// A few invariants of the SHIPPED PAGE that no byte comparison can see, because they are about
+// state the page keeps at runtime rather than about what it emits. Each one here is a bug that
+// actually shipped, not a hypothetical.
+function checkPageInvariants(htmlPath) {
+  var html = fs.readFileSync(htmlPath, "utf8");
+  var script = extractScript(html);
+  var problems = [];
+
+  // `document.body.className = "..."` wipes EVERY other class on <body>. The responsive layer
+  // keeps `narrow`, `tiny` and `drawer-l`/`drawer-r` there, so one such assignment in the mode
+  // switch meant that tapping View or Edit on a phone destroyed the layout mid-session and
+  // dropped the page back into the desktop three-column form. Reported from a real phone.
+  if (/document\.body\.className\s*=/.test(script))
+    problems.push("the page assigns document.body.className wholesale, which wipes the "
+      + "responsive (`narrow`/`tiny`) and drawer classes -- use classList.toggle");
+
+  // The stylesheet and the code must not judge "is this narrow?" independently. They did once,
+  // via @media (max-width:...) on one side and matchMedia on the other, and disagreed on a real
+  // phone: the toolbar buttons appeared while the panels stayed in column flow.
+  var css = /<style>([\s\S]*?)<\/style>/.exec(html);
+  var bare = css ? css[1].replace(/\/\*[\s\S]*?\*\//g, "") : "";
+  if (/@media[^{]*max-width/.test(bare))
+    problems.push("the stylesheet still keys layout off a max-width media query; the "
+      + "responsive layer is driven by the body.narrow class so that CSS and JS cannot "
+      + "disagree about the same question");
+  if (!/body\.narrow/.test(bare))
+    problems.push("no body.narrow rules in the shipped page -- the small-screen layout is gone");
+  if (!/orientationchange/.test(script))
+    problems.push("nothing re-measures on orientationchange, so rotating a phone leaves the "
+      + "layout on the previous width");
+  return problems;
+}
+
 function compare(projectPath, htmlPath, expectPath, knownWrote) {
   var project = JSON.parse(fs.readFileSync(projectPath, "utf8"));
   var html = fs.readFileSync(htmlPath, "utf8");
@@ -629,6 +662,7 @@ function main(argv) {
       cases.push({ name: path.basename(f) + " [ifaces permuted]", paths: permutedCase(base, d) });
       cases.push({ name: path.basename(f) + " [in-page seed]", seed: f, paths: base });
       cases.push({ name: path.basename(f) + " [subsystem views]", views: true, paths: base });
+      if (!k) cases.push({ name: "shipped page invariants", page: true, paths: base });
     });
   }
 
@@ -639,9 +673,11 @@ function main(argv) {
       try {
         problems = c.seed
           ? compareSeed(c.seed, c.paths.project, c.paths.html)
-          : (c.views
-            ? compareViewStates(c.paths.project, c.paths.html, c.paths.expect)
-            : compare(c.paths.project, c.paths.html, c.paths.expect, c.paths.wrote));
+          : (c.page
+            ? checkPageInvariants(c.paths.html)
+            : (c.views
+              ? compareViewStates(c.paths.project, c.paths.html, c.paths.expect)
+              : compare(c.paths.project, c.paths.html, c.paths.expect, c.paths.wrote)));
       } catch (e) {
         problems = ["harness error: " + e.message];
       }
