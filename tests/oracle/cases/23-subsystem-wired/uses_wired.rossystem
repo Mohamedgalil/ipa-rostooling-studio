@@ -1,0 +1,18 @@
+# uses_wired -- the parent. One subSystems: reference whose target has internal wiring, plus one
+# node of its own that connects ACROSS the subsystem boundary.
+#
+# Collapsed, this is two boxes and one edge. Framed, it is a frame around three chained nodes
+# with two internal edges, and one edge crossing the frame border to reach `planner`. Those are
+# different pictures of the same file, and neither may change a single emitted byte -- the view
+# state lives in project["view"] and is excluded from the fact tree.
+uses_wired:
+  fromFile: "uses_wired/launch/app.launch.py"
+  subSystems:
+    "wired_base"  # project-local, not catalogued -- see wired_base.rossystem in this directory
+  nodes:
+    "planner":
+      from: "app_pkg.planner"
+      interfaces:
+        - "detections_in": sub-> "planner::detections_in"
+  connections:
+    - ["detections", "detections_in"]  # detector (subSystems: "wired_base") -> planner : CROSSES THE BOUNDARY

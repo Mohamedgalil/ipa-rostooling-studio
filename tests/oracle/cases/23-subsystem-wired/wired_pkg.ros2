@@ -1,0 +1,23 @@
+wired_pkg:
+  artifacts:
+    camera:
+      node: camera
+      publishers:
+        'image':
+          type: 'sensor_msgs/msg/Image' # assets/roscommonobjects/basic_msgs/sensor_msgs.ros
+    rectifier:
+      node: rectifier
+      publishers:
+        'image_rect':
+          type: 'sensor_msgs/msg/Image' # assets/roscommonobjects/basic_msgs/sensor_msgs.ros
+      subscribers:
+        'image_raw':
+          type: 'sensor_msgs/msg/Image' # assets/roscommonobjects/basic_msgs/sensor_msgs.ros
+    detector:
+      node: detector
+      publishers:
+        'detections':
+          type: 'visualization_msgs/msg/MarkerArray' # assets/roscommonobjects/basic_msgs/visualization_msgs.ros
+      subscribers:
+        'image_in':
+          type: 'sensor_msgs/msg/Image' # assets/roscommonobjects/basic_msgs/sensor_msgs.ros

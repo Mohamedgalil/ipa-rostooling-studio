@@ -1,0 +1,28 @@
+trajectory_msgs:
+  msgs:
+    JointTrajectoryPoint
+      message
+        float64[] positions
+        float64[] velocities
+        float64[] accelerations
+        float64[] effort
+        'builtin_interfaces/msg/Duration'[] time_from_start
+    MultiDOFJointTrajectoryPoint
+      message
+        'geometry_msgs/msg/Transform'[] transforms
+        'geometry_msgs/msg/Twist'[] velocities
+        'geometry_msgs/msg/Twist'[] accelerations
+        'builtin_interfaces/msg/Duration'[] time_from_start
+    JointTrajectory
+      message
+        'std_msgs/msg/Header'[] header
+        string[] joint_names
+        'trajectory_msgs/msg/JointTrajectoryPoint'[] points
+    MultiDOFJointTrajectory
+      message
+        'std_msgs/msg/Header'[] header
+        string[] joint_names
+        'trajectory_msgs/msg/MultiDOFJointTrajectoryPoint'[] points
+    
+  
+  

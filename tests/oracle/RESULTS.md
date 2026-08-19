@@ -370,6 +370,31 @@ by writing the keyword through verbatim, never quoted and never invented.
 Note the rule cannot express an actual namespace string — only those three keywords — which is
 consistent with RM044's "0 occurrences across all 253 corpus files".
 
+## Run 6 — 2026-08-19, a subsystem that actually has internal wiring
+
+`case 23-subsystem-wired` — the generated output of `tests/fixtures/subsysgraph/uses_wired.rossystem`.
+**ACCEPTED, 0E/0W.**
+
+This closes an assumption the subsystem abstraction views rest on and that **no corpus file could
+test**, because every system referenced through `subSystems:` anywhere in this repo declares zero
+connections of its own:
+
+| referenced system | nodes | interfaces | internal connections |
+|---|---|---|---|
+| `turtlebot` (catalogue, the largest) | 3 | 7 | **0** |
+| `robot_base` / `sensor_base` / `labelled_base` | 1 | 1–2 | **0** |
+| `extra` | 1 | 1 | **0** |
+| `ur5e_cell_moveit_config` | 0 | 0 | **0** |
+
+The case proves the shape is legal rather than merely untested: a referenced `.rossystem` may
+carry its own `connections:` block, and the referencing system may connect **across the boundary**
+to an interface the subsystem exposes — here `detections` (published by `detector`, inside
+`wired_base`) into `detections_in` on the parent's own `planner`. Two of the subsystem's edges are
+internal and invisible to the parent; the third crosses.
+
+Without this run, "collapse a subsystem to one box" and "frame its internals" would have been
+built against a corpus in which no subsystem has any internals worth drawing.
+
 ## Still not covered
 
 - ~~**`.rossystem` — entirely.**~~ **Closed 2026-07-21** by the locally built
