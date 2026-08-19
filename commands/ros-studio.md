@@ -247,6 +247,65 @@ defaulted to `String`, which used to retype every such parameter and turn `value
 Both slots are held to the real 3.1.0 language server by `tests/oracle/cases/22-parameters`
 (ACCEPTED, 0E/0W) and to a lossless round-trip by `tests/fixtures/params/`.
 
+## Subsystems — one level of abstraction
+
+A `subSystems:` entry names one whole reused composition. The studio used to **flatten** its
+nodes onto this file's canvas, marked only by a badge — reusing the catalogued `turtlebot` added
+three cards indistinguishable from your own; reusing `turtlebot3_navigation2` would add fourteen.
+`/ros-plot` went the other way and resolved every connection into a subsystem to a dashed
+`(dangling endpoint)` ghost. Neither showed the thing a reader actually wants: **how the reused
+pieces connect, without their internals.**
+
+Three states per subsystem. Toggle from the box itself, the frame's title chip, or the
+**subsystems** section of the system inspector.
+
+| state | what you see | when |
+|---|---|---|
+| **collapsed** (default) | one box; its ports are the labels the referenced file exposes | reading the composition |
+| **framed** | the internals, inside a labelled frame | the subsystem is small and its wiring matters |
+| **drill-in** (`↗`) | that file alone, read-only, breadcrumb back | the subsystem is too big to frame |
+
+**The collapsed box's ports are the exposed labels**, because that is the DSL's own view: a
+`connections:` endpoint is a bare label resolved file-wide, so the label *is* the subsystem's
+port. Wired ports are solid, available-but-unwired ones dimmed — the gap that made a reused
+system look inert. A label two member nodes both declare (the catalogued turtlebot's `tf`)
+collapses to one row badged **⚠2**: that ambiguity is real (RM065), it belongs to the referenced
+file, and this is the first view in which it is visible rather than buried in a linter warning.
+
+**Framed layout does not use a new algorithm.** Each framed subsystem's internals are laid out
+alone with the existing layered pass; the resulting bounding box is then treated as one oversized
+node in a parent pass over the same code, and the internals are translated into place. A
+subsystem too complex to fit in a frame still will not fit — that is what drill-in is for.
+
+**No view can change an emitted byte.** The state lives in `project["view"]`, which is excluded
+from both fact trees, and `emit_rossystem` skips `backing:"sub"` nodes regardless. That is
+asserted rather than argued: `tests/studio_parity.js` emits under *every* state and compares
+bytes, because a view that quietly changed the model would be invisible — the preview and the
+file would agree, and both would lint clean.
+
+### What a subsystem view can show you today
+
+Nothing in this repo exercises it hard, and that is worth knowing before you read a frame as
+empty:
+
+| referenced system | nodes | interfaces | internal connections |
+|---|---|---|---|
+| `turtlebot` (catalogue) | 3 | 7 | **0** |
+| `robot_base` / `sensor_base` / `labelled_base` | 1 | 1–2 | **0** |
+| `ur5e_cell_moveit_config` | 0 | 0 | **0** |
+
+Every referenced system in the tree has **zero internal wiring**, and the one large candidate
+(`turtlebot3_navigation2`, 14 nodes) declares zero `interfaces:` so it cannot be referenced
+usefully at all. An empty frame is usually the source file's truth, not a read failure.
+`tests/fixtures/subsysgraph/` exists solely to provide a subsystem that *does* have internal
+connections, so the framed layout and drill-in have something real to be tested against.
+
+Drill-in needs the referenced file's own graph, which neither `resolve_subsystem` nor the system
+index used to carry. The seeder now embeds it as `subSystems[i].graph` (nodes + connections), and
+`build_node_index.py` records `connections` for catalogued systems. Both are presentation data,
+excluded from the fact tree. A reference whose file could not be read still resolves and still
+draws its box — it simply cannot be opened, and says so.
+
 ## Working a large canvas
 
 Nine nodes fit on a fixed grid; dozens do not. The canvas therefore has:

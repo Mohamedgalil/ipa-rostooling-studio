@@ -1,0 +1,31 @@
+# wired_base -- a subsystem that actually has INTERNAL CONNECTIONS.
+#
+# Why this file exists: every system referenced through `subSystems:` anywhere in this repo has
+# zero internal connections. The largest, the catalogued turtlebot.rossystem, is 3 nodes and 7
+# interfaces with no `connections:` block at all; ur5e_cell_moveit_config.rossystem has no nodes
+# either. So the subsystem ABSTRACTION VIEWS -- collapse to one box, frame the internals in
+# place, drill into the file -- had nothing in the corpus to be validated against: a frame drawn
+# around three unconnected cards proves nothing about edge routing across a frame boundary.
+#
+# Three nodes in a chain, two internal edges, and exactly two interfaces left unwired so the
+# parent below has something to connect to across the boundary.
+wired_base:
+  fromFile: "wired_base/launch/perception.launch.py"
+  nodes:
+    "camera":
+      from: "wired_pkg.camera"
+      interfaces:
+        - "image": pub-> "camera::image"
+    "rectifier":
+      from: "wired_pkg.rectifier"
+      interfaces:
+        - "image_rect": pub-> "rectifier::image_rect"
+        - "image_raw": sub-> "rectifier::image_raw"
+    "detector":
+      from: "wired_pkg.detector"
+      interfaces:
+        - "detections": pub-> "detector::detections"
+        - "image_in": sub-> "detector::image_in"
+  connections:
+    - [image, image_raw] # camera -> rectifier : sensor_msgs/msg/Image (INTERNAL)
+    - [image_rect, image_in] # rectifier -> detector : sensor_msgs/msg/Image (INTERNAL)

@@ -105,7 +105,8 @@ _system_index_cache = {"loaded": False, "value": None}
 
 def load_system_index():
     """{"<system name or file basename>": {"file", "nodes": {label: {"from", "interfaces"}},
-    "hasOwnSubsystems"}}, built lazily from node_index.json's "_systems" list
+    "connections": [[fromLabel, toLabel], ...], "hasOwnSubsystems"}}, built lazily from
+    node_index.json's "_systems" list
     (scripts/build_node_index.py). A system entry whose source file didn't parse as a
     mapping (or predates the richer index) has no "system" key and is skipped -- callers
     see it as simply unresolved, same as a system name that was never catalogued at all.
@@ -128,6 +129,11 @@ def load_system_index():
                 record = {
                     "file": entry.get("file"),
                     "nodes": entry.get("nodes") or {},
+                    # the referenced system's OWN connections. Nothing in linting or emission
+                    # reads them -- checkIfInterfaceInSystem looks only at `interfaces:` -- but
+                    # the studio's subsystem views cannot draw the inside of a subsystem
+                    # without them. Absent on an index built before they were recorded.
+                    "connections": entry.get("connections") or [],
                     "hasOwnSubsystems": bool(entry.get("hasOwnSubsystems")),
                 }
                 by_name.setdefault(name, record)  # first file wins, same policy as nodes
@@ -193,12 +199,17 @@ def load_local_system(base_dir, ref):
             root = bni.compose_yaml(path)
             if root is None:
                 break
-            _name, nodes, nested = bni.extract_rossystem_system(root)
+            # 4-tuple since connections were added to the index. The `except` below is broad
+            # enough to swallow a TypeError from getting this wrong, and did: every RM050 on a
+            # project-local subsystem came back, silently, because a resolution failure and a
+            # crash are indistinguishable to the caller.
+            _name, nodes, nested, conns = bni.extract_rossystem_system(root)
         except Exception:
             break
         if nodes is None:
             break
         _local_system_cache[key] = {"file": os.path.basename(path), "nodes": nodes,
+                                    "connections": conns or [],
                                     "hasOwnSubsystems": bool(nested), "local": True}
         break
     return _local_system_cache[key]

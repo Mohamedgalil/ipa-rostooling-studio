@@ -760,9 +760,35 @@ def parse_ros(path):
     return types, extras
 
 
+def _subsystem_graph(model):
+    """The referenced system's OWN graph, for the abstraction views -- {"nodes": [...],
+    "connections": [[fromLabel, toLabel], ...]}.
+
+    This is presentation data and nothing else reads it: it is excluded from the fact tree, so
+    it can never reach an emitted byte. It exists because the studio had no way to draw the
+    INSIDE of a subsystem -- resolve_subsystem returns only {label: {from, interfaces}} and the
+    system index carries no connections at all, so "expand this subsystem" or "open it" had
+    nothing to render but disconnected cards.
+
+    Worth knowing while reading a subsystem view: every referenced system in this repo today
+    has ZERO internal connections (turtlebot 3 nodes / 7 interfaces / 0 edges is the largest),
+    so an empty `connections` list here is usually the source file's truth, not a read failure.
+    """
+    return {
+        "nodes": [{"label": mn["label"], "from": mn.get("from"),
+                   "interfaces": [{"label": i["label"], "kind": i["kind"],
+                                   "name": i.get("ifaceName") or i["label"],
+                                   "artifact": i.get("artifact")}
+                                  for i in mn["interfaces"]]}
+                  for mn in model["nodes"]],
+        "connections": [[e["fromLabel"], e["toLabel"]] for e in model.get("edges") or []],
+    }
+
+
 def resolve_subsystem(ref, base_dir):
     """One `subSystems:` reference -> (catalogue file or None, {label: {'from', 'interfaces':
-    {name: kind}}}). {} when the reference resolves to nothing.
+    {name: kind}}}, resolved path or None, graph or None). {} when the reference resolves to
+    nothing.
 
     A subsystem's connectable interfaces are exactly what its OWN `interfaces:` block declares
     -- never what the .ros2 behind its `from:` declares (checkIfInterfaceInSystem,
@@ -778,7 +804,18 @@ def resolve_subsystem(ref, base_dir):
     if entry is not None and not entry.get("hasOwnSubsystems"):
         # nested subSystems: is a ClassCastException in the real validator (RM091); refusing to
         # walk it here means generate never re-emits a reference we could not read.
-        return entry.get("file"), entry.get("nodes") or {}, None
+        #
+        # The index answers what the reference EXPOSES, which is all emission needs. The graph
+        # for the views has to come from the vendored file itself, because the index carries no
+        # connections -- a missing or unreadable file just means no drill-in, never a failure.
+        graph = None
+        cat_path = os.path.join(ASSETS, "rosmodelscatalog", entry.get("file") or "")
+        if entry.get("file") and os.path.isfile(cat_path):
+            try:
+                graph = _subsystem_graph(ros_plot.extract_model(cat_path, use_catalogue=False))
+            except Exception:
+                graph = None
+        return entry.get("file"), entry.get("nodes") or {}, None, graph
 
     for cand in (ref, os.path.splitext(os.path.basename(ref))[0]):
         sibling = os.path.join(base_dir, cand + ".rossystem")
@@ -806,8 +843,8 @@ def resolve_subsystem(ref, base_dir):
         # `common.rossystem`, and both the merge (which decides whether a reference names a
         # system it also carries inline) and `generate` (which stages the target next to its
         # output) were picking one of them by name alone.
-        return None, out, resolved_path
-    return None, {}, None
+        return None, out, resolved_path, _subsystem_graph(sub_model)
+    return None, {}, None, None
 
 
 def _subsystem_project_nodes(ref, sub_nodes, nid):
@@ -1090,8 +1127,13 @@ def seed_from_rossystem(path, base_index=None):
     sub_systems, sub_exposure = [], {}
     for sub in model["subSystems"]:
         ref = sub["ref"]
-        cat_file, sub_nodes, local_path = resolve_subsystem(ref, base_dir)
+        cat_file, sub_nodes, local_path, graph = resolve_subsystem(ref, base_dir)
         entry = {"ref": ref, "file": cat_file}
+        if graph:
+            # presentation only -- see _subsystem_graph. Excluded from _seed_facts /
+            # _project_facts, so collapsing, framing or drilling into a subsystem cannot change
+            # one emitted byte.
+            entry["graph"] = graph
         if local_path:
             # relative to the project, so a project.json stays portable between machines
             entry["localFile"] = os.path.relpath(local_path, base_dir).replace(os.sep, "/")

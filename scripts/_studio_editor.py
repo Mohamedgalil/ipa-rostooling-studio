@@ -129,6 +129,32 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .prow .pvl{font-family:var(--mono);font-size:.62rem;color:var(--ink-3);margin-left:auto;max-width:11ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .prow.orphan .pnm{text-decoration:underline wavy var(--bad)}
   .node.sysparams{border-style:dashed;border-color:var(--k-param)}
+  /* ---- subsystem abstraction views ------------------------------------------------------
+     A subSystems: reference is ONE reused composition. Three ways to look at it, all pure
+     presentation: the state lives in project.view and is excluded from the fact tree, so
+     collapsing, framing or drilling in cannot change one emitted byte. */
+  .node.subbox{border-width:2px;border-color:var(--k-sub);background:var(--panel)}
+  .node.subbox .nhead{background:color-mix(in srgb,var(--k-sub) 12%,transparent)}
+  .node.subbox .nfrom{font-style:italic}
+  .subtog{cursor:pointer;font-family:var(--mono);font-size:.62rem;padding:0 .25em;border-radius:3px;user-select:none}
+  .subtog:hover{background:var(--hover)}
+  .iface.unwired{opacity:.45}
+  .iface .amb{font-size:.55rem;color:var(--warn);flex:none}
+  /* the frame sits BEHIND the cards it encloses; the cards are position:absolute siblings */
+  .subframe{position:absolute;border:2px dashed var(--k-sub);border-radius:12px;
+            background:color-mix(in srgb,var(--k-sub) 5%,transparent);z-index:0;pointer-events:none}
+  .subframe .sfhead{position:absolute;top:-.85rem;left:.8rem;background:var(--panel);
+                    border:1px solid var(--k-sub);border-radius:999px;padding:.05rem .55rem;
+                    font-size:.62rem;font-weight:700;color:var(--k-sub);pointer-events:auto;
+                    display:flex;align-items:center;gap:.35rem;white-space:nowrap}
+  .node{z-index:1}
+  .drillbar{display:flex;align-items:center;gap:.5rem;padding:.3rem .7rem;border-bottom:1px solid var(--rule);
+            background:color-mix(in srgb,var(--k-sub) 8%,var(--panel));font-size:.75rem}
+  .drillbar b{font-family:var(--mono)}
+  .drillbar .crumb{color:var(--ink-3)}
+  .drillbar button{font-size:.7rem}
+  .node.ro{opacity:.95}
+  .node.ro .nhead{background:var(--wash)}
   .canvas.lvl2 .prow .pvl,.canvas.lvl2 .params .phead{display:none}
   .kd.pub{background:var(--k-pub)} .kd.sub{background:var(--k-sub)} .kd.ss{background:var(--k-ss)}
   .kd.sc{background:var(--k-sc)} .kd.as{background:var(--k-as)} .kd.ac{background:var(--k-ac)}
@@ -666,15 +692,297 @@ var DATA = /*__DATA__*/null;
   }
 
   // ============================ render ============================
+  // ============================ subsystem abstraction ============================
+  // A `subSystems:` entry names one whole reused composition. The studio used to flatten its
+  // nodes onto this file's canvas, marked only by a badge -- so a system reusing the catalogued
+  // turtlebot gained three cards indistinguishable from its own, and one reusing
+  // turtlebot3_navigation2 would gain fourteen. ros_plot went the other way and resolved every
+  // connection into a subsystem to a dashed "(dangling endpoint)" ghost. Neither showed the
+  // thing a reader wants: how the reused pieces connect, without their internals.
+  //
+  // Three states, all pure PRESENTATION -- project.view is excluded from _seed_facts /
+  // _project_facts, and emit_rossystem skips `backing:"sub"` nodes regardless, so the state
+  // cannot reach an emitted byte. tests/studio_parity.js pins that by emitting under each.
+  //
+  //   collapsed (default)  one box; its ports are the labels the referenced file exposes
+  //   framed               the internals, inside a labelled frame
+  //   drill-in             that file alone, read-only, with a breadcrumb back
+  var drillRef=null, subPos={}, selSub=null;
+  function subState(ref){
+    var v=(project.view&&project.view.subsystems)||{};
+    return v[ref]==="framed"?"framed":"collapsed";
+  }
+  function setSubState(ref,st){
+    project.view=project.view||{};
+    project.view.subsystems=project.view.subsystems||{};
+    project.view.subsystems[ref]=st;
+  }
+  function subEntry(ref){
+    var l=project.subSystems||[];
+    for(var i=0;i<l.length;i++) if(l[i].ref===ref) return l[i];
+    return null;
+  }
+  function subMembers(ref){
+    return project.nodes.filter(function(n){return n.backing==="sub"&&n.subRef===ref;});
+  }
+  // Every ref that actually has member nodes on this canvas. A reference that resolved to
+  // nothing has no box to draw and no internals to frame -- it stays a row in the inspector.
+  function liveSubRefs(){
+    var seen={}, out=[];
+    project.nodes.forEach(function(n){
+      if(n.backing!=="sub"||!n.subRef) return;
+      if(!seen[n.subRef]){seen[n.subRef]=1;out.push(n.subRef);}
+    });
+    return out;
+  }
+  function isCollapsedMember(n){
+    return n.backing==="sub"&&!!n.subRef&&subState(n.subRef)==="collapsed";
+  }
+  // The collapsed box's rows: one per distinct exposed LABEL, because a connections: endpoint
+  // is a bare label resolved file-wide -- the label IS the subsystem's port, and that is the
+  // DSL's own view of it. A label two member nodes both declare (the catalogued turtlebot's
+  // "tf") collapses to ONE row and is badged: the ambiguity is real (RM065) and this is the
+  // first view in which it is visible rather than buried.
+  function subPorts(ref){
+    var rows=[], byLabel={};
+    subMembers(ref).forEach(function(n){
+      (n.ifaces||[]).forEach(function(f){
+        var lbl=String(f.label||f.name||"");
+        if(!lbl) return;
+        var r=byLabel[lbl];
+        if(!r){ r=byLabel[lbl]={label:lbl,kind:f.kind,pairs:[],wired:false}; rows.push(r); }
+        r.pairs.push({n:n,f:f});
+        if(ifaceConnected(n,f)) r.wired=true;
+      });
+    });
+    rows.sort(function(a,b){
+      var d=KINDS.indexOf(a.kind)-KINDS.indexOf(b.kind);
+      return d||(a.label<b.label?-1:(a.label>b.label?1:0));
+    });
+    return rows;
+  }
+  function renderSubBox(ref){
+    var entry=subEntry(ref)||{}, members=subMembers(ref), rows=subPorts(ref);
+    var el=document.createElement("div");
+    el.className="node subbox"+(selSub===ref?" sel":"");
+    var pos=subPos[ref]||{x:60,y:60};
+    el.style.left=pos.x+"px"; el.style.top=pos.y+"px";
+    el.dataset.sub=ref;
+    var wired=0;
+    rows.forEach(function(r){ if(r.wired) wired++; });
+    var where=entry.file?("assets/rosmodelscatalog/"+entry.file)
+                        :(entry.localFile||"(not resolved)");
+    el.innerHTML='<div class="nhead" data-drag>'
+      +'<span class="subtog" data-expand="'+esc(ref)+'" title="show the internals inside a frame">&#9656;</span>'
+      +'<span class="ntitle">'+esc(ref)+'</span>'
+      +'<span class="badge" title="reached through subSystems: &mdash; declared in that file, not this one">subsystem</span>'
+      +'<span class="subtog" data-drill="'+esc(ref)+'" title="open this system on its own canvas">&#8599;</span></div>'
+      +'<div class="nfrom">'+esc(where)
+      +'<br>'+members.length+' node(s) &middot; '+wired+' of '+rows.length+' interface(s) wired</div>'
+      +'<div class="ifaces"></div>';
+    var box=el.querySelector(".ifaces");
+    rows.forEach(function(r){
+      if(!kindShown[r.kind]) return;
+      var src=SRC_SIDE[r.kind];
+      var row=document.createElement("div");
+      row.className="iface"+(r.wired?"":" unwired");
+      row.dataset.kind=r.kind;
+      // One VISIBLE port plus one invisible port per additional (node, interface) pair behind
+      // it. portCenter() resolves an edge by querying [data-n][data-i], so every pair needs an
+      // element with non-zero size or its edge silently disappears -- and stacking them is
+      // honest: at this level of abstraction they really are one port.
+      var ports="";
+      r.pairs.forEach(function(pr,i){
+        ports+='<span class="port '+(src?"src":"snk")+' '+r.kind+'"'
+          +(i?' style="opacity:0;pointer-events:none"':'')
+          +' data-n="'+pr.n.id+'" data-i="'+pr.f.id+'" data-kind="'+r.kind+'"'
+          +' data-src="'+src+'" data-type="'+esc(pr.f.type||"")+'"></span>';
+      });
+      var amb=(r.pairs.length>1)
+        ? ('<span class="amb" title="'+r.pairs.length+' nodes in this subsystem declare the label &quot;'
+           +esc(r.label)+'&quot;. A connections: endpoint resolves by name only, so naming it is '
+           +'genuinely ambiguous (RM065) &mdash; the referenced file owns that ambiguity, not this one.">'
+           +'&#9888;'+r.pairs.length+'</span>')
+        : "";
+      row.innerHTML='<span class="kd '+r.kind+'">'+r.kind+'</span>'
+        +'<span class="inm">'+esc(r.label)+'</span>'+amb
+        +'<span class="ity">'+esc(r.pairs[0].f.type||"—")+'</span>'+ports;
+      box.appendChild(row);
+    });
+    canvas.appendChild(el);
+  }
+  // The bounding box of a framed subsystem's member cards, measured off what was rendered
+  // rather than estimated -- the same rule nodeBox() follows and for the same reason.
+  function memberRect(ref){
+    var PAD=22, TOP=26, x0=1e9,y0=1e9,x1=-1e9,y1=-1e9, found=false;
+    subMembers(ref).forEach(function(n){
+      var el=canvas.querySelector('.node[data-n="'+STUDIO.cssEsc(n.id)+'"]');
+      if(!el) return;
+      found=true;
+      x0=Math.min(x0,el.offsetLeft); y0=Math.min(y0,el.offsetTop);
+      x1=Math.max(x1,el.offsetLeft+el.offsetWidth);
+      y1=Math.max(y1,el.offsetTop+el.offsetHeight);
+    });
+    if(!found) return null;
+    return {x:x0-PAD, y:y0-TOP, w:(x1-x0)+2*PAD, h:(y1-y0)+TOP+PAD};
+  }
+  function renderSubFrame(ref,rect){
+    var el=document.createElement("div");
+    el.className="subframe"; el.dataset.frame=ref;
+    el.style.left=rect.x+"px"; el.style.top=rect.y+"px";
+    el.style.width=rect.w+"px"; el.style.height=rect.h+"px";
+    el.innerHTML='<div class="sfhead">'
+      +'<span class="subtog" data-collapse="'+esc(ref)+'" title="collapse to one box">&#9662;</span>'
+      +esc(ref)
+      +'<span class="subtog" data-drill="'+esc(ref)+'" title="open this system on its own canvas">&#8599;</span>'
+      +'</div>';
+    canvas.appendChild(el);
+  }
+
   function render(){
+    if(drillRef){ renderDrill(); return; }
+    var db=document.getElementById("drillbar");
+    if(db) db.remove();
     canvas.className="canvas "+(level===4?"deps":"lvl"+level);
-    [].slice.call(canvas.querySelectorAll(".node,.pkgbox")).forEach(function(e){e.remove();});
-    for(var i=0;i<project.nodes.length;i++) renderNode(project.nodes[i]);
+    [].slice.call(canvas.querySelectorAll(".node,.pkgbox,.subframe")).forEach(function(e){e.remove();});
+    for(var i=0;i<project.nodes.length;i++){
+      if(isCollapsedMember(project.nodes[i])) continue;   // the box below stands for it
+      renderNode(project.nodes[i]);
+    }
+    liveSubRefs().forEach(function(ref){
+      if(subState(ref)==="collapsed") renderSubBox(ref);
+    });
+    // frames are measured off the RENDERED member cards, so they are drawn after them
+    liveSubRefs().forEach(function(ref){
+      if(subState(ref)!=="framed") return;
+      var r=memberRect(ref);
+      if(r) renderSubFrame(ref,r);
+    });
+    wireSubToggles();
     if(level===4) renderDeps();
     sizeCanvas();          // before drawEdges: the SVG follows the canvas box at 100%/100%
     drawEdges();
     applyFind();           // render() replaced every element, so the highlight has to go back
     runIssues();
+  }
+  function wireSubToggles(){
+    canvas.querySelectorAll("[data-expand]").forEach(function(x){
+      x.onclick=function(ev){ ev.stopPropagation();
+        setSubState(x.dataset.expand,"framed"); relayoutSubs(); render(); fillInspector(); };
+    });
+    canvas.querySelectorAll("[data-collapse]").forEach(function(x){
+      x.onclick=function(ev){ ev.stopPropagation();
+        setSubState(x.dataset.collapse,"collapsed"); relayoutSubs(); render(); fillInspector(); };
+    });
+    canvas.querySelectorAll("[data-drill]").forEach(function(x){
+      x.onclick=function(ev){ ev.stopPropagation(); openDrill(x.dataset.drill); };
+    });
+  }
+  function openDrill(ref){
+    var e=subEntry(ref);
+    if(!e||!e.graph){
+      // Not a failure to hide: the reference resolved (its nodes are on the canvas) but the
+      // referenced FILE was not readable at seed time, so there is nothing to open.
+      alertBar("No graph was captured for “"+ref+"”, so it cannot be opened. Re-seed with "
+               +"the companion, or open its .rossystem alongside this one.");
+      return;
+    }
+    drillRef=ref; selNode=null; selEdge=null; render(); fillInspector();
+  }
+  function closeDrill(){ drillRef=null; render(); fillInspector(); }
+  // Drill-in: the referenced system ALONE, read-only. Nothing here is part of this project --
+  // these cards are built from subSystems[i].graph, which is presentation data excluded from
+  // the fact tree, and none of them can be edited, moved into this file or wired.
+  function renderDrill(){
+    var entry=subEntry(drillRef)||{}, g=entry.graph||{nodes:[],connections:[]};
+    canvas.className="canvas lvl"+(level===4?3:level);
+    [].slice.call(canvas.querySelectorAll(".node,.pkgbox,.subframe")).forEach(function(e){e.remove();});
+    [].slice.call(svg.querySelectorAll("path.edge,path.depedge")).forEach(function(e){e.remove();});
+
+    var ids=g.nodes.map(function(n){return n.label;});
+    var edges=[];
+    // A connections: endpoint is a bare LABEL resolved file-wide, so an edge is placed by
+    // looking up which node declares that label. Two nodes declaring one label is the same
+    // RM065 ambiguity the collapsed box badges; the first in file order wins, deterministically.
+    var owner={};
+    g.nodes.forEach(function(n){
+      (n.interfaces||[]).forEach(function(f){
+        if(owner[f.label]===undefined) owner[f.label]=n.label;
+      });
+    });
+    (g.connections||[]).forEach(function(c){
+      var a=owner[c[0]], b=owner[c[1]];
+      if(a&&b&&a!==b) edges.push([a,b]);
+    });
+    var DW=210;
+    function boxOf(id){
+      var n=null;
+      for(var i=0;i<g.nodes.length;i++) if(g.nodes[i].label===id) n=g.nodes[i];
+      return {w:DW,h:56+22*((n&&n.interfaces&&n.interfaces.length)||0)};
+    }
+    var pos=layoutGraph(ids,edges,boxOf);
+
+    g.nodes.forEach(function(n){
+      var el=document.createElement("div");
+      el.className="node ro";
+      var pt=pos[n.label]||{x:60,y:60};
+      el.style.left=pt.x+"px"; el.style.top=pt.y+"px";
+      el.style.width=DW+"px";
+      el.dataset.dn=n.label;
+      var h='<div class="nhead"><span class="ntitle">'+esc(n.label)+'</span>'
+        +'<span class="badge" title="declared in '+esc(drillRef)+', not in this project">read-only</span></div>'
+        +'<div class="nfrom">from: "'+esc(n.from||"")+'"</div><div class="ifaces"></div>';
+      el.innerHTML=h;
+      var box=el.querySelector(".ifaces");
+      (n.interfaces||[]).forEach(function(f){
+        if(!kindShown[f.kind]) return;
+        var row=document.createElement("div");
+        row.className="iface"; row.dataset.kind=f.kind;
+        row.innerHTML='<span class="kd '+f.kind+'">'+f.kind+'</span>'
+          +'<span class="inm">'+esc(f.label)+'</span>'
+          +'<span class="port '+(SRC_SIDE[f.kind]?"src":"snk")+' '+f.kind+'"'
+          +' data-dn="'+esc(n.label)+'" data-df="'+esc(f.label)+'"></span>';
+        box.appendChild(row);
+      });
+      canvas.appendChild(el);
+    });
+    sizeCanvas();
+    // edges between the read-only cards, resolved through the same label-owner map
+    (g.connections||[]).forEach(function(c){
+      var a=canvas.querySelector('.port[data-df="'+STUDIO.cssEsc(c[0])+'"]');
+      var b=canvas.querySelector('.port[data-df="'+STUDIO.cssEsc(c[1])+'"]');
+      if(!a||!b) return;
+      var cr=canvas.getBoundingClientRect(), k=view.k||1;
+      var ar=a.getBoundingClientRect(), br=b.getBoundingClientRect();
+      var path=document.createElementNS(NS,"path");
+      path.setAttribute("class","edge topic");
+      path.setAttribute("d",STUDIO.bezier((ar.left-cr.left+ar.width/2)/k,(ar.top-cr.top+ar.height/2)/k,
+                                          (br.left-cr.left+br.width/2)/k,(br.top-cr.top+br.height/2)/k));
+      svg.appendChild(path);
+    });
+    showDrillBar(g);
+  }
+  function showDrillBar(g){
+    var old=document.getElementById("drillbar");
+    if(old) old.remove();
+    var bar=document.createElement("div");
+    bar.className="drillbar"; bar.id="drillbar";
+    var sysname=(project.system&&project.system.name)||"system";
+    bar.innerHTML='<button class="minibtn" id="drillBack">&#9664; back</button>'
+      +'<span class="crumb">'+esc(sysname)+' &rsaquo; </span><b>'+esc(drillRef)+'</b>'
+      +'<span class="crumb">'+g.nodes.length+' node(s), '+(g.connections||[]).length
+      +' internal connection(s) &mdash; read-only, declared in that file</span>';
+    canvasWrap.insertBefore(bar,canvasWrap.firstChild);
+    document.getElementById("drillBack").onclick=closeDrill;
+  }
+  function alertBar(msg){
+    var b=document.getElementById("drillbar");
+    if(b) b.remove();
+    var bar=document.createElement("div");
+    bar.className="drillbar"; bar.id="drillbar";
+    bar.innerHTML='<button class="minibtn" id="drillBack">&#10005;</button><span>'+esc(msg)+'</span>';
+    canvasWrap.insertBefore(bar,canvasWrap.firstChild);
+    document.getElementById("drillBack").onclick=function(){bar.remove();};
   }
   function renderNode(n){
     var el=document.createElement("div");
@@ -1200,6 +1508,33 @@ var DATA = /*__DATA__*/null;
       var cat=SYSTEMS[entry.ref];
       var rec={ref:entry.ref,file:(!target&&cat)?(cat.file||null):null};
       if(entry.comments) rec.comments=entry.comments;
+      // MIRRORS ros_studio._subsystem_graph. Presentation only -- excluded from the fact tree,
+      // so a subsystem view can never change an emitted byte. Without it the collapsed/framed/
+      // drill-in views have nothing to draw inside a subsystem.
+      if(target){
+        rec.graph={
+          nodes:target.model.nodes.map(function(sn){
+            return {label:sn.label, from:sn.from,
+                    interfaces:(sn.ifaces||[]).map(function(f){
+                      return {label:f.label, kind:f.kind,
+                              name:f.ifaceName||f.label, artifact:f.artifact};})};
+          }),
+          connections:(target.model.connections||[]).map(function(c){return [c.from,c.to];})
+        };
+      }else if(cat&&!cat.hasOwnSubsystems){
+        rec.graph={
+          nodes:Object.keys(cat.nodes||{}).sort().map(function(lbl){
+            var info=cat.nodes[lbl]||{};
+            return {label:lbl, from:info.from||null,
+                    interfaces:Object.keys(info.interfaces||{}).sort().map(function(nm){
+                      // the index records the LABEL and the kind; the underlying interface
+                      // name is not carried, and at this level of abstraction the label is
+                      // what a connections: endpoint spells anyway
+                      return {label:nm, kind:info.interfaces[nm], name:nm, artifact:null};})};
+          }),
+          connections:(cat.connections||[]).map(function(c){return [c[0],c[1]];})
+        };
+      }
       subSystems.push(rec);
       if(!target&&cat&&!cat.hasOwnSubsystems){
         // catalogued: the same table L.load_system_index() serves the companion
@@ -1570,6 +1905,16 @@ var DATA = /*__DATA__*/null;
          ||ev.target.closest("input,textarea,select,button")) return;
       var el=ev.target.closest(".node");
       if(!el) return;
+      // A collapsed subsystem box stands for N nodes but is not one: its position lives in
+      // subPos (a VIEW), not on any node, so it is dragged without touching the model and
+      // without entering the undo history -- undo restores what the file will say.
+      if(el.dataset.sub!==undefined){
+        var sref=el.dataset.sub, sp=subPos[sref]||{x:el.offsetLeft,y:el.offsetTop};
+        subPos[sref]=sp;
+        dragState={sub:sref,px:ev.clientX,py:ev.clientY,ox:sp.x,oy:sp.y,moved:0};
+        try{el.setPointerCapture(ev.pointerId);}catch(e){}
+        return;
+      }
       var n=nodeById(el.dataset.n);
       if(!n) return;
       // snapshot the pre-drag layout now; it is only pushed on pointerup if the pointer
@@ -1582,6 +1927,14 @@ var DATA = /*__DATA__*/null;
       var k=view.k||1;
       var ddx=(ev.clientX-dragState.px)/k, ddy=(ev.clientY-dragState.py)/k;
       dragState.moved+=Math.abs(ddx)*k+Math.abs(ddy)*k;   // the click threshold is in PIXELS
+      if(dragState.sub){
+        var sp=subPos[dragState.sub];
+        sp.x=Math.max(0,dragState.ox+ddx); sp.y=Math.max(0,dragState.oy+ddy);
+        var sel=canvas.querySelector('.node.subbox[data-sub="'+STUDIO.cssEsc(dragState.sub)+'"]');
+        if(sel){ sel.style.left=sp.x+"px"; sel.style.top=sp.y+"px"; }
+        drawEdges();
+        return;
+      }
       // never negative: the SVG wire layer starts at the canvas origin, so a node dragged
       // above/left of it would keep its box but lose its edges.
       dragState.n.x=Math.max(0,dragState.ox+ddx); dragState.n.y=Math.max(0,dragState.oy+ddy);
@@ -1590,8 +1943,16 @@ var DATA = /*__DATA__*/null;
     });
     canvas.addEventListener("pointerup",function(ev){
       if(!dragState) return;
-      var wasClick=dragState.moved<5, n=dragState.n, snap=dragState.snap; dragState=null;
-      if(wasClick){selNode=n.id;selEdge=null;render();fillInspector();}
+      var wasClick=dragState.moved<5, n=dragState.n, snap=dragState.snap;
+      var sref=dragState.sub; dragState=null;
+      if(sref){
+        // a click on the box selects it and shows the system panel, where its view state and
+        // its "open" button live; a drag just leaves it where it was dropped (no undo entry)
+        if(wasClick){ selSub=sref; selNode=null; selEdge=null; render(); fillInspector(); }
+        else sizeCanvas();
+        return;
+      }
+      if(wasClick){selNode=n.id;selEdge=null;selSub=null;render();fillInspector();}
       else {sizeCanvas();pushSnapshot(snap);}
     });
     // Background drag = PAN. It shares its pointerdown with "click empty space to deselect",
@@ -1733,13 +2094,23 @@ var DATA = /*__DATA__*/null;
     var n=nodeById(id);
     return {w:200,h:56+22*((n&&n.ifaces&&n.ifaces.length)||0)};
   }
+  // The layering below is parameterised over (ids, edges, boxOf) rather than reading
+  // project.nodes/connections directly, so ONE implementation serves three callers: the whole
+  // canvas, a framed subsystem's internals laid out on their own, and the read-only drill-in
+  // canvas. A clustered layout is then just this algorithm applied twice -- once inside each
+  // cluster, once over a parent graph in which each cluster is a single oversized node -- which
+  // is far less to get wrong than a hierarchy-aware layering written from scratch.
   function layeredPositions(){
-    var ids=project.nodes.map(function(n){return n.id;});
+    var edges=[];
+    project.connections.forEach(function(c){ edges.push([c.from.n,c.to.n]); });
+    return layoutGraph(project.nodes.map(function(n){return n.id;}), edges, nodeBox);
+  }
+  function layoutGraph(ids,edgeList,boxOf){
     var idx={}; ids.forEach(function(id,i){idx[id]=i;});
     var succ={}, pred={}, degree={};
     ids.forEach(function(id){succ[id]=[];pred[id]=[];degree[id]=0;});
-    project.connections.forEach(function(c){
-      var a=c.from.n, b=c.to.n;
+    edgeList.forEach(function(e){
+      var a=e[0], b=e[1];
       if(!(a in succ)||!(b in succ)||a===b) return;
       succ[a].push(b); pred[b].push(a); degree[a]++; degree[b]++;
     });
@@ -1811,16 +2182,16 @@ var DATA = /*__DATA__*/null;
     var GAPX=110, GAPY=30, X0=60, Y0=60, pos={}, colX=X0, heights=[];
     layers.forEach(function(row){
       var h=0;
-      row.forEach(function(id,i){ h+=nodeBox(id).h+(i?GAPY:0); });
+      row.forEach(function(id,i){ h+=boxOf(id).h+(i?GAPY:0); });
       heights.push(h);
     });
     var tallest=0; heights.forEach(function(h){ if(h>tallest) tallest=h; });
     layers.forEach(function(row,li){
       var wmax=0;
-      row.forEach(function(id){ wmax=Math.max(wmax,nodeBox(id).w); });
+      row.forEach(function(id){ wmax=Math.max(wmax,boxOf(id).w); });
       var y=Y0+(tallest-heights[li])/2;
       row.forEach(function(id){
-        var b=nodeBox(id);
+        var b=boxOf(id);
         pos[id]={x:Math.round(colX+(wmax-b.w)/2), y:Math.round(y)};
         y+=b.h+GAPY;
       });
@@ -1828,8 +2199,98 @@ var DATA = /*__DATA__*/null;
     });
     return pos;
   }
+
+  // ---- clustered layout -------------------------------------------------------------------
+  // Answers the "a complex subsystem will not fit in a box" problem without a new algorithm:
+  //   1. lay out each FRAMED subsystem's internals alone, with layoutGraph;
+  //   2. take the resulting bounding box and treat the whole cluster as ONE oversized node;
+  //   3. lay out the parent graph -- own nodes, collapsed boxes, cluster super-nodes -- with the
+  //      same layoutGraph, mapping every edge endpoint that lands inside a subsystem onto that
+  //      subsystem's id;
+  //   4. translate each cluster's internal positions by where its super-node landed.
+  // A subsystem that will not fit still will not fit; that is what drill-in is for.
+  var SUBID="sub::";
+  function subUnitOf(nodeId){
+    var n=nodeById(nodeId);
+    return (n&&n.backing==="sub"&&n.subRef)?(SUBID+n.subRef):nodeId;
+  }
+  function clusterLayout(){
+    var refs=liveSubRefs(), framed=[], collapsed=[];
+    refs.forEach(function(r){ (subState(r)==="framed"?framed:collapsed).push(r); });
+
+    // 1 + 2: each framed cluster laid out on its own
+    var inner={}, innerBox={}, FPAD=22, FTOP=26;
+    framed.forEach(function(ref){
+      var members=subMembers(ref);
+      var ids=members.map(function(n){return n.id;});
+      var idset={}; ids.forEach(function(i){idset[i]=1;});
+      var edges=[];
+      project.connections.forEach(function(c){
+        if(idset[c.from.n]&&idset[c.to.n]) edges.push([c.from.n,c.to.n]);
+      });
+      var pos=layoutGraph(ids,edges,nodeBox);
+      var x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+      ids.forEach(function(id){
+        var b=nodeBox(id), pt=pos[id]||{x:0,y:0};
+        x0=Math.min(x0,pt.x); y0=Math.min(y0,pt.y);
+        x1=Math.max(x1,pt.x+b.w); y1=Math.max(y1,pt.y+b.h);
+      });
+      if(x0>x1){ x0=y0=0; x1=200; y1=80; }
+      inner[ref]={pos:pos,ox:x0,oy:y0};
+      innerBox[ref]={w:(x1-x0)+2*FPAD, h:(y1-y0)+FTOP+FPAD};
+    });
+
+    // 3: the parent graph
+    var ids=[], seen={};
+    project.nodes.forEach(function(n){
+      var u=subUnitOf(n.id);
+      if(!seen[u]){seen[u]=1;ids.push(u);}
+    });
+    var edges=[];
+    project.connections.forEach(function(c){
+      edges.push([subUnitOf(c.from.n),subUnitOf(c.to.n)]);
+    });
+    function boxOf(id){
+      if(id.indexOf(SUBID)!==0) return nodeBox(id);
+      var ref=id.slice(SUBID.length);
+      if(innerBox[ref]) return innerBox[ref];
+      var el=canvas.querySelector('.node.subbox[data-sub="'+STUDIO.cssEsc(ref)+'"]');
+      if(el&&el.offsetWidth) return {w:el.offsetWidth,h:el.offsetHeight};
+      return {w:220,h:70+22*subPorts(ref).length};
+    }
+    var top=layoutGraph(ids,edges,boxOf);
+
+    // 4: own nodes take their position directly; a framed cluster's members are translated
+    var out={}, boxes={};
+    project.nodes.forEach(function(n){
+      if(n.backing==="sub"&&n.subRef) return;
+      var pt=top[n.id];
+      if(pt) out[n.id]=pt;
+    });
+    collapsed.forEach(function(ref){ boxes[ref]=top[SUBID+ref]||{x:60,y:60}; });
+    framed.forEach(function(ref){
+      var at=top[SUBID+ref]||{x:60,y:60}, inf=inner[ref];
+      if(!inf) return;
+      Object.keys(inf.pos).forEach(function(id){
+        out[id]={x:Math.round(at.x+FPAD+(inf.pos[id].x-inf.ox)),
+                 y:Math.round(at.y+FTOP+(inf.pos[id].y-inf.oy))};
+      });
+      boxes[ref]=at;
+    });
+    return {nodes:out, boxes:boxes};
+  }
+  // Re-place only the collapsed BOXES, leaving every node where the author left it. Called when
+  // a subsystem is collapsed or expanded, because that changes what occupies the canvas without
+  // being an edit to the model.
+  function relayoutSubs(){
+    var r=clusterLayout();
+    Object.keys(r.boxes).forEach(function(ref){ subPos[ref]=r.boxes[ref]; });
+  }
   function autoLayout(){
-    var pos=layeredPositions();
+    // clusterLayout() degenerates to layeredPositions() when nothing is framed: with no
+    // cluster, every unit is a plain node and the parent pass IS the flat pass.
+    var r=clusterLayout(), pos=r.nodes;
+    Object.keys(r.boxes).forEach(function(ref){ subPos[ref]=r.boxes[ref]; });
     pushUndo();          // node x/y live in project.json, so a layout is an undoable EDIT
     project.nodes.forEach(function(n){
       var p=pos[n.id];
@@ -2260,6 +2721,12 @@ var DATA = /*__DATA__*/null;
       pushUndo(); fieldList(p[0],p[1]).splice(+p[2],1); fillSystemInspector(); runIssues();};});
     inspector.querySelectorAll("[data-tdel]").forEach(function(x){x.onclick=function(){
       pushUndo(); delete project.types[x.dataset.tdel]; fillSystemInspector(); runIssues();};});
+    inspector.querySelectorAll("[data-subview]").forEach(function(x){x.onchange=function(){
+      // NOT pushUndo(): a view is not an edit to the model. Undo restores what the file will
+      // say, and folding a presentation toggle into that history would make Ctrl-Z unusable.
+      setSubState(x.dataset.subview,x.value); relayoutSubs(); render(); fillSystemInspector();};});
+    inspector.querySelectorAll("[data-subopen]").forEach(function(x){x.onclick=function(){
+      openDrill(x.dataset.subopen);};});
     // ---- system-level parameters ----------------------------------------------------------
     function sysParamById(id){
       var l=project.params||[];
@@ -2352,9 +2819,26 @@ var DATA = /*__DATA__*/null;
       h+='<div class="insec"><h4>subsystems (reused compositions)</h4>';
       subs.forEach(function(s,i){
         var got=project.nodes.filter(function(n){return n.backing==="sub"&&n.subRef===s.ref;});
+        var g=s.graph||null, st=subState(s.ref);
         h+='<div class="pkgrow"><div class="pn">"'+esc(s.ref)+'"</div>'
-          +'<div class="roinfo">'+esc(s.file?("assets/rosmodelscatalog/"+s.file):"(not in the vendored catalogue)")
-          +'<br>'+got.length+' node(s) reached: '+esc(got.map(function(n){return n.label;}).join(", ")||"none")+'</div>'
+          +'<div class="roinfo">'+esc(s.file?("assets/rosmodelscatalog/"+s.file):(s.localFile||"(not in the vendored catalogue)"))
+          +'<br>'+got.length+' node(s) reached: '+esc(got.map(function(n){return n.label;}).join(", ")||"none")
+          +(g?('<br>'+(g.connections||[]).length+' internal connection(s)'):'<br>no graph captured &mdash; cannot be opened')
+          +'</div>'
+          // How this reference is DRAWN. Presentation only: project.view is excluded from the
+          // fact tree and tests/studio_parity.js emits under every state to prove the bytes do
+          // not move.
+          +'<div class="prow3">'
+          +'<label class="mini">view</label>'
+          +'<select data-subview="'+esc(s.ref)+'">'
+          +'<option value="collapsed"'+(st==="collapsed"?" selected":"")+'>collapsed &mdash; one box</option>'
+          +'<option value="framed"'+(st==="framed"?" selected":"")+'>framed &mdash; internals in a frame</option>'
+          +'</select>'
+          +(g?'<button class="minibtn" data-subopen="'+esc(s.ref)+'">open &#8599;</button>':"")
+          +'</div>'
+          +(got.length?"":'<div class="hint w">this reference resolved to no nodes, so it has '
+            +'nothing to draw &mdash; a subsystem exposes only what the referenced file&rsquo;s own '
+            +'<code>interfaces:</code> blocks declare (checkIfInterfaceInSystem).</div>')
           +(edit?cmtRows(s,"sub","sub:"+i):"")+'</div>';
       });
       h+='</div>';
@@ -3527,6 +4011,12 @@ var DATA = /*__DATA__*/null;
     };
   })();
 
+  // A collapsed subsystem box has no x/y of its own -- it stands for N nodes and its position
+  // is a VIEW, not model data. Place them once before the first paint, or they all stack at the
+  // default corner. render() is called twice on purpose: the first pass is what gives
+  // clusterLayout() rendered cards to MEASURE (nodeBox reads offsetWidth/offsetHeight).
+  render();
+  relayoutSubs();
   render();
   fillInspector();      // the idle inspector is the SYSTEM panel (fromFile, fromGitRepo), not
   updateHistoryUI();    // a placeholder, so it has to be painted before anything is selected

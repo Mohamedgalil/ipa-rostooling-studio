@@ -7,6 +7,7 @@
   },
   "_systems": [
     {
+      "connections": [],
       "file": "arms/UR/ur_robot.rossystem",
       "hasOwnSubsystems": false,
       "nodes": {
@@ -46,6 +47,7 @@
       "system": "ur_robot"
     },
     {
+      "connections": [],
       "file": "robots/turtlebot3/cartographer.rossystem",
       "hasOwnSubsystems": false,
       "nodes": {
@@ -64,6 +66,7 @@
       "system": "cartographer"
     },
     {
+      "connections": [],
       "file": "robots/turtlebot3/robot/arm.rossystem",
       "hasOwnSubsystems": false,
       "nodes": {
@@ -79,6 +82,7 @@
       "system": "arm_controller"
     },
     {
+      "connections": [],
       "file": "robots/turtlebot3/robot/turtlebot.rossystem",
       "hasOwnSubsystems": false,
       "nodes": {
@@ -108,6 +112,7 @@
       "system": "turtlebot"
     },
     {
+      "connections": [],
       "file": "robots/turtlebot3/simulation/turtlebot_gazebo.rossystem",
       "hasOwnSubsystems": false,
       "nodes": {
@@ -161,6 +166,7 @@
       "system": "turtlebot_gazebo"
     },
     {
+      "connections": [],
       "file": "robots/turtlebot3/turtlebot3_navigation2.rossystem",
       "hasOwnSubsystems": false,
       "nodes": {

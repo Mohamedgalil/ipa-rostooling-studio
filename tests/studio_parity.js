@@ -61,7 +61,7 @@ var STUDIO = path.join(ROOT, "scripts", "ros_studio.py");
 var WANTED = ["splitLines", "indentOf", "splitComment", "cleanNote", "unq", "cmtSet",
   "parseRos2", "parseRos", "parseRossystem", "mergeParams", "seedFromFiles",
   "qd", "qs2", "nodeById", "ifaceById", "ifaceConnected", "exposureLabels",
-  "genSystem",
+  "subState", "genSystem",
   "handPkgNodes", "foldArtifacts", "localTypePkgs", "companionTypes", "companionPkgs",
   "typeAutoNote",
   "pyFloat", "pyRepr", "fmtParamValue", "inferPtype", "artParamDecl", "sysParamFact",
@@ -383,6 +383,54 @@ function compareSeed(fixture, projectPath, htmlPath) {
   return problems;
 }
 
+// Every subsystem VIEW state must emit identical bytes. The state lives in project.view and
+// nothing in the emitter reads it -- but "nothing reads it" is exactly the kind of claim that
+// stops being true one refactor later, and a view that quietly changed the model would be
+// invisible: both the preview and the file would agree, and both would lint clean. So the
+// property is asserted rather than argued.
+//
+// It matters more than it looks: a collapsed subsystem HIDES its member nodes from the canvas,
+// and `emit_rossystem` deliberately skips those same nodes for an unrelated reason (RM090). Two
+// independent reasons to skip the same nodes is precisely where a "while I am here" edit lands.
+function compareViewStates(projectPath, htmlPath, expectPath) {
+  var project = JSON.parse(fs.readFileSync(projectPath, "utf8"));
+  var html = fs.readFileSync(htmlPath, "utf8");
+  var expected = fs.readFileSync(expectPath, "utf8");
+  var refs = (project.subSystems || []).map(function (s) { return s.ref; });
+  if (!refs.length) return [];                 // nothing to collapse; not a failure
+
+  var problems = [];
+  var states = [
+    ["all collapsed", "collapsed"],
+    ["all framed", "framed"],
+    ["absent (older project.json)", null]
+  ];
+  states.forEach(function (st) {
+    var copy = JSON.parse(JSON.stringify(project));
+    if (st[1] === null) {
+      delete copy.view;
+    } else {
+      copy.view = { subsystems: {} };
+      refs.forEach(function (r) { copy.view.subsystems[r] = st[1]; });
+    }
+    var fns = loadShipped(html, copy);
+    var got = fns.genSystem();
+    if (got !== expected) {
+      var d = firstDiff(expected, got);
+      problems.push("subsystem view state " + st[0] + " CHANGED the emitted .rossystem at "
+        + (d || "(trailing bytes)") + " -- a view must never reach an emitted byte");
+    }
+    var f = fns.projectFacts();
+    if (JSON.stringify(f.subSystems) !== JSON.stringify(
+          (project.subSystems || []).map(function (x) { return String(x.ref); }))) {
+      problems.push("subsystem view state " + st[0] + " changed projectFacts().subSystems");
+    }
+    if ("view" in f) problems.push("projectFacts() carries `view` -- presentation state must "
+      + "stay out of the fact tree, or the seed diff reports a collapse as a model change");
+  });
+  return problems;
+}
+
 function compare(projectPath, htmlPath, expectPath, knownWrote) {
   var project = JSON.parse(fs.readFileSync(projectPath, "utf8"));
   var html = fs.readFileSync(htmlPath, "utf8");
@@ -580,6 +628,7 @@ function main(argv) {
       cases.push({ name: path.basename(f), paths: base });
       cases.push({ name: path.basename(f) + " [ifaces permuted]", paths: permutedCase(base, d) });
       cases.push({ name: path.basename(f) + " [in-page seed]", seed: f, paths: base });
+      cases.push({ name: path.basename(f) + " [subsystem views]", views: true, paths: base });
     });
   }
 
@@ -590,7 +639,9 @@ function main(argv) {
       try {
         problems = c.seed
           ? compareSeed(c.seed, c.paths.project, c.paths.html)
-          : compare(c.paths.project, c.paths.html, c.paths.expect, c.paths.wrote);
+          : (c.views
+            ? compareViewStates(c.paths.project, c.paths.html, c.paths.expect)
+            : compare(c.paths.project, c.paths.html, c.paths.expect, c.paths.wrote));
       } catch (e) {
         problems = ["harness error: " + e.message];
       }

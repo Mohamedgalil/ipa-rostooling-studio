@@ -107,10 +107,35 @@ def extract_ros2_nodes(root):
         yield pkg_name, artifact_name, node_name, interfaces
 
 
+def extract_rossystem_connections(sys_val):
+    """[[fromLabel, toLabel], ...] for one parsed .rossystem, or [] when it declares none.
+
+    A subsystem's own `connections:` are irrelevant to what it EXPOSES -- checkIfInterfaceInSystem
+    reads only the `interfaces:` blocks -- so nothing in emission or validation needs them. They
+    are indexed for the studio's subsystem views: without them, expanding or opening a catalogued
+    subsystem can only draw disconnected cards.
+
+    Every vendored .rossystem currently has an empty list here (turtlebot.rossystem, the largest
+    at 3 nodes / 7 interfaces, declares no connections at all). That is the files' truth, not a
+    parsing gap.
+    """
+    out = []
+    conn_seq = mapping_get(sys_val, "connections")
+    if not is_sequence(conn_seq):
+        return out
+    for item in conn_seq.value:
+        if not is_sequence(item) or len(item.value) != 2:
+            continue
+        a, b = item.value
+        if is_scalar(a) and is_scalar(b):
+            out.append([a.value, b.value])
+    return out
+
+
 def extract_rossystem_system(root):
     """Return (system_name, {node_label: {"from": str|None, "interfaces": {name: kind}}},
-    has_own_subsystems) for one parsed .rossystem file, or (None, None, False) if it
-    doesn't look like one.
+    has_own_subsystems, connections) for one parsed .rossystem file, or
+    (None, None, False, []) if it doesn't look like one.
 
     Mirrors RosSystemValidator.xtend's checkIfInterfaceInSystem: a node's connectable
     interfaces are exactly what its own 'interfaces:' block declares -- NEVER derived
@@ -126,18 +151,19 @@ def extract_rossystem_system(root):
     surfaces this before a caller finds out from an oracle stack trace.
     """
     if not is_mapping(root):
-        return None, None, False
+        return None, None, False, []
     items = mapping_items(root)
     if not items:
-        return None, None, False
+        return None, None, False, []
     sys_key, sys_val = items[0]
     if not is_scalar(sys_key) or not is_mapping(sys_val):
-        return None, None, False
+        return None, None, False, []
 
     has_own_subsystems = mapping_get(sys_val, "subSystems") is not None
+    conns = extract_rossystem_connections(sys_val)
     nodes_val = mapping_get(sys_val, "nodes")
     if not is_mapping(nodes_val):
-        return sys_key.value, {}, has_own_subsystems
+        return sys_key.value, {}, has_own_subsystems, conns
 
     nodes = {}
     for node_key, node_val in mapping_items(nodes_val):
@@ -161,7 +187,7 @@ def extract_rossystem_system(root):
 
         nodes[node_key.value] = {"from": from_str, "interfaces": interfaces}
 
-    return sys_key.value, nodes, has_own_subsystems
+    return sys_key.value, nodes, has_own_subsystems, conns
 
 
 def main():
@@ -178,13 +204,15 @@ def main():
                     systems.append({"file": rel})
                     continue
                 root = compose_yaml(fpath)
-                sys_name, sys_nodes, has_own_sub = (
-                    (None, None, False) if root is None else extract_rossystem_system(root))
+                sys_name, sys_nodes, has_own_sub, sys_conns = (
+                    (None, None, False, []) if root is None
+                    else extract_rossystem_system(root))
                 entry = {"file": rel}
                 if sys_name is not None:
                     entry["system"] = sys_name
                     entry["nodes"] = sys_nodes
                     entry["hasOwnSubsystems"] = has_own_sub
+                    entry["connections"] = sys_conns
                 systems.append(entry)
                 continue
             if not fname.endswith(".ros2"):

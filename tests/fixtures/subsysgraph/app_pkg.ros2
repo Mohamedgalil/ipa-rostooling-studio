@@ -1,0 +1,14 @@
+# The PARENT's own package, deliberately separate from wired_pkg.
+#
+# A single-file project regenerates each package it owns from its own nodes alone. If `planner`
+# lived in wired_pkg, generating uses_wired.rossystem would rewrite wired_pkg.ros2 with only
+# that one artifact and delete camera/rectifier/detector -- breaking the very subsystem it
+# references. The seeder's unreferenced-artifact diagnostic reports exactly that, which is how
+# this was caught while writing the fixture.
+app_pkg:
+  artifacts:
+    planner:
+      node: planner
+      subscribers:
+        'detections_in':
+          type: 'visualization_msgs/msg/MarkerArray' # assets/roscommonobjects/basic_msgs/visualization_msgs.ros
