@@ -339,6 +339,37 @@ nodes (the reusable case) and kept its four Nav2-stack nodes as explicit `nodes:
 `.rossystem` and its transitive `.ros2`/`.ros` deps automatically) into `cases/tb3-v4/`, oracle
 **ACCEPTED, 0E/0W**.
 
+## Run 5 — 2026-08-19, both `parameters:` slots verified against the real oracle
+
+`case 22-parameters` — the generated output of `tests/fixtures/params/param_probe.rossystem`,
+staged with `collect_deps.py`. **ACCEPTED, 0E/0W.**
+
+This is the first oracle run over `parameters:` in a `.rossystem`, because until this change the
+studio emitted neither slot. Both are now covered in one file:
+
+| slot | grammar | what the case proves |
+|---|---|---|
+| system-level `parameters:` | `Parameter`, Basics.xtext:41-49 | `type:` alone, `type:`+`default:`, `ns:`+`type:`+`value:`, and Integer/Double/Boolean/String values all parse |
+| node-level `parameters:` | `RosParameter`, RosSystem.xtext:78-82 | `- "label": "artifact::name"` + `value:` parses, and the label may differ from the artifact parameter name |
+
+**The run caught a real emitter bug on its first attempt** — worth recording, because nothing else
+would have found it. `ns:` takes a `Namespace`, which is one of three bare KEYWORDS
+(`GlobalNamespace` | `RelativeNamespace` | `PrivateNamespace`, each optionally followed by a
+`GraphName` list — Basics.xtext:13-32). It is *not* an `EString`. The emitter quoted it like every
+other string slot and the server answered:
+
+```
+REJECTED — 1 error(s)
+  ERROR  line 62  no viable alternative at input '"/probe"'
+```
+
+`rosmodel_lint` did not flag it (RM044 only warns that `ns:` has zero corpus support), and the
+round-trip suite could not: both sides of the parity check agreed on the same wrong bytes. Fixed
+by writing the keyword through verbatim, never quoted and never invented.
+
+Note the rule cannot express an actual namespace string — only those three keywords — which is
+consistent with RM044's "0 occurrences across all 253 corpus files".
+
 ## Still not covered
 
 - ~~**`.rossystem` — entirely.**~~ **Closed 2026-07-21** by the locally built

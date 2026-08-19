@@ -1,0 +1,32 @@
+param_pkg:
+  artifacts:
+    # Every ParameterType the studio can emit, so _infer_ptype / _fmt_param_value are exercised
+    # on a real declaration side rather than only on a guessed one.
+    tuner:
+      node: tuner
+      publishers:
+        'setpoint':
+          type: 'std_msgs/msg/Float64' # assets/roscommonobjects/basic_msgs/ros_core.ros
+      subscribers:
+        'measured':
+          type: 'std_msgs/msg/Float64' # assets/roscommonobjects/basic_msgs/ros_core.ros
+      parameters:
+        'enabled':
+          type: Boolean
+          default: true
+        'gain':                      # trailing comment on a .ros2 parameter
+          type: Double
+          default: 0.5
+        'profile':
+          type: String
+          default: 'balanced'
+        'window':
+          type: Integer
+          default: 10
+    # Declares NO parameters at all. The system below still exposes one on the node backed by
+    # it, which is the `orphan` path: kept and flagged, never silently dropped.
+    logger:
+      node: logger
+      subscribers:
+        'setpoint':
+          type: 'std_msgs/msg/Float64' # assets/roscommonobjects/basic_msgs/ros_core.ros

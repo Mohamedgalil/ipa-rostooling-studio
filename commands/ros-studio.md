@@ -193,9 +193,59 @@ editor's `projectFacts()` to the companion's `project_facts()`, exactly as it do
 file previews.
 
 Because the diff is model-level it also surfaces losses the round-trip has, rather than papering
-over them: on the TurtleBot 3 example a clean seed→generate reports
-`- nodes.bt_navigator.parameters.use_sim_time`, because a node-level `parameters:` block in a
-`.rossystem` has no slot in the project model.
+over them. That is how the two `parameters:` defects were found and it is worth keeping as the
+worked example, because one of them the diff could *not* see: on the TurtleBot 3 example a clean
+seed→generate used to report `- nodes.bt_navigator.parameters.use_sim_time`, while `ur_robot`'s
+five system-level parameters vanished under a confident "no model-level change since the seed"
+— the fact tree had no slot for them either, so the check was blind to exactly the loss it
+exists to catch. Both slots are modelled now (see **Parameters** below) and both round-trip; the
+lesson kept is that a silent diff is only as trustworthy as the fact tree behind it.
+
+## Parameters — two slots, not one
+
+A parameter lives in **two unrelated grammar rules**, and conflating them is the defect this
+repo keeps re-finding under different names (it is the same shape as exposure *label* vs
+interface *name*, which has now bitten three times).
+
+| | `.ros2` artifact parameter | `.rossystem` node parameter | `.rossystem` system parameter |
+|---|---|---|---|
+| rule | `Parameter`, Basics.xtext:41 | `RosParameter`, RosSystem.xtext:78 | `Parameter`, Basics.xtext:41 |
+| written as | `name: / type: T / default: D` | `- "label": "artifact::name" / value: V` | `name: / ns? / type: T / default? / value?` |
+| means | this artifact **declares** the parameter | this system **exposes** it and **overrides** its value for this instance | a system-wide declaration, a peer of `nodes:` |
+| lives in | `<pkg>.ros2` | the node's `parameters:` block | the system's own `parameters:` block |
+
+A node parameter therefore carries **both halves** in the project, exactly as an interface
+carries `name` (artifact side) and `label`/`exposed` (system side):
+
+```json
+{"name": "use_sim_time", "ptype": "Boolean", "value": false,
+ "label": "use_sim_time", "exposed": true, "sysValue": false}
+```
+
+`name`/`ptype`/`value` are written to the `.ros2`; `label`/`sysValue` are written to the
+`.rossystem`. An exposure whose artifact declares no such parameter is kept and flagged
+`orphan`, the same way an undeclared interface exposure is — never silently dropped.
+
+Two traps worth knowing, both of which were live bugs:
+
+- **`default:` is not `value:`.** `default:` belongs to the *ParameterType*
+  (`ParameterStringType: 'String' ('default:' ...)?`, Basics.xtext:77-80) — indentation is
+  hidden whitespace, so `type: String` / `default: x` is one type expression. `value:` is the
+  `Parameter`'s own optional slot. A file may carry both; folding them emits one into the
+  other's position.
+- **`ns:` is not a string.** It takes a `Namespace`, which is one of three bare KEYWORDS —
+  `GlobalNamespace` | `RelativeNamespace` | `PrivateNamespace` (Basics.xtext:13-32). Quoting it
+  is `no viable alternative at input '"..."'` from the real server. The rule cannot express an
+  actual namespace string at all, which is why RM044 records zero corpus support.
+
+A parameter known only as an exposure has no declared type, but the `.ros2` this project writes
+for a hand-backed artifact requires one. The type is **inferred from the override value**
+(`false` → `Boolean`, `40` → `Integer`, `0.5` → `Double`, otherwise `String`) rather than
+defaulted to `String`, which used to retype every such parameter and turn `value: false` into
+`type: String / default: 'false'`.
+
+Both slots are held to the real 3.1.0 language server by `tests/oracle/cases/22-parameters`
+(ACCEPTED, 0E/0W) and to a lossless round-trip by `tests/fixtures/params/`.
 
 ## Working a large canvas
 
@@ -261,7 +311,7 @@ comment attaches to the element on its own line.**
 
 **Dropped, and always REPORTED** — `init` prints one line per lost comment, naming the file, the
 line and what it annotated, so it can be re-placed by hand (SKILL.md rule 12). This is everything
-the project model has no slot for: `processes:`, node-level `parameters:` in a `.rossystem`, the
+the project model has no slot for: `processes:`, the
 inside of a `qos:` block, trailing comments on block keys (`nodes:`, `subSystems:`, `interfaces:`,
 `qos:`, …), a comment block at end of file with nothing after it, and anything attached to an
 element the project does not carry.

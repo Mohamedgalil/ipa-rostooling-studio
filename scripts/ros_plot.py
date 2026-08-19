@@ -380,15 +380,27 @@ def extract_model(path, use_catalogue=True):
         for pk, pv in L.mapping_items(sys_params_node):
             if not L.is_scalar(pk):
                 continue
-            ptype = pdefault = None
+            ptype = pdefault = pvalue = pns = None
             if L.is_mapping(pv):
+                # `default:` and `value:` are DIFFERENT grammar slots and are kept apart.
+                # `default:` belongs to the ParameterType ("ParameterStringType: 'String'
+                # ('default:' default=ParameterString)?", Basics.xtext:77-80) -- indentation is
+                # hidden whitespace, so `type: String` / `default: x` is one type expression.
+                # `value:` is the Parameter's own optional slot (Basics.xtext:47). A file may
+                # carry both, and folding them together would emit one of them into the other's
+                # position.
                 tnode = L.mapping_get(pv, "type")
                 dnode = L.mapping_get(pv, "default")
+                vnode = L.mapping_get(pv, "value")
+                nsnode = L.mapping_get(pv, "ns")
                 ptype = tnode.value if L.is_scalar(tnode) else None
+                pns = nsnode.value if L.is_scalar(nsnode) else None
                 pdefault = dnode.value if L.is_scalar(dnode) else (
                     _node_repr(dnode) if dnode is not None else None)
-            model["systemParams"].append(
-                {"name": pk.value, "type": ptype, "default": pdefault})
+                pvalue = vnode.value if L.is_scalar(vnode) else (
+                    _node_repr(vnode) if vnode is not None else None)
+            model["systemParams"].append({"name": pk.value, "type": ptype,
+                                          "default": pdefault, "value": pvalue, "ns": pns})
     elif L.is_sequence(sys_params_node):
         for item in sys_params_node.value:
             if not L.is_mapping(item):
@@ -403,7 +415,9 @@ def extract_model(path, use_catalogue=True):
             model["systemParams"].append({
                 "name": pk.value,
                 "type": pv.value if L.is_scalar(pv) else None,
-                "default": vnode.value if L.is_scalar(vnode) else None,
+                "default": None,
+                "value": vnode.value if L.is_scalar(vnode) else None,
+                "ns": None,
             })
 
     model["nodeCount"] = len(model["nodes"])

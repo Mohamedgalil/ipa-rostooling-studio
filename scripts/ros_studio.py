@@ -131,6 +131,96 @@ def _fmt_param_value(ptype, value):
     return _q_single(raw)
 
 
+def _infer_ptype(value):
+    """A ParameterType guessed from a ParameterValue, for a parameter the project knows only as
+    a .rossystem EXPOSURE (`- "use_sim_time": "bt_navigator::use_sim_time" / value: false`).
+
+    The .rossystem side carries a value and no type -- RosParameter has no `type:` slot -- but
+    the .ros2 side this project must write for a hand-backed artifact REQUIRES one (Parameter,
+    Basics.xtext:46). The old code assumed String for every such parameter, which turned
+    `value: false` into `type: String / default: 'false'`: a Boolean silently retyped, and one
+    the language server then compares against the real artifact. Guessing from the literal is
+    not certain either, but it is right for every value shape the corpus writes and it keeps
+    the emitted declaration self-consistent with the emitted value.
+    """
+    raw = ("" if value is None else str(value)).strip()
+    if not raw:
+        return "String"
+    if raw.lower() in ("true", "false"):
+        return "Boolean"
+    if raw[:1] in "\"'" or raw[:1] == "[":       # a quoted literal or a sequence stays a String
+        return "String"
+    try:
+        int(raw)
+        return "Integer"
+    except ValueError:
+        pass
+    try:
+        float(raw)
+        return "Double"
+    except ValueError:
+        return "String"
+
+
+def _art_param_decl(p):
+    """(type, value) for the .ros2 DECLARATION half of one node parameter.
+
+    ONE definition, because emit_ros2 writes it and project_facts has to predict exactly what
+    emit_ros2 writes -- the two drifting apart is what `diff`'s builder cross-check exists to
+    catch, and it is cheaper not to write the bug twice. A parameter the project knows only as
+    a .rossystem exposure has no declared type or default, so both are taken from the override
+    value rather than defaulted to String (see _infer_ptype)."""
+    val = p.get("value")
+    if val in (None, "") and p.get("sysValue") not in (None, ""):
+        val = p["sysValue"]
+    return (p.get("ptype") or "").strip() or _infer_ptype(val), val
+
+
+def _merge_params(declared, exposed, nid):
+    """One node's parameters, merging the .ros2 DECLARATION side with the .rossystem EXPOSURE
+    side -- the same two-slot shape an interface has, for the same reason.
+
+    A parameter lives in two unrelated grammar rules:
+      * Parameter    (Basics.xtext:41)    `name: / type: T / value: V`  -- the artifact declares
+        that the parameter exists, with a type and a default.
+      * RosParameter (RosSystem.xtext:78) `- "label": "artifact::name" / value: V` -- THIS
+        system exposes that parameter under a label and overrides its value for this instance.
+
+    The studio used to carry only the first, so seeding a .rossystem read the exposures, threw
+    the label and the override away, and `generate` re-emitted the value as the ARTIFACT's
+    default. For a catalogue-backed node -- which gets no .ros2 written at all -- the exposure
+    simply vanished: examples/turtlebot3_navigation.rossystem lost bt_navigator's
+    `use_sim_time: false` entirely, with `generate` still reporting 0 errors.
+
+    `declared` is rec["params"] from the sibling .ros2; `exposed` is ros_plot's node params
+    ({label, ref, value}). Matching is by the ARTIFACT parameter name the `ref` arrow-points at
+    (after '::'), never by the label -- the label is free text and the corpus does spell it
+    differently from the name.
+    """
+    out, by_name = [], {}
+    for p in declared:
+        rec = {"id": nid("p"), "name": p["name"], "ptype": p.get("ptype"),
+               "value": p.get("value"), "label": None, "exposed": False, "sysValue": None}
+        by_name[p["name"]] = rec
+        out.append(rec)
+    for e in exposed:
+        _art, _, name = (e.get("ref") or "").partition("::")
+        name = name or e["label"]
+        rec = by_name.get(name)
+        if rec is None:
+            # Exposed but not declared by any .ros2 this project carries. Kept and flagged, the
+            # same way an exposure of an undeclared INTERFACE is (`orphan`), so a model that
+            # cannot resolve is reported rather than quietly truncated.
+            rec = {"id": nid("p"), "name": name, "ptype": None, "value": None,
+                   "label": e["label"], "exposed": True, "sysValue": e.get("value"),
+                   "orphan": not declared}
+            by_name[name] = rec
+            out.append(rec)
+            continue
+        rec["label"], rec["exposed"], rec["sysValue"] = e["label"], True, e.get("value")
+    return out
+
+
 # ========================================================================================
 # Comments: capture at seed, re-emit at generate
 #
@@ -144,15 +234,16 @@ def _fmt_param_value(ptype, value):
 # POLICY (asserted by tests/studio_roundtrip.py, stated in commands/ros-studio.md):
 #   PRESERVED   a leading comment block attaches to the next modeled element; a trailing
 #               comment attaches to the element on its own line. Modeled elements are: the
-#               system, each subSystems: entry, each node, each exposure, each connection; and
-#               in the .ros2 the package, each artifact, each interface (plus its `type:` line)
-#               and each parameter.
+#               system, each subSystems: entry, each node, each exposure, each node-level
+#               parameter exposure, each system-level parameter (plus its `type:`/`value:`/`ns:`
+#               lines), each connection; and in the .ros2 the package, each artifact, each
+#               interface (plus its `type:` line) and each parameter.
 #   NORMALISED  indentation follows the emitted element, not the source; the `# ` spacing is
 #               normalised; and a leading block that preceded a block KEY (`nodes:`,
 #               `interfaces:`, ...) re-emerges before the FIRST element inside that block,
 #               because the model has no slot for the key itself.
-#   DROPPED     everything the project model does not carry -- `processes:`, node-level
-#               .rossystem `parameters:`, `qos:` internals, and trailing comments on block keys.
+#   DROPPED     everything the project model does not carry -- `processes:`, `qos:` internals,
+#               and trailing comments on block keys.
 #               `init` REPORTS every one of these with its line number (SKILL.md rule 12)
 #               instead of discarding it silently.
 # ========================================================================================
@@ -166,6 +257,13 @@ RE_EXPOSURE = re.compile(r'^-\s*(?P<k>"[^"]*"|\'[^\']*\'|[^\s:]+)\s*:\s*'
 RE_CONNECTION = re.compile(r'^-\s*\[\s*(?P<a>"[^"]*"|\'[^\']*\'|[^\s,\]]+)\s*,'
                            r'\s*(?P<b>"[^"]*"|\'[^\']*\'|[^\s,\]]+)\s*\]')
 ROS2_ITEM_BLOCKS = set(C.KIND_TO_BLOCK.values()) | {"parameters"}
+# The five block keys a RosSystem may open (RosSystem.xtext:14-40). `parameters:` appears BOTH
+# here and inside a RosNode, and only the indent tells them apart.
+ROSSYSTEM_BLOCK_KEYS = ("subSystems", "processes", "nodes", "parameters", "connections")
+# One RosParameter exposure: `- "label": "artifact::name"` (RosSystem.xtext:78-82). Unlike
+# RosInterface there is no arrow, so the value is any non-empty token -- which is why this must
+# only ever be matched inside a node's `parameters:` block.
+RE_PARAM_EXPOSURE = re.compile(r'^-\s*(?P<k>"[^"]*"|\'[^\']*\'|[^\s:]+)\s*:\s*(?P<v>\S.*?)\s*$')
 
 
 def _clean_comment(text):
@@ -246,11 +344,13 @@ def _iter_source(path):
 
 def scan_rossystem_comments(path):
     """{'header', 'fromFile', 'subSystems': {ref: {...}}, 'nodes': {label: {...}},
-    'connections': {(a,b): {...}}, 'dropped': [(line, what, text)]} for one .rossystem."""
+    'params': {name: {...}}, 'connections': {(a,b): {...}}, 'dropped': [(line, what, text)]}
+    for one .rossystem. A node's dict carries 'ifaces' AND 'params': the two dash-item kinds a
+    RosNode may declare."""
     res = {"header": [], "fromFile": "", "subSystems": {}, "nodes": {}, "connections": {},
-           "dropped": []}
+           "params": {}, "dropped": []}
     pending = []
-    sect = node = sub = node_indent = None
+    sect = node = sub = node_indent = param = top_indent = None
     root_seen = False
     for lineno, _code, note, indent, body in _iter_source(path):
         if not body:
@@ -270,24 +370,31 @@ def scan_rossystem_comments(path):
         if body.startswith("fromFile:"):
             res["fromFile"] = note or ""
             continue
-        if key and kw in ("nodes", "connections", "subSystems", "processes"):
-            sect, node, sub, node_indent = kw, None, None, None
-            if note:
-                res["dropped"].append((lineno, "the '%s:' block key" % kw, note))
-            continue
+        # A top-level block key is recognised by INDENT, not by whether a node is open: `node`
+        # stays set after the last node in `nodes:`, so keying on it made the system-level
+        # `parameters:` of ur_robot.rossystem look node-level. Its entries then sat at exactly
+        # node_indent and were registered as NODES -- which is where the "on node 'robot_ip',
+        # which this project does not model" diagnostic came from. top_indent is taken from the
+        # first block key the file writes, because the corpus indents with 3, 5, 6, 7 and 11
+        # spaces and nothing may assume 2.
+        if key and kw in ROSSYSTEM_BLOCK_KEYS:
+            if top_indent is None:
+                top_indent = indent
+            if indent <= top_indent:
+                sect, node, sub, node_indent = kw, None, None, None
+                if note:
+                    res["dropped"].append((lineno, "the '%s:' block key" % kw, note))
+                continue
         if key and kw == "interfaces" and node is not None:
             sub = "interfaces"
             if note:
                 res["dropped"].append((lineno, "the 'interfaces:' block key", note))
             continue
-        if key and kw == "parameters":
-            # node-level `parameters:` is not carried by the project model (the studio writes
-            # parameters into the .ros2 artifact, not into the .rossystem node), so everything
-            # inside it is reported rather than half-preserved.
-            if node is not None:
-                sub = "parameters"
-            else:
-                sect = "parameters"
+        if key and kw == "parameters" and node is not None:
+            # Deeper than top_indent, so this is a node's `parameters:` -- RosParameter, an
+            # exposure of an artifact parameter with an override value, NOT the artifact's own
+            # declaration. The two are different grammar slots and the project carries both.
+            sub = "parameters"
             if note:
                 res["dropped"].append((lineno, "the 'parameters:' block key", note))
             continue
@@ -309,13 +416,37 @@ def scan_rossystem_comments(path):
         # '-', a parameter's `value:` carries a value).
         if key and sect == "nodes" and (node_indent is None or indent <= node_indent):
             node_indent = indent
-            node = {"before": pending, "line": note or "", "from": "", "ifaces": {}}
+            node = {"before": pending, "line": note or "", "from": "", "ifaces": {},
+                    "params": {}}
             res["nodes"][kw], pending, sub = node, [], None
             continue
+
+        # A system-level Parameter is a MAPPING entry (`name:` then `type:`/`value:`/`ns:`),
+        # not a dash item -- Parameter, Basics.xtext:41-49. The `type:` line carries its own
+        # trailing comment slot for the same reason a .ros2 interface's does.
+        if key and sect == "parameters" and node is None:
+            param = {"before": pending, "line": note or "",
+                     "type": "", "value": "", "ns": ""}
+            res["params"][kw], pending = param, []
+            continue
+        if param is not None and sect == "parameters":
+            matched = False
+            for field in ("type", "value", "ns"):
+                if body.startswith(field + ":"):
+                    param[field], matched = note or "", True
+                    break
+            if matched:
+                continue
 
         m = RE_EXPOSURE.match(body)
         if m and node is not None and sub == "interfaces":
             node["ifaces"][ros_plot._strip_quotes(m.group("k"))] = {
+                "before": pending, "line": note or ""}
+            pending = []
+            continue
+        m = RE_PARAM_EXPOSURE.match(body) if sub == "parameters" else None
+        if m and node is not None:
+            node["params"][ros_plot._strip_quotes(m.group("k"))] = {
                 "before": pending, "line": note or ""}
             pending = []
             continue
@@ -864,8 +995,7 @@ def seed_from_rossystem(path, base_index=None):
                                "name": i.get("ifaceName") or i["label"], "kind": i["kind"],
                                "type": None, "qos": None, "label": i["label"],
                                "exposed": True, "orphan": True})
-            params = [{"id": nid("p"), "name": p["name"], "ptype": p["ptype"],
-                       "value": p["value"]} for p in rec["params"]]
+            params = _merge_params(rec["params"], mn.get("params") or [], nid)
         else:
             # No local .ros2 recovered: fall back to the interfaces the .rossystem exposed.
             # For a CATALOGUE-backed node the vendored .ros2 is still an authority on which
@@ -879,8 +1009,7 @@ def seed_from_rossystem(path, base_index=None):
                                "kind": i["kind"], "type": None, "qos": None,
                                "label": i["label"], "exposed": True,
                                "orphan": iname in missing})
-            params = [{"id": nid("p"), "name": p["label"], "ptype": "String",
-                       "value": p.get("value")} for p in mn.get("params", [])]
+            params = _merge_params([], mn.get("params") or [], nid)
             artifact = artifact or (node_name or mn["label"])
 
         # Attach the captured comments. The .rossystem side is keyed by the exposure LABEL and
@@ -902,11 +1031,30 @@ def seed_from_rossystem(path, base_index=None):
                              "ros2Type": rc.get("type")})
             if cmt:
                 f["comments"] = cmt
+        used_sys_params = set()
         for p in params:
             rc = (acmt.get("params") or {}).get(p["name"]) or {}
-            cmt = _comments({"ros2Before": rc.get("before"), "ros2Line": rc.get("line")})
+            # keyed by the exposure LABEL on the .rossystem side and by the artifact parameter
+            # NAME on the .ros2 side -- the two identities the emitter writes back out, so a
+            # comment cannot drift onto the other slot across a round-trip.
+            lbl = p.get("label") or ""
+            sc = (ncmt.get("params") or {}).get(lbl) or {}
+            if sc:
+                used_sys_params.add(lbl)
+            cmt = _comments({"before": sc.get("before"), "line": sc.get("line"),
+                             "ros2Before": rc.get("before"), "ros2Line": rc.get("line")})
             if cmt:
                 p["comments"] = cmt
+        for lbl, sc in sorted((ncmt.get("params") or {}).items()):
+            if lbl in used_sys_params:
+                continue
+            texts = _comment_list(sc.get("before"))
+            if sc.get("line"):
+                texts.append(sc["line"])
+            for text in texts:
+                dropped.append((os.path.basename(path), 0,
+                                "parameter '%s' of node '%s', which this project does not model"
+                                % (lbl, mn["label"]), text))
         for lbl, sc in sorted((ncmt.get("ifaces") or {}).items()):
             if lbl in used_sys_ifaces:
                 continue
@@ -1074,14 +1222,37 @@ def seed_from_rossystem(path, base_index=None):
             "`generate` rebuilds that file from this project and will NOT re-emit it."
             % (pkg_name, art_name))
 
+    # The system-level `parameters:` block (RosSystem.xtext:31-34) -- a peer of nodes: and
+    # connections:, NOT a node. It had no slot in the project at all: ur_robot.rossystem's five
+    # declarations were read by ros_plot, dropped by the seeder, and `generate` then reported
+    # "no model-level change since the seed" because the fact tree had no slot for them either.
+    sys_params = []
+    for sp in model.get("systemParams") or []:
+        # `default` (the type's) and `value` (the Parameter's) are separate slots -- see the
+        # note in ros_plot's reader. Both are carried so neither is emitted into the other's
+        # position on the way back out.
+        rec = {"id": nid("sp"), "name": sp["name"], "ptype": sp.get("type"),
+               "default": sp.get("default"), "value": sp.get("value"), "ns": sp.get("ns")}
+        pc = sys_cmts.get("params", {}).get(sp["name"]) or {}
+        cmt = _comments({"before": pc.get("before"), "line": pc.get("line"),
+                         "type": pc.get("type"), "value": pc.get("value"),
+                         "ns": pc.get("ns")})
+        if cmt:
+            rec["comments"] = cmt
+        sys_params.append(rec)
+
     project = {
         # 3: elements carry a `comments` object (see the comment policy above) and the system
         # carries `subSystems`. 4: `types` carries the message FIELDS of locally defined specs
-        # (and a merged project carries `seededFromAll`). An older project simply has none of
-        # them and loads unchanged -- every reader below uses .get() with an empty default.
-        "formatVersion": 4,
+        # (and a merged project carries `seededFromAll`). 5: `params` carries the system-level
+        # `parameters:` block, and a node's params carry the .rossystem exposure side
+        # (label/exposed/sysValue) beside the .ros2 declaration side. An older project simply
+        # has none of them and loads unchanged -- every reader below uses .get() with an
+        # empty default.
+        "formatVersion": 5,
         "system": {"name": model["systemName"], "fromFile": model.get("fromFile")},
         "subSystems": sub_systems,
+        "params": sys_params,
         "packages": packages,
         "types": ros_types,
         "nodes": nodes,
@@ -1401,6 +1572,7 @@ def seed_from_many(paths, roots=None, name=None):
 
     # --- pass D: subSystems entries, packages, types ---------------------------------------
     seen_ref = set()
+    sys_param_index = {}
     for path, project in seeds:
         for s in project.get("subSystems") or []:
             if s["ref"] in collapsed:
@@ -1413,6 +1585,22 @@ def seed_from_many(paths, roots=None, name=None):
                 continue
             seen_ref.add(s["ref"])
             merged["subSystems"].append(s)
+        # A system-level parameter is a top-level declaration keyed by name, so two merged
+        # sources declaring the same name collapse to one -- and if they disagree about the
+        # type or the value, that is a real conflict the author has to see: the merged file can
+        # only carry one Parameter of that name.
+        for p in project.get("params") or []:
+            prev = sys_param_index.get(p["name"])
+            if prev is None:
+                new = dict(p, id=nid("sp"))
+                sys_param_index[p["name"]] = new
+                merged["params"].append(new)
+                continue
+            if _sys_param_fact(prev) != _sys_param_fact(p):
+                diags.append("%s: system parameter '%s' is declared as %s here but %s by an "
+                             "earlier source; the first one merged wins."
+                             % (os.path.basename(path), p["name"],
+                                _sys_param_fact(p), _sys_param_fact(prev)))
         for pkg, entry in sorted((project.get("packages") or {}).items()):
             if pkg not in merged["packages"]:
                 merged["packages"][pkg] = entry
@@ -1501,9 +1689,10 @@ def _grid_layout(nodes):
 
 def blank_project(name="new_system"):
     return {
-        "formatVersion": 4,
+        "formatVersion": 5,
         "system": {"name": name, "fromFile": None},
         "subSystems": [],
+        "params": [],
         "packages": {},
         "types": {},
         "nodes": [],
@@ -1683,9 +1872,9 @@ def emit_ros2(package, git, art_records, companion_pkgs, pkg_comments=None):
                 lines.extend(_comment_block(pc.get("ros2Before"), "        "))
                 lines.append("        " + _q_single(p["name"]) + ":"
                              + _note_suffix(pc.get("ros2Line")))
-                lines.append("          type: " + (p.get("ptype") or "String"))
-                lines.append("          default: " + _fmt_param_value(p.get("ptype"),
-                                                                      p.get("value")))
+                ptype, val = _art_param_decl(p)
+                lines.append("          type: " + ptype)
+                lines.append("          default: " + _fmt_param_value(ptype, val))
     return "\n".join(lines) + "\n"
 
 
@@ -1905,6 +2094,54 @@ def emit_rossystem(project):
                 lines.extend(_comment_block(fc.get("before"), "        "))
                 lines.append("        - " + _q_double(lbl) + ": " + f["kind"] + "-> "
                              + _q_double(tgt) + _note_suffix(fc.get("line")))
+        # ROSSYSTEM_NODE_KEYS puts `parameters:` last, after `interfaces:` (RosSystem.xtext:
+        # 60-75). A RosParameter is an EXPOSURE with an override value, not a declaration --
+        # the declaration is the artifact's, emitted into the .ros2 by emit_ros2. Writing only
+        # the .ros2 half is what lost bt_navigator's `use_sim_time: false`.
+        pexposed = [p for p in (n.get("params") or []) if p.get("exposed")]
+        pexposed.sort(key=lambda p: p["name"])
+        if pexposed:
+            lines.append("      parameters:")
+            for p in pexposed:
+                pcm = p.get("comments") or {}
+                lbl = p.get("label") or p["name"]
+                lines.extend(_comment_block(pcm.get("before"), "        "))
+                lines.append("        - " + _q_double(lbl) + ": "
+                             + _q_double("%s::%s" % (n["artifact"], p["name"]))
+                             + _note_suffix(pcm.get("line")))
+                lines.append("          value: "
+                             + _fmt_param_value(p.get("ptype") or _infer_ptype(p.get("sysValue")),
+                                                p.get("sysValue")))
+    # The system-level `parameters:` block sits between nodes: and connections: (rule 25).
+    sys_params = project.get("params") or []
+    if sys_params:
+        lines.append("  parameters:")
+    for p in sys_params:
+        pcm = p.get("comments") or {}
+        lines.extend(_comment_block(pcm.get("before"), "    "))
+        lines.append("    " + _q_double(p["name"]) + ":" + _note_suffix(pcm.get("line")))
+        # `ns:` takes a Namespace, which is one of three bare KEYWORDS -- GlobalNamespace |
+        # RelativeNamespace | PrivateNamespace, each optionally followed by a GraphName list
+        # (Basics.xtext:13-32). It is NOT an EString: quoting it is `no viable alternative at
+        # input '"..."'` from the real 3.1.0 server (tests/oracle/cases/22-parameters caught
+        # exactly that). The rule cannot express an actual namespace string at all, which is
+        # why RM044 records zero corpus support -- so this is written through verbatim and
+        # never invented.
+        ns = (p.get("ns") or "").strip()
+        if ns:
+            lines.append("      ns: " + ns + _note_suffix(pcm.get("ns")))
+        # Slot order is ns -> type (-> its default) -> value (Parameter, Basics.xtext:41-49).
+        # `type:` is mandatory; `default:` and `value:` are each optional and are only written
+        # when the source carried one, so a declaration-only parameter does not grow an
+        # invented value on the first round-trip.
+        ptype = (p.get("ptype") or "").strip() or _infer_ptype(
+            p.get("default") if p.get("default") not in (None, "") else p.get("value"))
+        lines.append("      type: " + ptype + _note_suffix(pcm.get("type")))
+        if p.get("default") not in (None, ""):
+            lines.append("      default: " + _fmt_param_value(ptype, p.get("default")))
+        if p.get("value") not in (None, ""):
+            lines.append("      value: " + _fmt_param_value(ptype, p.get("value"))
+                         + _note_suffix(pcm.get("value")))
     if project["connections"]:
         lines.append("  connections:")
         for c in project["connections"]:
@@ -2237,12 +2474,28 @@ def generate_files(project):
 # as well as to the editor's own projectFacts().
 # ========================================================================================
 
-_FACT_SECTIONS = ("system", "subSystems", "nodes", "connections", "packages", "types")
+_FACT_SECTIONS = ("system", "subSystems", "nodes", "params", "connections", "packages", "types")
 
 
 def _facts_tree():
     return {"system": {"name": "", "fromFile": ""}, "subSystems": [], "nodes": {},
-            "connections": [], "packages": {}, "types": {}}
+            "params": {}, "connections": [], "packages": {}, "types": {}}
+
+
+def _sys_param_fact(p):
+    """One system-level Parameter as a leaf, in the grammar's slot order. Kept distinct from
+    _param_fact (an ARTIFACT parameter, which has no ns and no value slot)."""
+    ptype = (p.get("ptype") or p.get("type") or "").strip() or _infer_ptype(
+        p.get("default") if p.get("default") not in (None, "") else p.get("value"))
+    out = []
+    if p.get("ns") not in (None, ""):
+        out.append("ns=%s" % p["ns"])
+    out.append("type=%s" % ptype)
+    if p.get("default") not in (None, ""):
+        out.append("default=%s" % _unquote_emitted(_fmt_param_value(ptype, p["default"])))
+    if p.get("value") not in (None, ""):
+        out.append("value=%s" % _unquote_emitted(_fmt_param_value(ptype, p["value"])))
+    return "; ".join(out)
 
 
 def _fact_str(v):
@@ -2309,6 +2562,8 @@ def source_facts(path):
     facts["system"] = {"name": _fact_str(model["systemName"]),
                        "fromFile": _fact_str(model.get("fromFile"))}
     facts["subSystems"] = [_fact_str(s["ref"]) for s in model.get("subSystems") or []]
+    for sp in model.get("systemParams") or []:
+        facts["params"][sp["name"]] = _sys_param_fact(sp)
 
     ros2_index, pkg_git = {}, {}
     seen = set()
@@ -2382,12 +2637,10 @@ def project_facts(project):
     """The same fact tree, predicted from the project WITHOUT writing anything.
 
     This is the "after" side the editor previews, so it must describe what generation actually
-    writes rather than what the project happens to hold. Three things are dropped on purpose,
+    writes rather than what the project happens to hold. Two things are dropped on purpose,
     each mirroring an emitter rule:
       * a `backing == "sub"` node is provided by the subSystems: block, so emit_rossystem does
         not re-declare it (RM090);
-      * a node-level `parameters:` block has no slot in the project at all, so nothing is
-        emitted for it -- which is exactly the loss the diff exists to make visible;
       * only a hand-authored node's package produces a .ros2, and only a locally invented type
         produces a .ros.
     """
@@ -2395,6 +2648,8 @@ def project_facts(project):
     facts["system"] = {"name": _fact_str(project["system"].get("name") or "system"),
                        "fromFile": _fact_str(project["system"].get("fromFile"))}
     facts["subSystems"] = [_fact_str(s["ref"]) for s in project.get("subSystems") or []]
+    for p in project.get("params") or []:
+        facts["params"][p["name"]] = _sys_param_fact(p)
 
     labels = _exposure_labels(project)
     for n in project["nodes"]:
@@ -2409,6 +2664,11 @@ def project_facts(project):
                 continue
             rec["exposures"][lbl] = "%s-> %s::%s" % (f["kind"], n.get("artifact") or "",
                                                      f["name"])
+        # keyed by the exposure LABEL, matching source_facts, which reads it back off the
+        # `- "label": "artifact::name"` line the emitter now writes.
+        for p in n.get("params") or []:
+            if p.get("exposed"):
+                rec["parameters"][p.get("label") or p["name"]] = _fact_str(p.get("sysValue"))
         facts["nodes"][n["label"]] = rec
 
     for c in project["connections"]:
@@ -2437,7 +2697,7 @@ def project_facts(project):
                 if q:
                     arec["qos"][key] = q
             for p in n.get("params") or []:
-                arec["parameters"][p["name"]] = _param_fact(p.get("ptype"), p.get("value"))
+                arec["parameters"][p["name"]] = _param_fact(*_art_param_decl(p))
             pentry["artifacts"][_fact_str(n.get("artifact"))] = arec
 
     for pkg, blocks in _companion_types(project).items():
@@ -2605,6 +2865,10 @@ def merged_source_facts(paths):
                 tgt["artifacts"].setdefault(art, arec)
         for key, spec in one["types"].items():
             facts["types"].setdefault(key, spec)
+        # first writer wins, matching seed_from_many's system-parameter merge (a merged file
+        # can carry only one Parameter of a given name).
+        for name, fact in one["params"].items():
+            facts["params"].setdefault(name, fact)
     return facts
 
 

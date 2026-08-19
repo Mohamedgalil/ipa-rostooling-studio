@@ -950,9 +950,14 @@ var DATA = /*__DATA__*/null;
   // ---- .rossystem ----------------------------------------------------------------------
   function parseRossystem(text){
     var ARROW_RE=/^\s*-?\s*("[^"]*"|'[^']*'|[^:]+?)\s*:\s*(pub|sub|ss|sc|as|ac)->\s*(.*)$/;
+    // `- "label": "artifact::name"` -- a RosParameter exposure. No arrow, so it is only ever
+    // matched inside a node's `parameters:` block (RosSystem.xtext:78-82).
+    var PARAM_RE=/^\s*-\s*("[^"]*"|'[^']*'|[^\s:]+)\s*:\s*(\S.*?)\s*$/;
     var lines=splitLines(text);
-    var out={name:null,fromFile:null,subSystems:[],nodes:[],connections:[],comments:{}};
+    var out={name:null,fromFile:null,subSystems:[],nodes:[],params:[],connections:[],
+             comments:{}};
     var lead=[], sect=null, node=null, sub=false, seenRoot=false;
+    var topIndent=null, nsub=null, sysParam=null;
     for(var i=0;i<lines.length;i++){
       var raw=lines[i], parts=splitComment(raw), code=parts[0], note=cleanNote(parts[1]);
       var body=code.trim();
@@ -970,8 +975,16 @@ var DATA = /*__DATA__*/null;
 
       if(key&&kw==="fromFile"&&val){ out.fromFile=unq(val); cmtSet(out,"fromFile",note);
                                      lead=[]; continue; }
-      if(key&&!val&&(kw==="nodes"||kw==="connections"||kw==="subSystems"||kw==="processes")){
-        sect=kw; node=null; sub=(kw==="subSystems"); lead=[]; continue;
+      // A top-level block key is recognised by INDENT, not by name alone: `parameters:` is
+      // BOTH a system-level block and a node member, and only the indent tells them apart.
+      // Keying on anything else made ur_robot.rossystem's system parameters parse as NODES.
+      if(key&&!val&&(kw==="nodes"||kw==="connections"||kw==="subSystems"||kw==="processes"
+                     ||kw==="parameters")){
+        if(topIndent==null) topIndent=ind;
+        if(ind<=topIndent){
+          sect=kw; node=null; nsub=null; sysParam=null;
+          sub=(kw==="subSystems"); lead=[]; continue;
+        }
       }
       // a subSystems: entry is one bare (optionally quoted) name, positionally recognised
       if(sub&&!key&&body.indexOf(":")<0){
@@ -986,7 +999,44 @@ var DATA = /*__DATA__*/null;
                cmtSet(c,"before",lead.slice()); cmtSet(c,"line",note);
                lead=[]; out.connections.push(c); continue; }
       }
+      // ---- system-level parameters: a MAPPING entry (`name:` then ns/type/default/value),
+      // not a dash item. Parameter, Basics.xtext:41-49.
+      if(sect==="parameters"&&node==null){
+        if(key&&!val){
+          sysParam={name:kw,ptype:null,"default":null,value:null,ns:null};
+          cmtSet(sysParam,"before",lead.slice()); cmtSet(sysParam,"line",note);
+          lead=[]; out.params.push(sysParam); continue;
+        }
+        if(sysParam&&key&&val){
+          // `default:` belongs to the ParameterType, `value:` to the Parameter -- two
+          // different slots, never folded together.
+          if(kw==="type"){ sysParam.ptype=unq(val); cmtSet(sysParam,"type",note); lead=[];
+                           continue; }
+          if(kw==="default"){ sysParam["default"]=unq(val); lead=[]; continue; }
+          if(kw==="value"){ sysParam.value=unq(val); cmtSet(sysParam,"value",note); lead=[];
+                            continue; }
+          if(kw==="ns"){ sysParam.ns=unq(val); cmtSet(sysParam,"ns",note); lead=[]; continue; }
+        }
+      }
       if(sect==="nodes"){
+        // a node's own `interfaces:` / `parameters:` sub-block
+        if(key&&!val&&node&&(kw==="interfaces"||kw==="parameters")){
+          nsub=kw; lead=[]; continue;
+        }
+        if(nsub==="parameters"&&node){
+          var pm=PARAM_RE.exec(body);
+          if(pm){
+            var pt=unq(pm[2]), pb=pt.split("::");
+            var np={label:unq(pm[1]),
+                    name:pb.length>1?pb[1]:pb[0],
+                    artifact:pb.length>1?pb[0]:null, value:null};
+            cmtSet(np,"before",lead.slice()); cmtSet(np,"line",note);
+            lead=[]; node.params.push(np); continue;
+          }
+          if(key&&val&&kw==="value"&&node.params.length){
+            node.params[node.params.length-1].value=unq(val); lead=[]; continue;
+          }
+        }
         var arrow=ARROW_RE.exec(body);
         if(arrow&&node){
           var tgt=unq(arrow[3]), bits=tgt.split("::");
@@ -999,7 +1049,7 @@ var DATA = /*__DATA__*/null;
         if(key&&!val&&ind<=4&&!arrow){
           node={label:kw,from:null,namespace:null,ifaces:[],params:[]};
           cmtSet(node,"before",lead.slice()); cmtSet(node,"line",note);
-          lead=[]; out.nodes.push(node); continue;
+          lead=[]; nsub=null; out.nodes.push(node); continue;
         }
         if(node&&key&&val&&kw==="from"){ node.from=unq(val); cmtSet(node,"from",note);
                                          lead=[]; continue; }
@@ -1020,6 +1070,37 @@ var DATA = /*__DATA__*/null;
   //   * a (name, kind) match wins, and the name-only fallback is refused when the same name
   //     exists under another kind (a pub/sub pair would otherwise invent an exposure);
   //   * the ARTIFACT the arrow spells beats the node name when several artifacts share a node.
+  // MIRRORS ros_studio._merge_params. A parameter lives in two unrelated grammar rules:
+  // Parameter (the .ros2 artifact DECLARES it, with a type and a default) and RosParameter
+  // (this system EXPOSES it under a label and overrides its value). Matching is by the
+  // artifact parameter NAME the `ref` arrow-points at, never by the label -- the label is free
+  // text and the corpus does spell it differently from the name.
+  function mergeParams(declared,exposed,nid){
+    var out=[], byName={};
+    (declared||[]).forEach(function(p){
+      var rec={id:nid("p"),name:p.name,ptype:p.ptype,value:p.value,
+               label:null,exposed:false,sysValue:null};
+      if(p.comments) rec.comments=p.comments;
+      byName[p.name]=rec; out.push(rec);
+    });
+    (exposed||[]).forEach(function(e){
+      var name=e.name||e.label, rec=byName[name];
+      if(rec===undefined){
+        // exposed but declared by no .ros2 the project carries -- kept and flagged, the same
+        // way an exposure of an undeclared INTERFACE is
+        rec={id:nid("p"),name:name,ptype:null,value:null,
+             label:e.label,exposed:true,sysValue:e.value,
+             orphan:!(declared&&declared.length)};
+        if(e.comments) rec.comments=e.comments;
+        byName[name]=rec; out.push(rec);
+        return;
+      }
+      rec.label=e.label; rec.exposed=true; rec.sysValue=e.value;
+      if(e.comments){ rec.comments=rec.comments||{};
+                      Object.keys(e.comments).forEach(function(k){ rec.comments[k]=e.comments[k]; }); }
+    });
+    return out;
+  }
   function seedFromFiles(files){
     var sysFiles=[], ros2=[], rosTypes={}, report=[], uid=0;
     function nid(p){ uid++; return p+uid; }
@@ -1173,11 +1254,7 @@ var DATA = /*__DATA__*/null;
           if(f.comments) nf.comments=f.comments;
           n.ifaces.push(nf);
         });
-        if(hit) hit.art.params.forEach(function(p){
-          var np={id:nid("p"),name:p.name,ptype:p.ptype,value:p.value};
-          if(p.comments) np.comments=p.comments;
-          n.params.push(np);
-        });
+        n.params=mergeParams(hit?hit.art.params:[], mn.params||[], nid);
       } else {
         // nothing backs it: keep exactly what the .rossystem exposed
         mn.ifaces.forEach(function(f){
@@ -1186,6 +1263,7 @@ var DATA = /*__DATA__*/null;
           if(f.comments) nf.comments=f.comments;
           n.ifaces.push(nf);
         });
+        n.params=mergeParams([], mn.params||[], nid);
         if(!cat) report.push("node '"+mn.label+"' has no .ros2 among the opened files, so its "
           +"interface TYPES and parameters are unknown. Open "+(pkg||"its package")+".ros2 too.");
       }
@@ -1225,10 +1303,17 @@ var DATA = /*__DATA__*/null;
 
     Object.keys(rosTypes).forEach(function(k){ types[k]=rosTypes[k]; });
 
+    // the system-level `parameters:` block: a peer of nodes: and connections:, not a node
+    var sysParams=(model.params||[]).map(function(p){
+      var rec={id:nid("sp"),name:p.name,ptype:p.ptype,
+               "default":p["default"],value:p.value,ns:p.ns};
+      if(p.comments) rec.comments=p.comments;
+      return rec;
+    });
     var project={
-      formatVersion:4,
+      formatVersion:5,
       system:{name:model.name||"system",fromFile:model.fromFile||null},
-      subSystems:subSystems, nodes:nodes, connections:conns,
+      subSystems:subSystems, params:sysParams, nodes:nodes, connections:conns,
       packages:packages, types:types,
       diagnostics:{global:report.slice(),byNode:{}},
       seededFrom:primary.name, seededInBrowser:true
@@ -2586,7 +2671,43 @@ var DATA = /*__DATA__*/null;
             +'        - '+qd(labels[n.id+"/"+f.id])+': '+f.kind+'-> '
             +qd((n.artifact||"")+"::"+f.name)+noteSuffix(cmtOf(f,"line"))+'\n';});
       }
+      // ROSSYSTEM_NODE_KEYS puts `parameters:` last. A RosParameter is an EXPOSURE with an
+      // override value ('- "label": "artifact::name"' / 'value: v'), not a declaration -- the
+      // declaration is the artifact's and goes into the .ros2 via genRos2.
+      var pex=(n.params||[]).filter(function(p){return p.exposed;})
+        .sort(function(a,b){return a.name<b.name?-1:(a.name>b.name?1:0);});
+      if(pex.length){
+        o+="      parameters:\n";
+        pex.forEach(function(p){
+          var t=String(p.ptype||"").trim()||inferPtype(p.sysValue);
+          o+=cmtBlock(p,"before","        ")
+            +'        - '+qd(p.label||p.name)+': '
+            +qd((n.artifact||"")+"::"+p.name)+noteSuffix(cmtOf(p,"line"))
+            +'\n          value: '+fmtParamValue(t,p.sysValue)+'\n';
+        });
+      }
     });
+    // The system-level `parameters:` block sits between nodes: and connections:.
+    var sp=project.params||[];
+    if(sp.length){
+      o+="  parameters:\n";
+      sp.forEach(function(p){
+        o+=cmtBlock(p,"before","    ")+'    '+qd(p.name)+':'+noteSuffix(cmtOf(p,"line"))+'\n';
+        var ns=String(p.ns==null?"":p.ns).trim();
+        // `ns:` is a Namespace: one of three bare KEYWORDS (GlobalNamespace |
+        // RelativeNamespace | PrivateNamespace, Basics.xtext:13-32), NOT an EString. Quoting
+        // it is a parse error in the real server -- see the note in emit_rossystem.
+        if(ns) o+='      ns: '+ns+noteSuffix(cmtOf(p,"ns"))+'\n';
+        // Slot order ns -> type (-> its default) -> value. `default:` belongs to the
+        // ParameterType, `value:` to the Parameter: two different slots, never folded.
+        var d=p["default"];
+        var t=String(p.ptype||"").trim()||inferPtype((d!=null&&d!=="")?d:p.value);
+        o+='      type: '+t+noteSuffix(cmtOf(p,"type"))+'\n';
+        if(d!=null&&d!=="") o+='      default: '+fmtParamValue(t,d)+'\n';
+        if(p.value!=null&&p.value!=="")
+          o+='      value: '+fmtParamValue(t,p.value)+noteSuffix(cmtOf(p,"value"))+'\n';
+      });
+    }
     if(project.connections.length){
       o+="  connections:\n";
       project.connections.forEach(function(c){
@@ -2704,6 +2825,41 @@ var DATA = /*__DATA__*/null;
     if(ptype==="Double") return pyRepr(pyFloat(raw));
     return qs2(raw);
   }
+  // MIRRORS ros_studio._infer_ptype. A parameter the project knows only as a .rossystem
+  // exposure carries a value and no type -- RosParameter has no `type:` slot -- but the .ros2
+  // declaration this project writes for a hand-backed artifact needs one (Basics.xtext:46).
+  function inferPtype(value){
+    var raw=((value==null)?"":String(value)).trim();
+    if(!raw) return "String";
+    var lo=raw.toLowerCase();
+    if(lo==="true"||lo==="false") return "Boolean";
+    var c=raw.charAt(0);
+    if(c==='"'||c==="'"||c==="[") return "String";
+    if(/^[+-]?\d+$/.test(raw)) return "Integer";
+    if(raw===String(pyFloat(raw))||/^[+-]?(\d+\.\d*|\.\d+)([eE][+-]?\d+)?$/.test(raw)
+       ||/^[+-]?\d+[eE][+-]?\d+$/.test(raw)) return "Double";
+    return "String";
+  }
+  // MIRRORS ros_studio._art_param_decl -- ONE definition of the .ros2 declaration half, used by
+  // both genRos2 and projectFacts so the emitter and its prediction cannot drift.
+  function artParamDecl(p){
+    var val=p.value;
+    if((val==null||val==="")&&p.sysValue!=null&&p.sysValue!=="") val=p.sysValue;
+    var t=String(p.ptype||"").trim()||inferPtype(val);
+    return [t,val];
+  }
+  // MIRRORS ros_studio._sys_param_fact. Slot order is ns -> type (-> its default) -> value.
+  function sysParamFact(p){
+    var d=p["default"], v=p.value;
+    var t=String(p.ptype||p.type||"").trim()
+          ||inferPtype((d!=null&&d!=="")?d:v);
+    var out=[];
+    if(p.ns!=null&&p.ns!=="") out.push("ns="+p.ns);
+    out.push("type="+t);
+    if(d!=null&&d!=="") out.push("default="+unquoteEmitted(fmtParamValue(t,d)));
+    if(v!=null&&v!=="") out.push("value="+unquoteEmitted(fmtParamValue(t,v)));
+    return out.join("; ");
+  }
   function genQos(qos,indent){
     if(!qos) return "";
     var out=[];
@@ -2778,10 +2934,11 @@ var DATA = /*__DATA__*/null;
       if(ps.length){
         o+="      parameters:\n";
         ps.forEach(function(p){
+          var d=artParamDecl(p);
           o+=cmtBlock(p,"ros2Before","        ")
             +"        "+qs2(p.name)+":"+noteSuffix(cmtOf(p,"ros2Line"))
-            +"\n          type: "+(p.ptype||"String")
-            +"\n          default: "+fmtParamValue(p.ptype,p.value)+"\n";
+            +"\n          type: "+d[0]
+            +"\n          default: "+fmtParamValue(d[0],d[1])+"\n";
         });
       }
     });
@@ -2862,7 +3019,8 @@ var DATA = /*__DATA__*/null;
     var facts={system:{name:factStr(document.getElementById("sysname").value||"system"),
                        fromFile:factStr(project.system&&project.system.fromFile)},
                subSystems:(project.subSystems||[]).map(function(s){return factStr(s.ref);}),
-               nodes:{}, connections:[], packages:{}, types:{}};
+               nodes:{}, params:{}, connections:[], packages:{}, types:{}};
+    (project.params||[]).forEach(function(p){ facts.params[p.name]=sysParamFact(p); });
     project.nodes.forEach(function(n){
       if(n.backing==="sub") return;      // the subSystems: block provides it (RM090)
       var rec={from:n.pkg+"."+n.node,
@@ -2872,6 +3030,11 @@ var DATA = /*__DATA__*/null;
         var lbl=labels[n.id+"/"+f.id];
         if(lbl==null) return;
         rec.exposures[lbl]=f.kind+"-> "+(n.artifact||"")+"::"+f.name;
+      });
+      // keyed by the exposure LABEL, matching source_facts, which reads it back off the
+      // `- "label": "artifact::name"` line the emitter writes.
+      (n.params||[]).forEach(function(p){
+        if(p.exposed) rec.parameters[p.label||p.name]=factStr(p.sysValue);
       });
       facts.nodes[n.label]=rec;
     });
@@ -2895,7 +3058,8 @@ var DATA = /*__DATA__*/null;
           if(q) arec.qos[key]=q;
         });
         (n.params||[]).forEach(function(p){
-          arec.parameters[p.name]=paramFact(p.ptype,p.value);
+          var d=artParamDecl(p);
+          arec.parameters[p.name]=paramFact(d[0],d[1]);
         });
         pentry.artifacts[factStr(n.artifact)]=arec;
       });

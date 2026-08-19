@@ -1,0 +1,75 @@
+# param_probe -- the witness for BOTH parameter slots in a .rossystem.
+#
+# The defect it pins: a parameter lives in two unrelated grammar rules and the studio carried
+# only one of them.
+#
+#   Parameter    (Basics.xtext:41)     `name: / ns? / type: T / value: V`
+#       the system-level `parameters:` block below. It had NO slot in the project model at all:
+#       ros_plot read it, the seeder dropped it, and because the diff's fact tree had no slot
+#       either, `generate --diff` answered "no model-level change since the seed" while
+#       deleting all of them. assets/rosmodelscatalog/arms/UR/ur_robot.rossystem loses five
+#       this way. Worse, the comment scanner mistook the block for a node member (nothing
+#       cleared `node` when `nodes:` ended), so its entries were registered as NODES and
+#       reported as "on node 'robot_ip', which this project does not model".
+#
+#   RosParameter (RosSystem.xtext:78)  `- "label": "artifact::name" / value: V`
+#       a node's `parameters:` block -- an EXPOSURE with an override value, structurally the
+#       twin of RosInterface. The studio kept only the .ros2 declaration side, so `generate`
+#       re-emitted the override as the ARTIFACT's default -- a different statement -- and for a
+#       catalogue-backed node, which gets no .ros2 written, it vanished outright.
+#       examples/turtlebot3_navigation.rossystem lost bt_navigator's `use_sim_time: false`.
+#
+# Same label-vs-name split that has now bitten this repo three times on interfaces.
+param_probe:
+  fromFile: "param_probe/launch/probe.launch.py"
+  nodes:
+    "tuner":
+      from: "param_pkg.tuner"
+      interfaces:
+        - "setpoint_pub": pub-> "tuner::setpoint"
+        - "measured_sub": sub-> "tuner::measured"
+      parameters:
+        - "loop_enabled": "tuner::enabled"
+          value: false
+        # LABEL differs from the artifact parameter NAME on purpose: keying the merge by label
+        # instead of by the name the arrow points at would mis-link every one of these.
+        - "loop_gain": "tuner::gain"  # PRESERVED trailing comment on a parameter exposure
+          value: 1.25
+        # Declared Integer with default 10; this instance overrides it. The override must land
+        # in the .rossystem `value:` slot and must NOT rewrite the artifact's `default:`.
+        - "loop_window": "tuner::window"
+          value: 40
+    "logger":
+      from: "param_pkg.logger"
+      interfaces:
+        - "logged_sub": sub-> "logger::setpoint"
+      parameters:
+        # param_pkg.logger declares NO parameters, so this exposure is an `orphan`: kept and
+        # flagged rather than silently dropped, exactly as an undeclared INTERFACE exposure is.
+        - "log_level": "logger::level"
+          value: 'debug'
+  parameters:
+    # A declaration-only parameter: `type:` and nothing else. It must NOT grow an invented
+    # value on the first round-trip.
+    "robot_ip":  # used by several nodes
+      type: String
+    # type + its own default (the default belongs to the ParameterType, Basics.xtext:77-80)
+    "controller":
+      type: String
+      default: 'joint_trajectory'
+    # ns + type + value: all three slots at once, in the grammar's fixed order. `ns:` is a
+    # Namespace -- one of three bare KEYWORDS, never a quoted string (Basics.xtext:13-32).
+    # The real 3.1.0 server rejects the quoted form outright; the studio used to write it.
+    "sim_time":
+      ns: PrivateNamespace
+      type: Boolean
+      value: true
+    "rate_hz":
+      type: Integer
+      value: 50
+    "tolerance":
+      type: Double
+      value: 0.001
+  connections:
+    - ["setpoint_pub", "measured_sub"]  # tuner -> tuner : std_msgs/msg/Float64 (self-loop, legal)
+    - ["setpoint_pub", "logged_sub"]  # tuner -> logger : std_msgs/msg/Float64

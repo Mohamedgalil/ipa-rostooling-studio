@@ -59,12 +59,13 @@ var STUDIO = path.join(ROOT, "scripts", "ros_studio.py");
 // that has silently truncated this project's models three times. The SEED cases below hold it
 // to the Python seeder's own output, fact for fact, on every checked-in fixture.
 var WANTED = ["splitLines", "indentOf", "splitComment", "cleanNote", "unq", "cmtSet",
-  "parseRos2", "parseRos", "parseRossystem", "seedFromFiles",
+  "parseRos2", "parseRos", "parseRossystem", "mergeParams", "seedFromFiles",
   "qd", "qs2", "nodeById", "ifaceById", "ifaceConnected", "exposureLabels",
   "genSystem",
   "handPkgNodes", "foldArtifacts", "localTypePkgs", "companionTypes", "companionPkgs",
   "typeAutoNote",
-  "pyFloat", "pyRepr", "fmtParamValue", "genQos", "genRos2", "genRos",
+  "pyFloat", "pyRepr", "fmtParamValue", "inferPtype", "artParamDecl", "sysParamFact",
+  "genQos", "genRos2", "genRos",
   "cmtClean", "cmtList", "cmtOf", "cmtBlock", "noteSuffix",
   "factStr", "unquoteEmitted", "paramFact", "qosFact", "ifaceFactKey", "projectFacts",
   "isFactObj", "factSummary", "diffWalk", "diffFacts", "diffShow", "padTo", "formatDiff"];
