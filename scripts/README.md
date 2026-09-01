@@ -286,7 +286,7 @@ standard one. `RM082`/`RM085`/`RM086` are ERROR because in those cases the packa
 known-complete in the catalogue, so a name that doesn't match it is a real defect, not a
 plausible gap — exactly the same reasoning `RM082`'s type-side counterpart already used.
 
-**Why this exists**: `examples/turtlebot2_navigation.rossystem` originally referenced
+**Why this exists**: `examples/archive/turtlebot2_navigation.rossystem` originally referenced
 `nav2_amcl.amcl`, `nav2_bt_navigator.bt_navigator`, `nav2_planner.planner_server` and
 `nav2_controller.controller_server` — all invented from general Nav2 knowledge with a plausible
 but wrong `nav2_`-style package prefix (the real ones have no prefix at all: `amcl.amcl`,
@@ -371,7 +371,7 @@ damage before it was closed: because the skill documented `default:` only under
 scalar parameter and **rewrote `default:` to `value:`** — a silent semantic change (they are
 different metamodel slots) that parsed cleanly and that the linter, correctly, never complained
 about. The gap is now closed in `emission-profile.md` rule 23, `SKILL.md` §9,
-`references/ros2-syntax.md` §6 and the `worked-examples.md` §4 failure catalogue, and
+`skills/ros-model/references/ros2-syntax.md` §6 and the `worked-examples.md` §4 failure catalogue, and
 `tests/roundtrip.py` now extracts `.default` as its own fact category so the rewrite surfaces as a
 difference instead of vanishing.
 
@@ -477,7 +477,7 @@ the script appears in this README and vice versa, with no orphans in either dire
 ### Whole-corpus run — 336 files, 0 crashes
 
 **Re-measured 2026-08-14** against the current script. It emits **82** distinct ids -- RM000-RM094
-plus the `RM002B` and `RM008T` variants -- which is **81 rules**, RM000 being the internal
+plus the `RM002B` and `RM008T` variants -- which is **81 rules**<!--@count:rules-->, RM000 being the internal
 read/parse failure rather than a rule. (RM094, the column-0 comment check, and the RM090/RM033
 severity corrections landed after this sweep and change none of its counts: no corpus file
 exhibits any of the three.) This supersedes the

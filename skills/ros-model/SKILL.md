@@ -324,7 +324,7 @@ this is a real typo, not a plausible gap) enforce this at lint time and suggest 
 
 **Before emitting any `.rossystem` `from:` or arrow/parameter target**, resolve it the same way
 against `assets/node_index.json`. This is exactly the mistake that shipped in an earlier
-revision of `examples/turtlebot2_navigation.rossystem`: `nav2_amcl.amcl`, `nav2_bt_navigator.
+revision of `examples/archive/turtlebot2_navigation.rossystem`: `nav2_amcl.amcl`, `nav2_bt_navigator.
 bt_navigator`, `nav2_planner.planner_server` and `nav2_controller.controller_server` were all
 invented from general Nav2 knowledge with a plausible `nav2_`-style prefix — the real catalogue
 names are `amcl.amcl`, `bt_navigator.bt_navigator`, `planner_server.planner_server`,

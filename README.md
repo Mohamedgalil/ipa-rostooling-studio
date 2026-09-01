@@ -28,9 +28,9 @@ validator rule table and an enforced emission profile.
 ### ✅ There is a working oracle — use it
 
 `tests/oracle/ask_oracle.py` drives the real RosTooling language servers over stdio and reports
-their diagnostics. All 24 cases currently behave as documented -- 15 ACCEPTED and 9 REJECTED,
-the rejections being negative controls that confirm the hard
-exclusions and three that settled the `from:` reference form. See
+their diagnostics. All 25 cases<!--@count:oracle_cases--> currently behave as documented; the
+rejections are negative controls that confirm the hard exclusions, plus three that settled the
+`from:` reference form. The per-case verdicts live with the runs that produced them, in
 [`tests/oracle/RESULTS.md`](tests/oracle/RESULTS.md).
 
 ```bash
@@ -138,8 +138,9 @@ tests/studio_roundtrip.py       /ros-studio seed -> generate: round-trip, orphan
 tests/studio_parity.js          the editor's .rossystem preview vs the Python emitter, byte for byte
 tests/fixtures/manifest.md      fixture inventory
 tests/regenerated/              adversarial regeneration outputs (4 corpus targets)
-tests/oracle/ask_oracle.py      drives the REAL language servers; 24 cases
+tests/oracle/ask_oracle.py      drives the REAL language servers; 25 cases
 tests/oracle/RESULTS.md         what the toolchain actually said
+tests/docs_check.py             holds the PROSE to the code: cited paths, rule ids, marked counts
 emission-profile.md             NORMATIVE formatting profile, 37 numbered rules
 docs/grammar-subset.md          what the pinned JAR can lex; the HEAD-vs-JAR token diff
 research/validator-rules.md     transcription of both *Validator.xtend files, with severities

@@ -469,8 +469,8 @@ Note the corpus figures correct an earlier claim in this document that only `MAN
 discriminated. Many more files do; the sweep that missed them was not stripping trailing comments
 from artifact lines, so artifacts written `foo: # comment` were never indexed.
 
-**Fixed in:** `SKILL.md` (new rule 4b + self-check 10), `references/rossystem-syntax.md` §3 and §4
-and §5, `emission-profile.md` rules 29/30, `references/worked-examples.md`, `agents/ros-modeler.md`,
+**Fixed in:** `SKILL.md` (new rule 4b + self-check 10), `skills/ros-model/references/rossystem-syntax.md` §3 and §4
+and §5, `emission-profile.md` rules 29/30, `skills/ros-model/references/worked-examples.md`, `agents/ros-modeler.md`,
 `scripts/rosmodel_lint.py` (RM020/RM056/RM057 hints), `scripts/README.md`, and
 `tests/regenerated/mani-ur/system.rossystem` — the one regenerated fixture carrying the bad form.
 
