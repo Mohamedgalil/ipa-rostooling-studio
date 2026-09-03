@@ -35,24 +35,29 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .statuschip.pulse{animation:chippulse 1.2s ease-out 2}
   @keyframes chippulse{0%{box-shadow:0 0 0 0 var(--dead-wash)}70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
   @media (prefers-reduced-motion:reduce){.statuschip.pulse{animation:none}}
-  #statusPop{position:fixed;margin:0;width:min(380px,calc(100vw - 1.5rem));max-height:70vh;overflow:auto;
+  #statusPop,#nodeIssuePop{position:fixed;margin:0;width:min(380px,calc(100vw - 1.5rem));max-height:70vh;overflow:auto;
     background:var(--surface);color:var(--ink);border:1px solid var(--rule);border-radius:10px;
-    box-shadow:var(--shadow-lift);padding:.75rem .85rem;font-size:.78rem;line-height:1.45}
-  #statusPop::backdrop{background:transparent}
-  #statusPop .popclose{position:absolute;top:.5rem;right:.5rem;width:1.4rem;height:1.4rem;border-radius:50%;
+    box-shadow:var(--shadow-lift);padding:.75rem .85rem .75rem 2.1rem;font-size:.78rem;line-height:1.45}
+  #statusPop::backdrop,#nodeIssuePop::backdrop{background:transparent}
+  #statusPop .popclose,#nodeIssuePop .popclose{position:absolute;top:.5rem;right:.5rem;width:1.4rem;height:1.4rem;border-radius:50%;
     border:none;background:transparent;color:var(--ink-3);font-size:1rem;line-height:1;cursor:pointer}
-  #statusPop .popclose:hover{background:var(--surface-2);color:var(--ink)}
-  #statusPop{padding-right:2.1rem}
-  #statusPop h5{margin:0 0 .35rem;font-family:var(--mono);font-size:.64rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
-  #statusPop .poprow{padding:.45rem 0;border-top:1px solid var(--rule-soft)}
-  #statusPop .poprow:first-child{padding-top:0;border-top:none}
-  #statusPop pre{white-space:pre-wrap;font-family:var(--mono);font-size:.72rem;color:var(--dead);margin:0}
-  #statusPop .popissue{display:block;width:100%;text-align:left;background:none;border:none;border-left:2px solid var(--warn);padding:.15rem 0 .15rem .5rem;font-size:.74rem;color:var(--ink-2);cursor:pointer}
-  #statusPop .popissue.e{border-color:var(--dead)}
-  #statusPop .popissue:hover{background:var(--surface-2)}
-  #statusPop .popissue.noref{cursor:default}
-  #statusPop .popissue.noref:hover{background:none}
-  #statusPop .popfoot{margin-top:.5rem}
+  #statusPop .popclose:hover,#nodeIssuePop .popclose:hover{background:var(--surface-2);color:var(--ink)}
+  #statusPop h5,#nodeIssuePop h5{margin:0 0 .35rem;font-family:var(--mono);font-size:.64rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
+  #statusPop .poprow,#nodeIssuePop .poprow{padding:.45rem 0;border-top:1px solid var(--rule-soft)}
+  #statusPop .poprow:first-child,#nodeIssuePop .poprow:first-child{padding-top:0;border-top:none}
+  #statusPop pre,#nodeIssuePop pre{white-space:pre-wrap;font-family:var(--mono);font-size:.72rem;color:var(--dead);margin:0}
+  #statusPop .popissue,#nodeIssuePop .popissue{display:block;width:100%;text-align:left;background:none;border:none;border-left:2px solid var(--warn);padding:.15rem 0 .15rem .5rem;font-size:.74rem;color:var(--ink-2);cursor:pointer}
+  #statusPop .popissue.e,#nodeIssuePop .popissue.e{border-color:var(--dead)}
+  #statusPop .popissue:hover,#nodeIssuePop .popissue:hover{background:var(--surface-2)}
+  #statusPop .popissue.noref,#nodeIssuePop .popissue.noref{cursor:default}
+  #statusPop .popissue.noref:hover,#nodeIssuePop .popissue.noref:hover{background:none}
+  #statusPop .popfoot,#nodeIssuePop .popfoot{margin-top:.5rem}
+  /* the node-issue popover's row is heavier than a status-popover row: it carries the "what to
+     do", which the status popover leaves to the rail. */
+  #nodeIssuePop .popissuewrap{border-left:2px solid var(--warn);padding:.3rem 0 .3rem .5rem;margin-bottom:.3rem}
+  #nodeIssuePop .popissuewrap.e{border-color:var(--dead)}
+  #nodeIssuePop .popissuewrap button.popissue{border-left:none;padding:0;margin-bottom:.15rem;font-weight:600}
+  #statusPop .popfix,#nodeIssuePop .popfix{color:var(--ink-3);font-size:.72rem;line-height:1.35;margin-top:.1rem}
 
   .topbar{display:flex;align-items:center;gap:.9rem;padding:.55rem .9rem;border-bottom:1px solid var(--rule);background:var(--surface);flex-shrink:0}
   .brand{font-family:var(--display);font-size:1.05rem;font-weight:600;letter-spacing:-.01em}
@@ -94,6 +99,7 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .issuelist .it.e{border-color:var(--dead)}
   .issuelist .ittext{flex:1;text-align:left}
   .issuelist .itcode{font-family:var(--mono);font-size:.9em;color:var(--ink-3);flex-shrink:0}
+  .issuelist .itfix{font-weight:400;color:var(--ink-3);font-size:.92em;line-height:1.35;margin-top:.1rem}
   .itgroup .itgrouphead{width:100%}
   .itkids{padding-left:.6rem;margin-top:.25rem;display:flex;flex-direction:column;gap:.25rem;border-left:1px dashed var(--rule-soft)}
   /* a row with somewhere to jump to -- what's interactive should look interactive */
@@ -110,8 +116,8 @@ EDITOR_TEMPLATE = r'''<!doctype html>
      .hasdiag (persistent, the server's verdict) */
   .node.flash{border-color:var(--warn)!important;box-shadow:0 0 0 3px var(--warn-wash),var(--shadow-lift)!important}
   .node.flash.e{border-color:var(--dead)!important;box-shadow:0 0 0 3px var(--dead-wash),var(--shadow-lift)!important}
-  .iedit.flash,.pkgrow.flash{outline:2px solid var(--warn);outline-offset:1px}
-  .iedit.flash.e,.pkgrow.flash.e{outline:2px solid var(--dead)}
+  .iedit.flash,.pkgrow.flash,input.flash{outline:2px solid var(--warn);outline-offset:1px}
+  .iedit.flash.e,.pkgrow.flash.e,input.flash.e{outline:2px solid var(--dead)}
 
   /* The viewport clips and NOTHING scrolls natively: pan and zoom are one CSS transform on
      .canvas, so the SVG wire layer -- a child of the same element -- is carried by the exact
@@ -130,6 +136,16 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   /* the inline editor sits where the text was, so the card does not jump when it opens */
   .node input.inline{font:inherit;font-size:.8rem;padding:.05em .25em;border:1px solid var(--accent);
     border-radius:3px;background:var(--surface);color:var(--ink);min-width:60px;max-width:22ch}
+  /* the typeahead dropdown -- see makeTypeahead(). position:fixed + document.body so it floats
+     free of the canvas's own zoom/pan transform (the input it belongs to may be inside that
+     transform; the dropdown never should be) and free of the inspector's overflow:auto clipping. */
+  .typeahead-box{position:fixed;z-index:80;max-height:280px;overflow:auto;
+    background:var(--surface);border:1px solid var(--rule);border-radius:8px;box-shadow:var(--shadow-lift);
+    padding:.25rem;font-size:.78rem}
+  .typeahead-box .ta-row{padding:.3rem .5rem;border-radius:5px;cursor:pointer;font-family:var(--mono);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .typeahead-box .ta-row.active,.typeahead-box .ta-row:hover{background:var(--accent-wash);color:var(--accent-2)}
+  .typeahead-box .ta-empty{padding:.3rem .5rem;color:var(--ink-3)}
   .canvas-wrap.panning{cursor:grabbing}
   .canvas-wrap.dropping{outline:2px dashed var(--accent);outline-offset:-6px}
   /* floating over the transformed layer, so they keep their size at every zoom level */
@@ -157,13 +173,26 @@ EDITOR_TEMPLATE = r'''<!doctype html>
      borrowed, and it is read-only everywhere in the inspector. */
   .node.sub{border-style:dotted;opacity:.9}
   .node.hasdiag{border-color:var(--dead)}
+  /* live instant-check severity, distinct from .hasdiag (the server's own verdict from a prior
+     Commit): an ERROR earns the same red border treatment, a WARNING only gets the icon below,
+     not a border colour change -- most warnings here are informational (RM044 is legal and the
+     server accepts it), and ringing every warned node in colour would just be noise. */
+  .node.issue-e{border-color:var(--dead)}
   .node .nhead{display:flex;align-items:center;gap:.4rem;padding:.45rem .6rem;border-bottom:1px solid var(--rule-soft);cursor:grab}
   .node .nhead:active{cursor:grabbing}
-  .node .ntitle{font-weight:650;font-size:.84rem}
+  .node .ntitle{font-weight:650;font-size:.84rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
   .node .nfrom{font-family:var(--mono);font-size:.63rem;color:var(--ink-3);padding:.25rem .6rem 0}
   .node .badge{font-family:var(--mono);font-size:.56rem;letter-spacing:.04em;text-transform:uppercase;padding:.06em .4em;border-radius:3px;background:var(--surface-2);color:var(--ink-3)}
   .node .badge.cat{background:var(--accent-wash);color:var(--accent-2)}
   .node .diagflag{font-size:.62rem;color:var(--dead);font-family:var(--mono);padding:.1rem .6rem .3rem}
+  /* the per-node warning icon: persists for as long as nodeIssueIndex carries an entry for this
+     node, and only that long -- see the comment above indexIssuesByNode(). */
+  .node .nwarn{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;gap:.15rem;border:none;cursor:pointer;
+    background:var(--warn-wash);color:var(--warn);border-radius:999px;padding:.2rem .45rem;font-size:.68rem;line-height:1.4;min-height:1.5rem}
+  .node .nwarn.e{background:var(--dead-wash);color:var(--dead)}
+  .node .nwarn:hover{filter:brightness(0.95)}
+  .node .nwarn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  .node .nwarnc{font-family:var(--mono);font-weight:700}
   .ifaces{padding:.35rem .1rem .5rem}
   .iface{position:relative;display:flex;align-items:center;gap:.4rem;padding:.13rem .6rem;font-size:.75rem}
   .iface .kd{font-family:var(--mono);font-size:.56rem;font-weight:700;text-transform:uppercase;width:2.2em;text-align:center;border-radius:3px;padding:.05em 0;color:#fff}
@@ -431,6 +460,7 @@ EDITOR_TEMPLATE = r'''<!doctype html>
     </button>
   </div>
   <div popover="auto" id="statusPop"></div>
+  <div popover="auto" id="nodeIssuePop" role="dialog" aria-label="Node issues"></div>
   <span id="statusLive" class="srOnly" aria-live="polite"></span>
   <div class="seg" id="modeSeg">
     <button data-mode="view">View</button><button data-mode="edit" class="on">Edit</button>
@@ -508,7 +538,6 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   <button class="tbtn" id="drawerClose" title="Close this panel" aria-label="Close panel">&#10005;</button>
 </div>
 
-<datalist id="typelist"></datalist>
 <datalist id="pkglist"></datalist>
 <datalist id="ftypelist"></datalist>
 <datalist id="nslist"></datalist>
@@ -701,9 +730,9 @@ var DATA = /*__DATA__*/null;
   var opNotice=DATA.banner?{sev:"err",title:"Generation failed",html:'<pre>'+esc(DATA.banner)+'</pre>'}:null;
 
   // ---- datalists (offline autocomplete) ----
+  // Message types are NOT a <datalist> here -- see makeTypeahead()/wireTypeahead() below. At
+  // 600+ vendored entries, the native control had no search and rendered the whole list.
   (function(){
-    var tl=document.getElementById("typelist");
-    TYPES.forEach(function(t){var o=document.createElement("option");o.value=t;tl.appendChild(o);});
     var pl=document.getElementById("pkglist");
     PACKAGES.forEach(function(p){var o=document.createElement("option");o.value=p;pl.appendChild(o);});
     // .ros field types: the primitives only. A spec reference is quoted and fully qualified,
@@ -767,6 +796,11 @@ var DATA = /*__DATA__*/null;
   // first keystroke records the pre-edit project and the rest ride along, so Ctrl+Z undoes the
   // word rather than the letter. Discrete actions pass no tag and always push.
   function pushUndo(tag){
+    // Any edit invalidates the server's prior verdict wholesale, not just for the node touched:
+    // DIAG is what the last Commit said about the file as it stood THEN, and the file has now
+    // changed. Without this, fixing exactly what a diagnostic complained about left its warning
+    // icon on screen forever -- there was no code path that ever cleared DIAG at all.
+    if(Object.keys(DIAG).length) DIAG={};
     var now=Date.now();
     if(tag && tag===lastTag && (now-lastTagAt)<COALESCE_MS){ lastTagAt=now; markDirty(); return; }
     lastTag=tag||null; lastTagAt=now;
@@ -798,6 +832,12 @@ var DATA = /*__DATA__*/null;
     project=JSON.parse(json);
     project.nodes=project.nodes||[]; project.connections=project.connections||[];
     project.packages=project.packages||{}; project.system=project.system||{};
+    // Re-derive, not just clear: this path also serves "restore autosave" (a genuinely
+    // different project's data). Both minters assign node ids sequentially and deterministically
+    // ("x1001", "n1", ...), so loading a different project here without resyncing DIAG risks
+    // its old entries surviving under an id that now names an unrelated node -- a stale server
+    // diagnostic reappearing, permanently, on the wrong card.
+    DIAG=(project.diagnostics&&project.diagnostics.byNode)||{};
     syncUid();
     document.getElementById("sysname").value=(project.system&&project.system.name)||"system";
     if(selNode&&!nodeById(selNode)) selNode=null;   // it may have been deleted in this state
@@ -1077,6 +1117,12 @@ var DATA = /*__DATA__*/null;
     if(drillRef){ renderDrill(); return; }
     var db=document.getElementById("drillbar");
     if(db) db.remove();
+    // BEFORE the node loop, not after: renderNode() reads nodeIssueIndex (built here) to paint
+    // the per-node warning icon, so the index has to be current before any card exists. Nodes
+    // are removed and rebuilt from scratch on every render() (next line), which is exactly what
+    // keeps that icon from ever going stale -- there is no incremental patch to get wrong, only
+    // a fresh paint against whatever runIssues() just computed.
+    runIssues();
     canvas.className="canvas "+(level===4?"deps":"lvl"+level);
     [].slice.call(canvas.querySelectorAll(".node,.pkgbox,.subframe")).forEach(function(e){e.remove();});
     for(var i=0;i<project.nodes.length;i++){
@@ -1097,7 +1143,7 @@ var DATA = /*__DATA__*/null;
     sizeCanvas();          // before drawEdges: the SVG follows the canvas box at 100%/100%
     drawEdges();
     applyFind();           // render() replaced every element, so the highlight has to go back
-    runIssues();
+    refreshNodeIssuePopIfOpen();   // nodes exist again now -- safe to look the icon back up
   }
   function wireSubToggles(){
     canvas.querySelectorAll("[data-expand]").forEach(function(x){
@@ -1121,6 +1167,14 @@ var DATA = /*__DATA__*/null;
                +"the companion, or open its .rossystem alongside this one.");
       return;
     }
+    // The drilled-in view wipes every outer .node from the canvas (renderDrill draws the
+    // referenced file's OWN graph instead), so any open per-node popover is now anchored over
+    // a card that no longer exists. render()'s early return for drillRef also means neither
+    // runIssues() nor refreshNodeIssuePopIfOpen() run while drilled in, so nothing else would
+    // catch this.
+    var nip=document.getElementById("nodeIssuePop");
+    if(nip&&nip.hidePopover&&nip.matches&&nip.matches(":popover-open")) nip.hidePopover();
+    nodePopNodeId=null;
     drillRef=ref; selNode=null; selEdge=null; render(); fillInspector();
   }
   function closeDrill(){ drillRef=null; render(); fillInspector(); }
@@ -1220,11 +1274,23 @@ var DATA = /*__DATA__*/null;
   }
   function renderNode(n){
     var el=document.createElement("div");
-    el.className="node"+(n.backing==="cat"?" cat":"")+(n.backing==="sub"?" sub":"")+(selNode===n.id?" sel":"")+((DIAG[n.id]&&DIAG[n.id].length)?" hasdiag":"");
+    var live=nodeIssueIndex[n.id]||[];
+    var liveErrs=live.filter(function(it){return it.sev==="e";}).length, liveWarns=live.length-liveErrs;
+    var hasdiag=DIAG[n.id]&&DIAG[n.id].length;
+    // .hasdiag and .issue-e render identically (both border-color:var(--dead)) -- they're kept
+    // as separate classes for what each MEANS in the CSS comments (the server's last verdict vs.
+    // the live instant checks), not because they look different, so there's no reason to gate
+    // one on the absence of the other.
+    el.className="node"+(n.backing==="cat"?" cat":"")+(n.backing==="sub"?" sub":"")+(selNode===n.id?" sel":"")
+      +(hasdiag?" hasdiag":"")+(liveErrs?" issue-e":"");
     el.style.left=n.x+"px"; el.style.top=n.y+"px"; el.dataset.n=n.id;
     var fromStr='"'+n.pkg+"."+n.node+'"';
     var badge=n.backing==="sub"?"subsystem":(n.backing==="cat"?"catalogue":"authored");
+    var warnLabel=(liveErrs?liveErrs+" error"+(liveErrs===1?"":"s"):"")+(liveErrs&&liveWarns?", ":"")+(liveWarns?liveWarns+" warning"+(liveWarns===1?"":"s"):"");
     var h='<div class="nhead" data-drag><span class="ntitle">'+esc(n.label)+'</span>'
+      +(live.length?'<button type="button" class="nwarn'+(liveErrs?" e":"")+'" '
+        +'aria-haspopup="true" aria-expanded="false" aria-label="'+esc(n.label+": "+warnLabel)+'" title="'+esc(warnLabel)+' — click for details">'
+        +'<span aria-hidden="true">⚠<span class="nwarnc">'+live.length+'</span></span></button>':'')
       +'<span class="badge '+(n.backing==="cat"?"cat":"")+'" title="'
       +(n.backing==="sub"?"reached through subSystems: &quot;"+esc(n.subRef||"")+"&quot; — declared in that file, not this one":"")
       +'">'+badge+'</span></div>'
@@ -1232,6 +1298,8 @@ var DATA = /*__DATA__*/null;
       +((n.namespace&&String(n.namespace).trim())?'<br>namespace: '+esc(n.namespace):'')
       +'</div><div class="ifaces"></div>';
     el.innerHTML=h;
+    var warnBtn=el.querySelector(".nwarn");
+    if(warnBtn) warnBtn.onclick=function(ev){ ev.stopPropagation(); openNodeIssuePop(n.id,warnBtn); };
     var box=el.querySelector(".ifaces");
     for(var j=0;j<n.ifaces.length;j++){
       var f=n.ifaces[j], src=SRC_SIDE[f.kind];
@@ -1955,6 +2023,7 @@ var DATA = /*__DATA__*/null;
         +"There are changes since the last Commit. Loading discards them.")) return false;
     pushUndo("load:"+sourceName);
     project=next;
+    DIAG=(project.diagnostics&&project.diagnostics.byNode)||{};   // this is a different project now
     selNode=null; selEdge=null;
     if(project.system&&project.system.name)
       document.getElementById("sysname").value=project.system.name;
@@ -2037,14 +2106,100 @@ var DATA = /*__DATA__*/null;
   // it) without crossing the window for each one. Double-click the text; Enter commits, Escape
   // cancels, blur commits. Read-only backings (subsystem, and a catalogue node's interfaces)
   // refuse, because those names belong to the referenced file, not to this one.
+  // A small "search as you type" dropdown for a text input backed by a candidate list, in
+  // place of the browser's own <datalist> -- which, for this app's message-type catalogue
+  // (600+ entries once a real project is loaded), renders every one of them, unfiltered and
+  // unstyled, in whatever a given browser feels like doing with a list that long. Returns a
+  // controller rather than wiring its own keydown/blur listeners, so a caller that already owns
+  // the input's keyboard handling (inlineEdit, below) can drive it without two listeners on the
+  // same element racing each other over the same keys.
+  function makeTypeahead(inputEl,candidates,onPick){
+    var box=null,items=[],activeIdx=-1;
+    function close(){ if(box){ box.remove(); box=null; } activeIdx=-1; }
+    function position(){
+      if(!box) return;
+      var r=inputEl.getBoundingClientRect();
+      box.style.left=Math.max(4,Math.min(r.left,window.innerWidth-box.offsetWidth-4))+"px";
+      box.style.top=(r.bottom+2)+"px"; box.style.width=Math.max(r.width,240)+"px";
+    }
+    function open(){
+      var q=inputEl.value.trim().toLowerCase();
+      // substring, not prefix: a package/msg/Name string is often recalled by the NAME
+      // ("Odometry") rather than the package it lives in, which a prefix-only match would miss
+      // entirely. Ranked so a prefix/earlier hit still sorts above a coincidental later one.
+      var matches=q?candidates.filter(function(c){return c.toLowerCase().indexOf(q)>=0;}):candidates;
+      matches=matches.slice().sort(function(a,b){
+        var aw=a.toLowerCase().indexOf(q),bw=b.toLowerCase().indexOf(q);
+        return aw!==bw?aw-bw:a.length-b.length;
+      }).slice(0,40);      // 602 rows was the whole complaint -- never render anywhere near that many
+      items=matches;
+      if(activeIdx>=items.length) activeIdx=items.length-1;
+      if(!box){
+        box=document.createElement("div"); box.className="typeahead-box";
+        // On the CONTAINER, not just each row: a row's own preventDefault() left the box's own
+        // padding, its "no match" state, and -- the list is routinely taller than its 280px
+        // max-height, so there is always one -- its scrollbar free to blur the input on
+        // mousedown after all, which (now that blur closes the box immediately, see wireTypeahead)
+        // tore the box out from under a click aimed at it.
+        box.onmousedown=function(ev){ ev.preventDefault(); };
+        document.body.appendChild(box);
+      }
+      box.innerHTML="";
+      if(!items.length){ var e=document.createElement("div"); e.className="ta-empty"; e.textContent="no match"; box.appendChild(e); }
+      items.forEach(function(m,i){
+        var row=document.createElement("div"); row.className="ta-row"+(i===activeIdx?" active":"");
+        row.textContent=m;
+        row.onmousedown=function(){ pick(m); };
+        box.appendChild(row);
+      });
+      position();
+    }
+    function pick(v){ inputEl.value=v; close(); onPick(v); }
+    return {
+      open:open, close:close,
+      isOpen:function(){ return !!box; },
+      moveActive:function(delta){ if(!box) open(); activeIdx=Math.max(0,Math.min(items.length-1,activeIdx+delta)); open(); },
+      pickActive:function(){ if(activeIdx>=0&&items[activeIdx]){ pick(items[activeIdx]); return true; } return false; }
+    };
+  }
+  // Wires a typeahead onto a PERSISTENT input (the add-interface form, a .ros field type box) --
+  // as opposed to inlineEdit's transient one, below, which owns the input's whole lifecycle.
+  function wireTypeahead(inputEl,candidates){
+    // picking dispatches a real "input" event so any OTHER listener already on this element
+    // (ni_type's own resolve-status hint, at its call site below) still fires -- but that event
+    // would otherwise also reach the "input" listener two lines down and immediately reopen the
+    // box it was just closed by. suppressNext eats exactly that one echo.
+    var suppressNext=false;
+    var ta=makeTypeahead(inputEl,candidates,function(){
+      suppressNext=true; inputEl.dispatchEvent(new Event("input",{bubbles:true})); inputEl.focus();
+    });
+    inputEl.addEventListener("input",function(){ if(suppressNext){ suppressNext=false; return; } ta.open(); });
+    inputEl.addEventListener("focus",ta.open);
+    // Close IMMEDIATELY, not after a delay: a row's own mousedown already calls
+    // preventDefault() (below), which cancels the browser's default focus-change behaviour for
+    // that click -- the input never actually blurs from a row click, so there was nothing for a
+    // delay to protect. What it did instead: a REAL blur (moving focus to another control, e.g.
+    // "+ add interface" sitting right below this field) left the still-open dropdown -- a
+    // position:fixed, z-index:80 box -- sitting on top of that control for the next 120ms, and a
+    // click landing in that window hit the (unhandled) dropdown background instead of the
+    // button underneath it. Silently. That was bug-for-bug identical to the type actually having
+    // been picked and the add going nowhere.
+    inputEl.addEventListener("blur",ta.close);
+    inputEl.addEventListener("keydown",function(e){
+      if(e.key==="ArrowDown"){ e.preventDefault(); ta.moveActive(1); }
+      else if(e.key==="ArrowUp"){ e.preventDefault(); ta.moveActive(-1); }
+      else if(e.key==="Enter"){ if(ta.pickActive()) e.preventDefault(); }
+      else if(e.key==="Escape"&&ta.isOpen()){ ta.close(); e.preventDefault(); e.stopPropagation(); }
+    });
+  }
   function inlineEdit(el,value,opts,commit){
     if(!el||canvas.querySelector("[data-inline]")) return;      // one editor at a time
     opts=opts||{};
     var inp=document.createElement("input");
     inp.setAttribute("data-inline","1");
     inp.className="inline";
+    inp.autocomplete="off";
     inp.value=value==null?"":String(value);
-    if(opts.list) inp.setAttribute("list",opts.list);
     if(opts.placeholder) inp.placeholder=opts.placeholder;
     // width in MODEL units: the card is inside the zoom transform, so a screen-space width
     // would shrink the box as you zoom out.
@@ -2053,24 +2208,33 @@ var DATA = /*__DATA__*/null;
     el.parentNode.insertBefore(inp,el);
     el.style.display="none";
     var done=false;
+    var ta=opts.typeahead?makeTypeahead(inp,opts.typeahead,function(){finish(true);}):null;
     function finish(ok){
       if(done) return;
       done=true;
+      if(ta) ta.close();
       var v=inp.value;
       if(inp.parentNode) inp.parentNode.removeChild(inp);
       el.style.display="";
       if(ok) commit(v); else render();
     }
+    inp.addEventListener("input",function(){ if(ta) ta.open(); });
     inp.addEventListener("keydown",function(e){
       // the canvas owns Ctrl+Z / Delete / arrow keys; while typing a name it must not.
       e.stopPropagation();
-      if(e.key==="Enter"){e.preventDefault();finish(true);}
-      else if(e.key==="Escape"){e.preventDefault();finish(false);}
+      if(ta&&e.key==="ArrowDown"){ e.preventDefault(); ta.moveActive(1); return; }
+      if(ta&&e.key==="ArrowUp"){ e.preventDefault(); ta.moveActive(-1); return; }
+      if(e.key==="Enter"){ e.preventDefault(); if(ta&&ta.pickActive()) return; finish(true); }
+      else if(e.key==="Escape"){ e.preventDefault(); if(ta&&ta.isOpen()){ ta.close(); return; } finish(false); }
     });
     inp.addEventListener("blur",function(){finish(true);});
     inp.addEventListener("pointerdown",function(e){e.stopPropagation();});
     inp.focus();
     inp.select();
+    // seeing the full (top-40) list right away, before typing a character, is more useful than
+    // an empty box when the author is re-editing a value they already know roughly, not typing
+    // one from nothing.
+    if(ta) ta.open();
   }
 
   function wireInline(){
@@ -2099,7 +2263,7 @@ var DATA = /*__DATA__*/null;
       if(!f||n.backing!=="hand") return;         // a catalogue artifact's names are its own
       var ty=ev.target.closest(".ity");
       if(ty){
-        inlineEdit(ty,f.type||"",{list:"typelist",placeholder:"pkg/msg/Type"},function(v){
+        inlineEdit(ty,f.type||"",{typeahead:TYPES,placeholder:"pkg/msg/Type"},function(v){
           v=v.trim();
           if(v===(f.type||"")){render();return;}
           pushUndo("itype:"+f.id);
@@ -2124,7 +2288,6 @@ var DATA = /*__DATA__*/null;
   }
 
   // ============================ node drag ============================
-  project.nodes.forEach(function(){});
   function wireCanvas(){
     canvas.addEventListener("pointerdown",function(ev){
       // The WHOLE card selects and drags, not just its title bar: a node is one object, and
@@ -2136,6 +2299,7 @@ var DATA = /*__DATA__*/null;
          ||ev.target.closest("input,textarea,select,button")) return;
       var el=ev.target.closest(".node");
       if(!el) return;
+      closeNodeIssuePopIfOpen();   // about to drag -- see the comment on this function
       // A collapsed subsystem box stands for N nodes but is not one: its position lives in
       // subPos (a VIEW), not on any node, so it is dragged without touching the model and
       // without entering the undo history -- undo restores what the file will say.
@@ -2192,6 +2356,7 @@ var DATA = /*__DATA__*/null;
     // canvas to look somewhere else is not a decision to drop the selection.
     canvas.addEventListener("pointerdown",function(ev){
       if(ev.target!==canvas&&ev.target!==svg) return;
+      closeNodeIssuePopIfOpen();
       panState={px:ev.clientX,py:ev.clientY,tx:view.tx,ty:view.ty,moved:0};
       canvasWrap.classList.add("panning");
       try{canvas.setPointerCapture(ev.pointerId);}catch(e){}
@@ -2213,6 +2378,7 @@ var DATA = /*__DATA__*/null;
       if(mode!=="edit") return;
       var port=ev.target.closest(".port"); if(!port) return;
       ev.stopPropagation();
+      closeNodeIssuePopIfOpen();   // a 380px, up-to-70vh popover can otherwise sit over the drop target for the whole drag
       var srcKind=port.dataset.kind, wantKind=COMPLEMENT[srcKind], srcType=port.dataset.type||"";
       wire={from:{n:port.dataset.n,i:port.dataset.i,kind:srcKind}};
       try{canvas.setPointerCapture(ev.pointerId);}catch(e){}
@@ -2236,15 +2402,71 @@ var DATA = /*__DATA__*/null;
     });
     canvas.addEventListener("pointerup",function(ev){
       if(!wire) return;
-      var tgt=ev.target.closest(".port.legal");
+      // NOT ev.target: canvas.setPointerCapture() above (needed so the rubber-band keeps
+      // tracking even when the pointer strays off the canvas mid-drag) means every subsequent
+      // event for this pointer -- pointermove AND pointerup -- reports its target as the
+      // capturing element itself, per the Pointer Events spec, regardless of what is actually
+      // under the cursor at drop time. ev.target.closest(".port.legal") was therefore
+      // evaluating against <canvas>, which is never a port and never has one as an ancestor --
+      // a REAL drag-drop onto a port could not complete; a synthetic test that dispatches
+      // pointerup directly at a port element (bypassing capture redirection) never exercised the
+      // bug. elementFromPoint reads the real geometry instead.
+      var real=document.elementFromPoint(ev.clientX,ev.clientY);
+      var tgt=real&&real.closest(".port");
+      // the dot itself is a 12px target, half of it hanging off the card edge -- releasing on
+      // the interface ROW (the natural, much bigger target) is a legitimate drop, not a miss.
+      if(!tgt&&real){ var rowEl=real.closest(".iface"); if(rowEl) tgt=rowEl.querySelector(".port"); }
+      // Legality is recomputed HERE, fresh, against the model -- not read off the `.legal` CSS
+      // class the pointerdown handler stamped onto ports at drag-START. Anything that calls
+      // render() mid-drag (an inline editor -- rename a node, then without clicking elsewhere
+      // start dragging a wire -- commits and re-renders on blur, and the pointerdown that begins
+      // the drag can itself trigger exactly that blur) throws every node card away and redraws
+      // it, taking the stamped classes with it; the drop would otherwise fail on a perfectly
+      // legal target for a reason that has nothing to do with the drop itself.
+      if(tgt){
+        var srcIface=ifaceById(nodeById(wire.from.n),wire.from.i);
+        var srcType=(srcIface&&srcIface.type)||"", wantKind=COMPLEMENT[wire.from.kind];
+        var ttType=tgt.dataset.type||"";
+        var typeOk=(!srcType||!ttType||srcType===ttType);
+        var legal=(tgt.dataset.kind===wantKind && tgt.dataset.n!==wire.from.n && typeOk);
+        if(!legal) tgt=null;
+      }
       if(tgt){
         var a={n:wire.from.n,i:wire.from.i,kind:wire.from.kind};
         var bb={n:tgt.dataset.n,i:tgt.dataset.i,kind:tgt.dataset.kind};
         var fromEnd=SRC_SIDE[a.kind]?a:bb, toEnd=SRC_SIDE[a.kind]?bb:a;
         var dup=project.connections.some(function(c){return c.from.n===fromEnd.n&&c.from.i===fromEnd.i&&c.to.n===toEnd.n&&c.to.i===toEnd.i;});
-        if(!dup){ pushUndo(); project.connections.push({id:nid(),from:{n:fromEnd.n,i:fromEnd.i},to:{n:toEnd.n,i:toEnd.i}}); }
+        if(!dup){
+          pushUndo();
+          // Infer, don't just permit: wiring a fresh subscriber to a typed publisher (or the
+          // reverse) almost always means the same message, and retyping the SAME thing on both
+          // ends of a wire the author just drew by hand is exactly the busywork this editor
+          // exists to remove. Only ever fills a BLANK side -- both-typed already had to match to
+          // be a legal drop (see the `typeOk` check above) -- and only on a hand-authored node: a
+          // catalogue or subSystems: interface's type is fixed by the file it comes from, and
+          // this editor has no way to change what that file says.
+          var fromIface=ifaceById(nodeById(fromEnd.n),fromEnd.i), toIface=ifaceById(nodeById(toEnd.n),toEnd.i);
+          var fromNode=nodeById(fromEnd.n), toNode=nodeById(toEnd.n);
+          if(fromIface&&toIface){
+            var fromBlank=!String(fromIface.type||"").trim(), toBlank=!String(toIface.type||"").trim();
+            if(fromBlank&&!toBlank&&fromNode&&fromNode.backing==="hand") fromIface.type=toIface.type;
+            else if(toBlank&&!fromBlank&&toNode&&toNode.backing==="hand") toIface.type=fromIface.type;
+          }
+          project.connections.push({id:nid(),from:{n:fromEnd.n,i:fromEnd.i},to:{n:toEnd.n,i:toEnd.i}});
+        }
       }
       wire=null;
+      canvas.querySelectorAll(".port").forEach(function(p){p.classList.remove("legal","illegal");});
+      var rb=document.getElementById("rb"); if(rb) rb.remove();
+      render();
+    });
+    // A pointercancel (the OS takes the gesture -- a system gesture, an alt-tab mid-drag, a
+    // touch scroll claimed by the browser) fires instead of pointerup and none of the three
+    // gestures above listen for it, so wire/dragState/panState, the .legal/.illegal classes and
+    // the rubber-band path could all outlive the drag that created them.
+    canvas.addEventListener("pointercancel",function(){
+      wire=null; dragState=null; panState=null;
+      canvasWrap.classList.remove("panning");
       canvas.querySelectorAll(".port").forEach(function(p){p.classList.remove("legal","illegal");});
       var rb=document.getElementById("rb"); if(rb) rb.remove();
       render();
@@ -2325,6 +2547,7 @@ var DATA = /*__DATA__*/null;
     touches[ev.pointerId]={x:ev.clientX,y:ev.clientY};
     var ids=Object.keys(touches);
     if(ids.length===2){
+      closeNodeIssuePopIfOpen();   // a second finger means pinch-zoom is starting
       // A second finger CANCELS whatever one finger had started -- otherwise the node under
       // the first finger is dragged across the canvas while the user is only zooming.
       if(dragState){
@@ -2377,6 +2600,7 @@ var DATA = /*__DATA__*/null;
   // required for the ctrl case or the browser page-zooms instead.
   canvasWrap.addEventListener("wheel",function(ev){
     ev.preventDefault();
+    closeNodeIssuePopIfOpen();
     if(ev.ctrlKey||ev.metaKey){
       var r=canvasWrap.getBoundingClientRect();
       zoomAt(ev.clientX-r.left, ev.clientY-r.top, Math.pow(0.99, ev.deltaY));
@@ -2861,7 +3085,7 @@ var DATA = /*__DATA__*/null;
     }
     ifBody+='<div class="addform"><div class="kseg" id="kseg">'+KINDS.map(function(k){return '<button data-k="'+k+'" class="'+(k===addKind?"on":"")+'">'+k+'</button>';}).join("")+'</div>'
       +'<input id="ni_name" placeholder="interface name (quoted for you)">'
-      +'<input id="ni_type" list="typelist" placeholder="type e.g. std_msgs/msg/String">'
+      +'<input id="ni_type" placeholder="type e.g. std_msgs/msg/String" autocomplete="off">'
       +'<div class="typestate" id="ni_ts"></div>'
       +'<button class="minibtn" id="ni_add">+ add interface</button></div>';
     ih+=sec("node/interfaces","interfaces",ifBody,String(n.ifaces.length));
@@ -3417,6 +3641,7 @@ var DATA = /*__DATA__*/null;
     var kseg=document.getElementById("kseg");
     if(kseg) kseg.querySelectorAll("button").forEach(function(b){b.onclick=function(){addKind=b.dataset.k;kseg.querySelectorAll("button").forEach(function(x){x.classList.remove("on");});b.classList.add("on");};});
     var tyIn=document.getElementById("ni_type"), ts=document.getElementById("ni_ts");
+    if(tyIn) wireTypeahead(tyIn,TYPES);
     if(tyIn) tyIn.oninput=function(){
       var v=tyIn.value.trim(), pk=v.split("/")[0];
       if(!v){ts.textContent="";ts.className="typestate";}
@@ -3426,7 +3651,14 @@ var DATA = /*__DATA__*/null;
     };
     var add=document.getElementById("ni_add");
     if(add) add.onclick=function(){
-      var nm=document.getElementById("ni_name").value.trim(); if(!nm) return;
+      var nameEl=document.getElementById("ni_name"), nm=nameEl.value.trim();
+      if(!nm){
+        // silently doing nothing here reads exactly like the type-picker bug this sits next to:
+        // "I clicked add and nothing happened." Send focus to the field that's actually missing
+        // input, with a visible flash, so it's a required-field cue instead of a dead button.
+        nameEl.focus(); flashEl(nameEl,"e");
+        return;
+      }
       pushUndo();
       // a hand-added interface is exposed on sight: the author typed it in to model it, so it
       // belongs in the .rossystem whether or not it is wired up yet.
@@ -3453,11 +3685,49 @@ var DATA = /*__DATA__*/null;
   }
 
   // ============================ rail ============================
+  // A fresh card can run 200-280px wide and taller once interfaces are added, so jittering a
+  // new node's position inside a window SMALLER than that used to mean sequential adds
+  // routinely landed overlapping an existing card closely enough that a header control on the
+  // one drawn on top -- a title, a badge, the warning icon -- silently ate a click or a
+  // wire-drag meant for a port underneath it.
+  //
+  // A FIXED grid keyed off project.nodes.length looked like a fix but wasn't one: delete any
+  // node but the last and the next add reuses the freed slot's neighbour exactly; a project
+  // SEEDED from a file arrives with real positions typically clustered near the origin, so slot
+  // 0 is already taken; a card the user dragged by hand is invisible to an index-keyed grid
+  // either way. So this searches real geometry instead -- first slot, scanning outward, whose
+  // rectangle doesn't intersect any node CURRENTLY on the canvas (measured off the rendered
+  // card when one exists, so an oversized catalogue node with a dozen interfaces is accounted
+  // for, not just the default footprint).
+  function nextSpawnPos(){
+    var DW=240, DH=130, GAP=24;
+    var existing=project.nodes.map(function(n){
+      var el=canvas.querySelector('.node[data-n="'+STUDIO.cssEsc(n.id)+'"]');
+      return {x:n.x, y:n.y, w:(el&&el.offsetWidth)||DW, h:(el&&el.offsetHeight)||DH};
+    });
+    function overlapsAny(x,y,w,h){
+      return existing.some(function(e){
+        return x<e.x+e.w+GAP && x+w+GAP>e.x && y<e.y+e.h+GAP && y+h+GAP>e.y;
+      });
+    }
+    for(var row=0; row<60; row++){
+      for(var col=0; col<10; col++){
+        var x=80+col*(DW+GAP), y=80+row*(DH+GAP);
+        if(!overlapsAny(x,y,DW,DH)) return {x:x+Math.random()*10, y:y+Math.random()*10};
+      }
+    }
+    // 600 slots exhausted -- a pathological project; land somewhere rather than throw.
+    return {x:80+Math.random()*200, y:80+existing.length*40+Math.random()*80};
+  }
   document.getElementById("addNode").onclick=function(){
     pushUndo();
+    var p=nextSpawnPos();
     var n={id:nid(),label:"new_node",backing:"hand",pkg:"new_package",node:"new_node",artifact:"new_node",
-      catalogueFile:null,namespace:null,x:200+Math.random()*120,y:340+Math.random()*80,ifaces:[],params:[]};
+      catalogueFile:null,namespace:null,x:p.x,y:p.y,ifaces:[],params:[]};
     project.nodes.push(n); selNode=n.id; selEdge=null; render(); fillInspector();
+    // otherwise a slot far from the current pan/zoom reads as "I clicked add and nothing
+    // happened" -- centreOn brings the new card into view regardless of where it landed.
+    centreOn(n.id);
   };
   var catScrim=document.getElementById("catScrim");
   document.getElementById("addCat").onclick=function(){catScrim.classList.add("on");renderCat("");document.getElementById("catSearch").focus();};
@@ -3482,12 +3752,14 @@ var DATA = /*__DATA__*/null;
     pushUndo();
     var parts=key.split("."), pkg=parts[0], node=parts.slice(1).join(".");
     var tmap=CATTYPES[key]||{};   // real interface types recovered from the vendored .ros2
+    var p=nextSpawnPos();
     var n={id:nid(),label:node,backing:"cat",pkg:pkg,node:node,artifact:e.artifact||node,catalogueFile:e.file||null,
-      namespace:null,x:220+Math.random()*140,y:120+Math.random()*120,
+      namespace:null,x:p.x,y:p.y,
       // a catalogue node arrives with its FULL interface set; exposing all of it would write
       // dozens of unwired lines, so these start unexposed and surface as you connect them.
       ifaces:Object.keys(e.interfaces||{}).map(function(nm){return {id:nid(),name:nm,kind:e.interfaces[nm],type:tmap[nm]||null,qos:null,label:null,exposed:false};}),params:[]};
     project.nodes.push(n); selNode=n.id; catScrim.classList.remove("on"); render(); fillInspector();
+    centreOn(n.id);
   }
   [].slice.call(document.querySelectorAll("[data-close]")).forEach(function(b){b.onclick=function(e){e.target.closest(".scrim").classList.remove("on");};});
   [].slice.call(document.querySelectorAll(".scrim:not([data-locked])")).forEach(function(s){s.onclick=function(e){if(e.target===s)s.classList.remove("on");};});
@@ -3540,6 +3812,10 @@ var DATA = /*__DATA__*/null;
   function attrEsc(s){ return String(s).replace(/["\\]/g,"\\$&"); }
   function gotoIssue(it){
     closeDrawers();
+    // Every routing target lives in the OUTER project, never inside a drilled-in subsystem's
+    // own graph (that view is read-only and foreign anyway) -- so leave drill mode first, or
+    // centreOn/flashEl below silently find nothing on a canvas that isn't drawing this project.
+    if(drillRef){ drillRef=null; }
     if(it.action==="addnode"){ var ab=document.getElementById("addNode"); if(ab) ab.click(); return; }
     if(it.conn){
       var c=null; for(var i=0;i<project.connections.length;i++) if(project.connections[i].id===it.conn) c=project.connections[i];
@@ -3588,41 +3864,74 @@ var DATA = /*__DATA__*/null;
     order.forEach(function(k){
       var m=buckets[k];
       if(m.length===1){ out.push(m[0]); return; }
-      out.push({sev:m[0].sev,code:m[0].code,msg:(m[0].groupLabel||m[0].msg)+" — "+m.length+" "+(m[0].groupUnit||"nodes"),group:m});
+      out.push({sev:m[0].sev,code:m[0].code,msg:(m[0].groupLabel||m[0].msg)+" — "+m.length+" "+(m[0].groupUnit||"nodes"),group:m,groupKey:k});
     });
     return out.concat(loose);
   }
-  var lastIssues=[], issuesExpanded=false;
+  var lastIssues=[], issuesExpanded=false, nodeIssueIndex={};
+  // Every issue that names a node, keyed by that node's id -- read by renderNode() to paint the
+  // per-node warning icon. Rebuilt fresh on every runIssues() call (which now runs at the TOP
+  // of render(), before any node card exists) and node cards are always removed and rebuilt
+  // from scratch, never patched -- so there is no code path where an icon can outlive the
+  // problem it names, or fail to appear for one that just occurred.
+  function indexIssuesByNode(list){
+    var idx={};
+    list.forEach(function(it){
+      if(it.node) (idx[it.node]=idx[it.node]||[]).push(it);
+      // a connection issue names no single node (its target for click-routing stays `conn`,
+      // resolved via gotoIssue) but names TWO -- both endpoints should carry the icon, not
+      // neither, since a type mismatch is exactly as much each node's problem as the wire's.
+      if(it.nodes) it.nodes.forEach(function(nid2){ if(nid2) (idx[nid2]=idx[nid2]||[]).push(it); });
+    });
+    return idx;
+  }
   function runIssues(){
     var issues=[];
     function pushIssue(sev,msg,opts){ var it={sev:sev,msg:msg}; if(opts) for(var k in opts) it[k]=opts[k]; issues.push(it); }
-    var labels={}, labelFirst={};
+    // Object.create(null): these are keyed by user-supplied strings (a label, an interface
+    // name), and a node genuinely named "constructor" or "__proto__" would otherwise collide
+    // with Object.prototype and misreport as already-seen.
+    var labelIds=Object.create(null);
     for(var i=0;i<project.nodes.length;i++){var n=project.nodes[i];
-      if(!labelFirst[n.label]) labelFirst[n.label]=n.id;
+      (labelIds[n.label]=labelIds[n.label]||[]).push(n.id);
       if(n.backing==="hand" && /[A-Z]/.test(n.pkg))
-        pushIssue("e",n.label+': package "'+n.pkg+'" has uppercase',{code:"RM010",node:n.id,field:"f_pkg",groupKey:"rm010",groupLabel:"package name has uppercase"});
-      labels[n.label]=(labels[n.label]||0)+1;
+        pushIssue("e",n.label+': package "'+n.pkg+'" has uppercase',{code:"RM010",node:n.id,field:"f_pkg",groupKey:"rm010",groupLabel:"package name has uppercase",
+          fix:"ROS 2 package names must be lowercase — rename the package field."});
       // RM044: legal and the server accepts it, but 0 of 52 corpus files use it, so the linter
       // warns. Surface it here rather than letting Commit be the first mention.
       if(n.namespace&&String(n.namespace).trim())
-        pushIssue("w",n.label+': namespace "'+n.namespace+'" has zero corpus support',{code:"RM044",node:n.id,field:"f_ns",groupKey:"rm044",groupLabel:"namespace has zero corpus support"});
-      var seen={};
+        pushIssue("w",n.label+': namespace "'+n.namespace+'" has zero corpus support',{code:"RM044",node:n.id,field:"f_ns",groupKey:"rm044",groupLabel:"namespace has zero corpus support",
+          fix:"Legal — the 3.1.0 server accepts it. Leave it if you need multi-robot scoping, or clear the field to silence the warning."});
+      var seen=Object.create(null);
       for(var j=0;j<n.ifaces.length;j++){var f=n.ifaces[j];
-        if(seen[f.name]) pushIssue("w",n.label+': duplicate interface name "'+f.name+'"',{node:n.id,iface:f.id,groupKey:"dupiface",groupLabel:"duplicate interface name",groupUnit:"interfaces"});
+        if(seen[f.name]) pushIssue("w",n.label+': duplicate interface name "'+f.name+'"',{node:n.id,iface:f.id,groupKey:"dupiface",groupLabel:"duplicate interface name",groupUnit:"interfaces",
+          fix:"Rename one of the two — the emitted file can't tell interfaces apart by name."});
         seen[f.name]=1;
         // B2: a hand-authored interface with no type blocks generation (server can't resolve it)
         if(n.backing==="hand" && (!f.type||String(f.type).trim()===""))
-          pushIssue("e",n.label+': interface "'+f.name+'" ('+f.kind+') has no message type',{node:n.id,iface:f.id,groupKey:"notype",groupLabel:"interface has no message type",groupUnit:"interfaces"});
+          pushIssue("e",n.label+': interface "'+f.name+'" ('+f.kind+') has no message type',{node:n.id,iface:f.id,groupKey:"notype",groupLabel:"interface has no message type",groupUnit:"interfaces",
+            fix:"Set a message type, e.g. std_msgs/msg/String, or reference a type you've defined under Message types (.ros)."});
         // RM035 on a QoS duration is a hard ERROR that would stop `generate` after the files
         // are already written; the panel has to say so while it is still editable.
         if(f.qos) (QOS.durations||[]).forEach(function(k){
-          if(qosDurationProblem(f.qos[k]))
-            pushIssue("e",n.label+': qos '+k+' "'+f.qos[k]+'" is rejected by CheckDuration',{code:"RM035",node:n.id,iface:f.id,qos:k,groupKey:"rm035",groupLabel:"qos duration rejected by CheckDuration",groupUnit:"interfaces"});
+          // qosDurationProblem fires on two DIFFERENT problems (not a bare integer, or one that
+          // overflows int32) and already returns the exactly-right sentence for whichever one --
+          // reuse it instead of a generic line that's simply wrong for the non-numeric case.
+          var qp=qosDurationProblem(f.qos[k]);
+          if(qp)
+            pushIssue("e",n.label+': qos '+k+' "'+f.qos[k]+'" is rejected by CheckDuration',{code:"RM035",node:n.id,iface:f.id,qos:k,groupKey:"rm035",groupLabel:"qos duration rejected by CheckDuration",groupUnit:"interfaces",
+              fix:qp});
         });
       }
-      if(DIAG[n.id]) DIAG[n.id].forEach(function(m){pushIssue("e",n.label+": "+m,{node:n.id,groupKey:"diag",groupLabel:"flagged by the server"});});
+      if(DIAG[n.id]) DIAG[n.id].forEach(function(m){pushIssue("e",n.label+": "+m,{node:n.id,groupKey:"diag",groupLabel:"flagged by the server",
+        fix:"Reported by the real language server on the last Commit. Fix it here, then Commit again to re-check."});});
     }
-    for(var l in labels) if(labels[l]>1) pushIssue("e",'duplicate node label "'+l+'"',{code:"RM009",node:labelFirst[l],field:"f_label"});
+    // one issue per colliding node, not one for the first only -- the user who just renamed
+    // node B into a collision needs to see it on B, not discover it's actually pointing at A.
+    for(var l in labelIds) if(labelIds[l].length>1) labelIds[l].forEach(function(nid2){
+      pushIssue("e",'duplicate node label "'+l+'"',{code:"RM009",node:nid2,field:"f_label",groupKey:"rm009dup",groupLabel:"duplicate node label",
+        fix:"Rename this node, or the other one sharing the label — instance labels must be unique within one system."});
+    });
     // .ros field rows. _validate_types() blocks generation on exactly these, so the counter
     // has to see them too -- otherwise the page reads "no issues" for a project `generate`
     // then refuses.
@@ -3639,13 +3948,16 @@ var DATA = /*__DATA__*/null;
           if(known[typ]||TYPEFILES[typ]) return;
           pushIssue("e",n.label+": "+f.name+" type '"+typ+"' is defined neither here nor in "
             +"the catalogue — define it under 'message types (.ros)'",{code:"RM081",node:n.id,iface:f.id,
-            groupKey:"notresolved",groupLabel:"an interface type resolves nowhere",groupUnit:"interfaces"});
+            groupKey:"notresolved",groupLabel:"an interface type resolves nowhere",groupUnit:"interfaces",
+            fix:"Define this type under Message types (.ros), or correct the spelling — it must match something defined here or in the catalogue."});
         });
       });
       Object.keys(project.types||{}).sort().forEach(function(key){
         var p=String(key).split("/"), block=(p.length===3)?SEGBLOCK[p[1]]:null;
-        if(!block){pushIssue("e",key+" is not <package>/<msg|srv|action>/<Name>",{sys:true,typekey:key});return;}
-        if(CATPKG[p[0]]){pushIssue("e",key+": '"+p[0]+"' is a catalogue package — redeclaring it is RM009",{code:"RM009",sys:true,typekey:key});return;}
+        if(!block){pushIssue("e",key+" is not <package>/<msg|srv|action>/<Name>",{sys:true,typekey:key,
+          fix:"Rename the key to <package>/msg/<Name> (or srv/action) — that's the only shape a spec's qualified name takes."});return;}
+        if(CATPKG[p[0]]){pushIssue("e",key+": '"+p[0]+"' is a catalogue package — redeclaring it is RM009",{code:"RM009",sys:true,typekey:key,
+          fix:"Rename the package — this name is already used by the vendored catalogue."});return;}
         (ROS.bodies[block]||[]).forEach(function(body){
           (((project.types[key]||{}).fields||{})[body]||[]).forEach(function(f,fi){
             var tn=rosTypeNote(f.type,known), nn=rosNameNote(f.name);
@@ -3656,21 +3968,31 @@ var DATA = /*__DATA__*/null;
         });
       });
     })();
-    if(!project.nodes.length) pushIssue("e","system has no nodes — add one before generating (the server rejects an empty nodes: block)",{action:"addnode"});
+    if(!project.nodes.length) pushIssue("e","system has no nodes — add one before generating (the server rejects an empty nodes: block)",{action:"addnode",
+      fix:"Add at least one node from the rail."});
     // RM053. A warning, not an error: the current server ACCEPTS a system with no fromFile
     // (re-probed 2026-08-13, 0 errors / 0 warnings), so this must not be dressed up as a crash.
     if(!(project.system&&project.system.fromFile))
-      pushIssue("w","no fromFile — rosmodel_lint warns (RM053); the 3.1.0 server accepts a system without it",{code:"RM053",sys:true,field:"f_fromfile"});
+      pushIssue("w","no fromFile — rosmodel_lint warns (RM053); the 3.1.0 server accepts a system without it",{code:"RM053",sys:true,field:"f_fromfile",
+        fix:"Optional. If you do set it, it must contain a \"/\" (e.g. pkg/launch/bringup.launch.py) — fromFileHelper errors on a bare filename."});
+    // fromFileHelper (see the RM053 comment above) errors on a value with no "/" -- unlike an
+    // ABSENT fromFile, which the server accepts outright, a PRESENT one that doesn't look like a
+    // path is a real generation blocker the instant check should catch before Commit does.
+    else if(String(project.system.fromFile).indexOf("/")<0)
+      pushIssue("e","fromFile \""+project.system.fromFile+"\" has no \"/\" — the server's fromFileHelper errors on it",{sys:true,field:"f_fromfile",
+        fix:"Write it as a path, e.g. pkg/launch/bringup.launch.py, or clear the field — omitting it entirely is accepted."});
     // B1: a drawn connection whose endpoints carry different types is rejected by the server
     for(var ci=0;ci<project.connections.length;ci++){var c=project.connections[ci];
       var fa=ifaceById(nodeById(c.from.n),c.from.i), ta=ifaceById(nodeById(c.to.n),c.to.i);
       if(fa&&ta&&fa.type&&ta.type&&String(fa.type).trim()&&String(ta.type).trim()&&fa.type!==ta.type)
-        pushIssue("e","type mismatch: "+fa.name+" ("+fa.type+") ↔ "+ta.name+" ("+ta.type+") — endpoints must share one type",{conn:c.id});
+        pushIssue("e","type mismatch: "+fa.name+" ("+fa.type+") ↔ "+ta.name+" ("+ta.type+") — endpoints must share one type",{conn:c.id,nodes:[c.from.n,c.to.n],
+          fix:"Change one endpoint's type to match the other, or rewire the connection to an interface that shares the same type."});
     }
     // errors sort before warnings (stable within each) -- previously issues rendered in push
     // order and a silent .slice(0,10) could drop a real error under a stack of RM044 warnings.
     var grouped=groupIssues(issues).slice().sort(function(a,b){ return (a.sev==="e"?0:1)-(b.sev==="e"?0:1); });
     lastIssues=issues;
+    nodeIssueIndex=indexIssuesByNode(issues);
     var errs=grouped.filter(function(x){return x.sev==="e";}).length, wrns=grouped.length-errs;
     var ec=document.getElementById("errCnt"), wc=document.getElementById("wrnCnt");
     ec.textContent=errs; wc.textContent=wrns;
@@ -3690,19 +4012,35 @@ var DATA = /*__DATA__*/null;
     }
     buildStatus(errs,wrns);
   }
+  // #issueList is rebuilt from scratch on every render() -- including on every keystroke in an
+  // unrelated field, since runIssues() now runs there too. Without this, an expanded group
+  // re-collapsed on each one; tracked outside the DOM, by groupKey, it survives the rebuild.
+  var expandedGroupKeys={};
   function renderIssueRow(it){
     if(it.group){
       // a collapsed run of identically-shaped issues (same code+severity, one per node or
       // interface) -- expands in place to the individual, still-routable rows.
+      var wasOpen=!!expandedGroupKeys[it.groupKey];
       var wrap=document.createElement("div"); wrap.className="itgroup";
       var head=document.createElement("button"); head.type="button"; head.className="it"+(it.sev==="e"?" e":"")+" itgrouphead";
-      var gtext=document.createElement("span"); gtext.className="ittext"; gtext.textContent=it.msg; head.appendChild(gtext);
-      var caret=document.createElement("span"); caret.className="caret"; caret.textContent="▾"; caret.style.transform="rotate(-90deg)"; head.appendChild(caret);
+      var gtext=document.createElement("span"); gtext.className="ittext"; gtext.textContent=it.msg;
+      // every member of a group shares one underlying problem shape, so they share one fix --
+      // shown on the collapsed head too, not just after expanding to a member.
+      var gfix=(it.group[0]&&it.group[0].fix)||null;
+      if(gfix){ var gfd=document.createElement("div"); gfd.className="itfix"; gfd.textContent=gfix; gtext.appendChild(gfd); }
+      head.appendChild(gtext);
+      var caret=document.createElement("span"); caret.className="caret"; caret.textContent="▾"; head.appendChild(caret);
       if(it.code){ var gcd=document.createElement("span"); gcd.className="itcode"; gcd.textContent=it.code; head.appendChild(gcd); }
-      var kids=document.createElement("div"); kids.className="itkids"; kids.hidden=true;
+      var kids=document.createElement("div"); kids.className="itkids"; kids.hidden=!wasOpen;
+      caret.style.transform=wasOpen?"":"rotate(-90deg)";
       it.group.forEach(function(child){ kids.appendChild(renderIssueRow(child)); });
-      head.setAttribute("aria-expanded","false");
-      head.onclick=function(){ kids.hidden=!kids.hidden; head.setAttribute("aria-expanded",kids.hidden?"false":"true"); caret.style.transform=kids.hidden?"rotate(-90deg)":""; };
+      head.setAttribute("aria-expanded",wasOpen?"true":"false");
+      head.onclick=function(){
+        kids.hidden=!kids.hidden;
+        head.setAttribute("aria-expanded",kids.hidden?"false":"true");
+        caret.style.transform=kids.hidden?"rotate(-90deg)":"";
+        if(kids.hidden) delete expandedGroupKeys[it.groupKey]; else expandedGroupKeys[it.groupKey]=true;
+      };
       wrap.appendChild(head); wrap.appendChild(kids);
       return wrap;
     }
@@ -3711,6 +4049,7 @@ var DATA = /*__DATA__*/null;
     if(routable) el.type="button";
     el.className="it"+(it.sev==="e"?" e":"")+(routable?"":" noref");
     var text=document.createElement("span"); text.className="ittext"; text.textContent=it.msg;
+    if(it.fix){ var fd=document.createElement("div"); fd.className="itfix"; fd.textContent=it.fix; text.appendChild(fd); }
     el.appendChild(text);
     if(it.code){ var cd=document.createElement("span"); cd.className="itcode"; cd.textContent=it.code; el.appendChild(cd); }
     if(routable) el.onclick=function(){ gotoIssue(it); };
@@ -3727,10 +4066,12 @@ var DATA = /*__DATA__*/null;
     // a grouped row has no single target -- "See all" (below) is the path into it, so it
     // renders as plain text here rather than a click that would silently do nothing.
     var routable=!it.group;
+    var fix=it.fix||(it.group&&it.group[0]&&it.group[0].fix)||null;
     var b=document.createElement(routable?"button":"div");
     if(routable) b.type="button";
     b.className="popissue"+(it.sev==="e"?" e":"")+(routable?"":" noref");
     b.textContent=it.msg;
+    if(fix){ var fd=document.createElement("div"); fd.className="popfix"; fd.textContent=fix; b.appendChild(fd); }
     if(routable) b.onclick=function(){ var pop=document.getElementById("statusPop"); if(pop&&pop.hidePopover) pop.hidePopover(); gotoIssue(it); };
     return b;
   }
@@ -3798,13 +4139,115 @@ var DATA = /*__DATA__*/null;
     if(pop) pop.addEventListener("beforetoggle",function(e){
       if(e.newState!=="open") return;
       fillStatusPop();
-      var chip=document.getElementById("statusChip"), r=chip.getBoundingClientRect();
-      var w=Math.min(380,window.innerWidth-24);
-      pop.style.width=w+"px";
-      pop.style.left=Math.max(8,Math.min(r.left,window.innerWidth-w-8))+"px";
-      pop.style.top=(r.bottom+6)+"px";
+      positionPop(pop,document.getElementById("statusChip"));
     });
   })();
+
+  // ============================ per-node warning popover ============================
+  // Which node's issues #nodeIssuePop is currently showing, or null when closed. Tracked (not
+  // just read off the DOM) so refreshNodeIssuePopIfOpen() below knows what to re-check on every
+  // render() without having to search the popover's own rendered content for it.
+  var nodePopNodeId=null, nodePopSig=null;
+  // A cheap fingerprint of an issue list's user-visible content, so refreshNodeIssuePopIfOpen()
+  // can tell "still the same problems" from "actually changed" -- every inspector field re-
+  // renders on every keystroke (deliberately, elsewhere in this file), and rebuilding the open
+  // popover's DOM on each one would reset its scroll position and steal focus off whatever the
+  // user had tabbed into inside it, for no reason if the content didn't change.
+  function issueListSig(list){
+    return JSON.stringify((list||[]).map(function(it){return [it.sev,it.code||"",it.msg,it.fix||""];}));
+  }
+  // Closing by any OTHER path than our own code -- native light-dismiss (click outside),
+  // native Escape, or the explicit x button -- still has to clear this, or a later render()
+  // would find a stale id and either refill a popover the user just closed back open, or hold a
+  // reference that stops a future openNodeIssuePop() from recognising "same icon, toggle closed".
+  (function(){
+    var nip=document.getElementById("nodeIssuePop");
+    if(nip) nip.addEventListener("toggle",function(e){ if(e.newState==="closed") nodePopNodeId=null; });
+  })();
+  // A dragged node, a pan, or a zoom all move the icon on screen without going through render()
+  // (they mutate style.left/top or the view transform directly, for drag-frame performance), so
+  // the popover -- positioned once, off the icon's rect at open/refresh time -- would silently
+  // detach from it mid-gesture otherwise. Simplest correct answer: close it the instant such a
+  // gesture starts, rather than trying to track every element/transform that could move it.
+  function closeNodeIssuePopIfOpen(){
+    var nip=document.getElementById("nodeIssuePop");
+    if(nip&&nip.matches&&nip.matches(":popover-open")&&nip.hidePopover){ try{ nip.hidePopover(); }catch(e){} }
+  }
+  // A popover's real height isn't measurable until the browser has actually laid it out in the
+  // top layer -- not yet at beforetoggle/pre-showPopover time, when its display is still `none`.
+  // So position once with a same-tick best guess, then correct on the next frame once
+  // getBoundingClientRect() reports something real. Node cards can be anywhere on a large
+  // canvas (unlike the status chip, always in the topbar), so both matter: a card in the lower
+  // half of the screen used to get a popover running off the bottom with nothing to scroll it
+  // into view.
+  function positionPop(pop,anchorEl){
+    if(!anchorEl) return;
+    var r=anchorEl.getBoundingClientRect();
+    var w=Math.min(380,window.innerWidth-24);
+    pop.style.width=w+"px";
+    pop.style.left=Math.max(8,Math.min(r.left,window.innerWidth-w-8))+"px";
+    pop.style.top=Math.min(r.bottom+6,window.innerHeight-40)+"px";
+    requestAnimationFrame(function(){ clampPopVertical(pop,r); });
+  }
+  function clampPopVertical(pop,anchorRect){
+    var h=pop.getBoundingClientRect().height; if(!h) return;
+    var below=anchorRect.bottom+6, above=anchorRect.top-6-h, top;
+    if(below+h<=window.innerHeight-8) top=below;         // fits below the anchor -- preferred
+    else if(above>=8) top=above;                          // flip above it
+    else top=Math.max(8,window.innerHeight-8-h);          // fits neither -- clamp into the viewport
+    pop.style.top=top+"px";
+  }
+  function fillNodeIssuePop(nodeId){
+    var pop=document.getElementById("nodeIssuePop"); if(!pop) return false;
+    var n=nodeById(nodeId), list=nodeIssueIndex[nodeId]||[];
+    if(!n||!list.length) return false;   // caller closes the popover in this case
+    nodePopSig=issueListSig(list);
+    pop.innerHTML="";
+    var closeBtn=document.createElement("button"); closeBtn.type="button"; closeBtn.className="popclose";
+    closeBtn.setAttribute("aria-label","Close"); closeBtn.textContent="×";
+    closeBtn.onclick=function(){ if(pop.hidePopover) pop.hidePopover(); };
+    pop.appendChild(closeBtn);
+    var h=document.createElement("h5");
+    h.textContent=n.label+" — "+list.length+(list.length===1?" issue":" issues");
+    pop.appendChild(h);
+    list.slice().sort(function(a,b){return (a.sev==="e"?0:1)-(b.sev==="e"?0:1);}).forEach(function(it){
+      var wrap=document.createElement("div"); wrap.className="popissuewrap"+(it.sev==="e"?" e":"");
+      var btn=document.createElement("button"); btn.type="button"; btn.className="popissue"+(it.sev==="e"?" e":"");
+      btn.textContent=it.msg;
+      btn.onclick=function(){ if(pop.hidePopover) pop.hidePopover(); gotoIssue(it); };
+      wrap.appendChild(btn);
+      if(it.fix){ var fx=document.createElement("div"); fx.className="popfix"; fx.textContent=it.fix; wrap.appendChild(fx); }
+      pop.appendChild(wrap);
+    });
+    return true;
+  }
+  function openNodeIssuePop(nodeId,iconEl){
+    var pop=document.getElementById("nodeIssuePop"); if(!pop) return;
+    var wasOpenForThis=nodePopNodeId===nodeId && pop.matches && pop.matches(":popover-open");
+    // showPopover() throws InvalidStateError on an already-open popover -- close whatever it was
+    // last showing first (a different node's icon, most likely) so re-opening never races that.
+    if(pop.matches&&pop.matches(":popover-open")&&pop.hidePopover){ try{ pop.hidePopover(); }catch(e){} }
+    if(wasOpenForThis){ nodePopNodeId=null; return; }   // clicking the same icon again toggles it closed
+    nodePopNodeId=nodeId;
+    if(!fillNodeIssuePop(nodeId)){ nodePopNodeId=null; return; }   // nothing to show -- leave it closed
+    positionPop(pop,iconEl);
+    if(pop.showPopover){ try{ pop.showPopover(); iconEl.setAttribute("aria-expanded","true"); }catch(e){} }
+  }
+  // Called at the end of every render(), once nodes exist again: if the popover is open, either
+  // the node it names still has issues -- refill (the list may itself have changed) and follow
+  // the icon to wherever the fresh card landed -- or it doesn't any more, in which case the
+  // popover closes itself. This is the other half of "no dangling icon": the icon disappearing
+  // is necessary but not sufficient if its explanation is still on screen naming a problem that
+  // no longer exists.
+  function refreshNodeIssuePopIfOpen(){
+    var pop=document.getElementById("nodeIssuePop");
+    if(!pop||!pop.matches||!pop.matches(":popover-open")||!nodePopNodeId) return;
+    var list=nodeIssueIndex[nodePopNodeId];
+    if(!list||!list.length){ if(pop.hidePopover) pop.hidePopover(); nodePopNodeId=null; nodePopSig=null; return; }
+    if(issueListSig(list)!==nodePopSig) fillNodeIssuePop(nodePopNodeId);   // only rebuild the DOM if the content actually changed
+    var iconEl=canvas.querySelector('.node[data-n="'+STUDIO.cssEsc(nodePopNodeId)+'"] .nwarn');
+    if(iconEl) positionPop(pop,iconEl);
+  }
 
   // ============================ commit / generate preview ============================
   // MUST stay in step with _exposure_labels() in ros_studio.py -- this is the live preview of
@@ -4560,8 +5003,8 @@ var DATA = /*__DATA__*/null;
     if(e.key==="Escape"&&findQ){ findBox.value=""; findQ=""; findIdx=0; applyFind(); return; }
     // A native popover already closes itself on Escape; without this bail the same keydown
     // goes on to clear the selection underneath it as an unrelated side effect.
-    var _sp=document.getElementById("statusPop");
-    if(e.key==="Escape"&&_sp&&_sp.matches&&_sp.matches(":popover-open")) return;
+    var _sp=document.getElementById("statusPop"), _nip=document.getElementById("nodeIssuePop");
+    if(e.key==="Escape"&&((_sp&&_sp.matches&&_sp.matches(":popover-open"))||(_nip&&_nip.matches&&_nip.matches(":popover-open")))) return;
     if(e.key==="Escape"){[].slice.call(document.querySelectorAll(".scrim.on:not([data-locked])")).forEach(function(s){s.classList.remove("on");});selNode=null;selEdge=null;render();fillInspector();}
     if(e.key>="1" && e.key<="4" && !typing){level=+e.key;setLevelButtons();render();}
     if((e.key==="Delete"||e.key==="Backspace")&&mode==="edit"&&selNode&&!typing){
