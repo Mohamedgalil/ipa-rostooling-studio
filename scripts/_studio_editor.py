@@ -21,9 +21,38 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   html,body{height:100%}
   body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);font-size:14px;-webkit-font-smoothing:antialiased;display:flex;flex-direction:column;overflow:hidden}
   button{font-family:inherit}
-  .banner{background:var(--warn-wash);color:var(--warn);font-size:.76rem;padding:.35rem .8rem;text-align:center;border-bottom:1px solid var(--rule);font-family:var(--mono)}
-  .banner b{color:var(--ink)}
-  .banner.err{background:var(--dead-wash);color:var(--dead)}
+  .srOnly{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+  /* status chip, beside the system name -- replaces the old full-width instructional banner,
+     which spent the WARN colour on text that was never a warning and so taught everyone to
+     ignore it (see the comment above buildStatus()). ok is deliberately NOT --accent: that
+     token means selection/brand elsewhere on this page, and a chip idling green in the toolbar
+     would compete with it. */
+  .statuschip{font-family:var(--mono);font-size:.68rem;font-weight:700;border-radius:999px;padding:.15rem .55rem;display:inline-flex;align-items:center;gap:.3rem;cursor:pointer;border:1px solid var(--rule);background:var(--surface-2);color:var(--ink-3);line-height:1.5}
+  .statuschip:hover{filter:brightness(0.97)}
+  .statuschip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .statuschip.warn{background:var(--warn-wash);color:var(--warn);border-color:var(--warn)}
+  .statuschip.err{background:var(--dead-wash);color:var(--dead);border-color:var(--dead)}
+  .statuschip.pulse{animation:chippulse 1.2s ease-out 2}
+  @keyframes chippulse{0%{box-shadow:0 0 0 0 var(--dead-wash)}70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
+  @media (prefers-reduced-motion:reduce){.statuschip.pulse{animation:none}}
+  #statusPop{position:fixed;margin:0;width:min(380px,calc(100vw - 1.5rem));max-height:70vh;overflow:auto;
+    background:var(--surface);color:var(--ink);border:1px solid var(--rule);border-radius:10px;
+    box-shadow:var(--shadow-lift);padding:.75rem .85rem;font-size:.78rem;line-height:1.45}
+  #statusPop::backdrop{background:transparent}
+  #statusPop .popclose{position:absolute;top:.5rem;right:.5rem;width:1.4rem;height:1.4rem;border-radius:50%;
+    border:none;background:transparent;color:var(--ink-3);font-size:1rem;line-height:1;cursor:pointer}
+  #statusPop .popclose:hover{background:var(--surface-2);color:var(--ink)}
+  #statusPop{padding-right:2.1rem}
+  #statusPop h5{margin:0 0 .35rem;font-family:var(--mono);font-size:.64rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
+  #statusPop .poprow{padding:.45rem 0;border-top:1px solid var(--rule-soft)}
+  #statusPop .poprow:first-child{padding-top:0;border-top:none}
+  #statusPop pre{white-space:pre-wrap;font-family:var(--mono);font-size:.72rem;color:var(--dead);margin:0}
+  #statusPop .popissue{display:block;width:100%;text-align:left;background:none;border:none;border-left:2px solid var(--warn);padding:.15rem 0 .15rem .5rem;font-size:.74rem;color:var(--ink-2);cursor:pointer}
+  #statusPop .popissue.e{border-color:var(--dead)}
+  #statusPop .popissue:hover{background:var(--surface-2)}
+  #statusPop .popissue.noref{cursor:default}
+  #statusPop .popissue.noref:hover{background:none}
+  #statusPop .popfoot{margin-top:.5rem}
 
   .topbar{display:flex;align-items:center;gap:.9rem;padding:.55rem .9rem;border-bottom:1px solid var(--rule);background:var(--surface);flex-shrink:0}
   .brand{font-family:var(--display);font-size:1.05rem;font-weight:600;letter-spacing:-.01em}
@@ -36,6 +65,8 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .seg button:last-child{border-right:none}
   .seg button.on{background:var(--accent);color:#fff}
   .seg button:disabled{opacity:.38;cursor:default}
+  .insptabs{width:100%;margin-bottom:.8rem}
+  .insptabs button{flex:1;text-align:center}
   .savestate{font-family:var(--mono);font-size:.66rem;color:var(--ink-3);white-space:nowrap}
   .savestate.warn{color:var(--warn)}
   .tbtn{font-size:.78rem;font-weight:600;color:var(--ink-2);background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:.4rem .7rem;cursor:pointer}
@@ -46,7 +77,7 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .main{flex:1;display:flex;min-height:0}
   .rail{width:190px;flex-shrink:0;border-right:1px solid var(--rule);background:var(--surface);display:flex;flex-direction:column;gap:1rem;padding:.85rem;overflow-y:auto}
   .rail h4{margin:0 0 .35rem;font-family:var(--mono);font-size:.64rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
-  .rail .grp{display:flex;flex-direction:column;gap:.4rem}
+  .rail .secbody{display:flex;flex-direction:column;gap:.4rem}
   body.mode-view .editonly{display:none}
   .railbtn{display:flex;align-items:center;gap:.45rem;font-size:.8rem;font-weight:600;color:var(--ink);background:var(--surface-2);border:1px solid var(--rule);border-radius:6px;padding:.45rem .55rem;cursor:pointer;text-align:left}
   .railbtn:hover{border-color:var(--accent)}
@@ -58,8 +89,29 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .issues .cnt{font-family:var(--mono);font-weight:700}
   .issues .err{color:var(--dead)} .issues .wrn{color:var(--warn)} .issues .ok{color:var(--accent-2)}
   .issuelist{display:flex;flex-direction:column;gap:.3rem;margin-top:.3rem}
-  .issuelist .it{font-size:.72rem;line-height:1.3;color:var(--ink-2);border-left:2px solid var(--warn);padding-left:.45rem}
+  .issuelist .it{font-size:.72rem;line-height:1.3;color:var(--ink-2);border-left:2px solid var(--warn);padding:.15rem 0 .15rem .45rem;
+    display:flex;gap:.4rem;align-items:baseline}
   .issuelist .it.e{border-color:var(--dead)}
+  .issuelist .ittext{flex:1;text-align:left}
+  .issuelist .itcode{font-family:var(--mono);font-size:.9em;color:var(--ink-3);flex-shrink:0}
+  .itgroup .itgrouphead{width:100%}
+  .itkids{padding-left:.6rem;margin-top:.25rem;display:flex;flex-direction:column;gap:.25rem;border-left:1px dashed var(--rule-soft)}
+  /* a row with somewhere to jump to -- what's interactive should look interactive */
+  button.it{width:100%;background:transparent;border:none;border-left:2px solid var(--warn);cursor:pointer;font:inherit;color:var(--ink-2)}
+  button.it.e{border-color:var(--dead)}
+  button.it:hover{background:var(--surface-2)}
+  button.it:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  .issuelist .it.noref{cursor:default}
+  .issuelist .it.ok{border-color:var(--accent);color:var(--accent-2)}
+  .issuelist .itmini{margin-left:.4rem;font-size:.9em;padding:.05rem .4rem;border-radius:4px;border:1px solid var(--rule);background:var(--surface);color:var(--ink-2);cursor:pointer;flex-shrink:0}
+  .issuelist .itmini:hover{background:var(--surface-2)}
+  .issuelist .itmore{font-size:.72rem;color:var(--ink-3);background:transparent;border:none;text-decoration:underline;cursor:pointer;padding:.2rem 0;text-align:left}
+  /* transient "you just clicked this" pointer, distinct from .sel (current selection, accent) and
+     .hasdiag (persistent, the server's verdict) */
+  .node.flash{border-color:var(--warn)!important;box-shadow:0 0 0 3px var(--warn-wash),var(--shadow-lift)!important}
+  .node.flash.e{border-color:var(--dead)!important;box-shadow:0 0 0 3px var(--dead-wash),var(--shadow-lift)!important}
+  .iedit.flash,.pkgrow.flash{outline:2px solid var(--warn);outline-offset:1px}
+  .iedit.flash.e,.pkgrow.flash.e{outline:2px solid var(--dead)}
 
   /* The viewport clips and NOTHING scrolls natively: pan and zoom are one CSS transform on
      .canvas, so the SVG wire layer -- a child of the same element -- is carried by the exact
@@ -190,8 +242,22 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .inspector{width:298px;flex-shrink:0;border-left:1px solid var(--rule);background:var(--surface);overflow-y:auto;padding:.85rem}
   .inspector.empty{display:flex;align-items:center;justify-content:center;color:var(--ink-3);font-size:.82rem;text-align:center;padding:2rem}
   .insec{margin-bottom:1rem}
-  .insec h4{margin:0 0 .5rem;font-family:var(--mono);font-size:.64rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);border-top:1px solid var(--rule-soft);padding-top:.6rem}
-  .insec:first-child h4{border-top:none;padding-top:0}
+  .insec h4{margin:0;font-family:var(--mono);font-size:.64rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);border-top:1px solid var(--rule-soft)}
+  .insec:first-child h4{border-top:none}
+  .insec:first-child .sechead{padding-top:0}
+  .sechead{display:flex;align-items:center;gap:.4rem;width:100%;background:none;border:none;cursor:pointer;color:inherit;font:inherit;letter-spacing:inherit;text-transform:inherit;padding:.6rem 0 .5rem;text-align:left}
+  .sechead:hover .caret{color:var(--accent)}
+  .sechead:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .caret{display:inline-block;transition:transform .12s;color:var(--ink-3);font-size:.7em;flex-shrink:0}
+  .secmeta{margin-left:auto;font-weight:400;color:var(--ink-3);display:flex;align-items:center;gap:.3rem;white-space:nowrap;text-transform:none;letter-spacing:normal}
+  .secdot{width:6px;height:6px;border-radius:50%;display:inline-block;flex-shrink:0}
+  .secdot[hidden]{display:none}
+  .secdot.e{background:var(--dead)}
+  .secdot.w{background:var(--warn)}
+  .secbody{padding-bottom:.1rem}
+  .insec.collapsed .secbody{display:none}
+  .insec.collapsed .caret{transform:rotate(-90deg)}
+  @media (prefers-reduced-motion:reduce){.caret{transition:none}}
   .fld{display:flex;flex-direction:column;gap:.2rem;margin-bottom:.5rem}
   .fld label{font-size:.7rem;color:var(--ink-3)}
   .fld input,.fld select{font-family:var(--mono);font-size:.76rem;background:var(--surface-2);border:1px solid var(--rule);border-radius:5px;padding:.3rem .4rem;color:var(--ink);width:100%}
@@ -338,7 +404,6 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   body.tiny .brand{display:none}
   body.tiny #levelSeg button{font-size:.7rem;padding:.34rem .45rem}
   body.tiny .findbar{top:.5rem;left:.5rem;right:.5rem}
-  body.tiny .banner{font-size:.68rem;padding:.3rem .5rem}
   /* A finger is not a mouse pointer: 12px ports were unhittable. The visible dot keeps its size
      -- growing it would change how the graph reads -- and an invisible ::after enlarges the
      TOUCH TARGET around it instead. */
@@ -356,16 +421,21 @@ EDITOR_TEMPLATE = r'''<!doctype html>
 </style>
 </head>
 <body class="mode-edit">
-<div class="banner" id="banner">/ros-studio — author in the browser, then <b>Commit</b> to generate &amp; validate in the Python companion.</div>
 
 <div class="topbar">
   <div class="brand">RosTooling <span class="sub">/ros-studio</span></div>
   <button class="tbtn drawerbtn" id="railToggle" title="Add, filters, issues and legend">&#9776; Tools</button>
-  <div class="sysname">system <input id="sysname" value=""></div>
+  <div class="sysname">system <input id="sysname" value="">
+    <button type="button" class="statuschip ok" id="statusChip" popovertarget="statusPop" aria-haspopup="dialog" title="/ros-studio status">
+      <span id="chipGlyph">&#9432;</span><span id="chipCount"></span>
+    </button>
+  </div>
+  <div popover="auto" id="statusPop"></div>
+  <span id="statusLive" class="srOnly" aria-live="polite"></span>
   <div class="seg" id="modeSeg">
     <button data-mode="view">View</button><button data-mode="edit" class="on">Edit</button>
   </div>
-  <div class="seg" id="levelSeg" style="display:none">
+  <div class="seg" id="levelSeg">
     <button data-lvl="1">System</button><button data-lvl="2">Interfaces</button><button data-lvl="3" class="on">Full</button><button data-lvl="4">Deps</button>
   </div>
   <div class="seg editonly" id="histSeg">
@@ -383,23 +453,29 @@ EDITOR_TEMPLATE = r'''<!doctype html>
 
 <div class="main">
   <aside class="rail">
-    <div class="grp editonly">
-      <h4>Add</h4>
-      <button class="railbtn" id="addNode"><span class="plus">+</span> Node (hand-authored)</button>
-      <button class="railbtn" id="addCat"><span class="plus">+</span> From catalogue&hellip;</button>
+    <div class="insec editonly" data-sec="rail/add">
+      <h4><button type="button" class="sechead" aria-expanded="true" aria-controls="secb_rail-add"><span class="caret">&#9662;</span><span class="sectitle">Add</span></button></h4>
+      <div class="secbody" id="secb_rail-add">
+        <button class="railbtn" id="addNode"><span class="plus">+</span> Node (hand-authored)</button>
+        <button class="railbtn" id="addCat"><span class="plus">+</span> From catalogue&hellip;</button>
+      </div>
     </div>
-    <div class="grp filter">
-      <h4>Show kinds</h4>
-      <div id="filterBox"></div>
+    <div class="insec issues" data-sec="rail/issues">
+      <h4><button type="button" class="sechead" aria-expanded="true" aria-controls="secb_rail-issues"><span class="caret">&#9662;</span><span class="sectitle">Issues</span>
+        <span class="secmeta"><span class="secdot e" id="issDot" hidden></span><span id="errCnt">0</span>&nbsp;err &middot; <span id="wrnCnt">0</span>&nbsp;wrn</span></button></h4>
+      <div class="secbody" id="secb_rail-issues">
+        <div class="issuelist" id="issueList"></div>
+      </div>
     </div>
-    <div class="grp issues">
-      <h4>Issues</h4>
-      <div class="row"><span class="cnt err" id="errCnt">0</span> errors &nbsp; <span class="cnt wrn" id="wrnCnt">0</span> warnings</div>
-      <div class="issuelist" id="issueList"></div>
+    <div class="insec filter" data-sec="rail/kinds">
+      <h4><button type="button" class="sechead" aria-expanded="true" aria-controls="secb_rail-kinds"><span class="caret">&#9662;</span><span class="sectitle">Show kinds</span></button></h4>
+      <div class="secbody" id="secb_rail-kinds"><div id="filterBox"></div></div>
     </div>
-    <div class="grp" style="margin-top:auto">
-      <h4>Legend</h4>
-      <div id="legend" style="display:flex;flex-direction:column;gap:.2rem;font-size:.72rem;color:var(--ink-2)"></div>
+    <div class="insec" data-sec="rail/legend" style="margin-top:auto">
+      <h4><button type="button" class="sechead" aria-expanded="true" aria-controls="secb_rail-legend"><span class="caret">&#9662;</span><span class="sectitle">Legend</span></button></h4>
+      <div class="secbody" id="secb_rail-legend">
+        <div id="legend" style="display:flex;flex-direction:column;gap:.2rem;font-size:.72rem;color:var(--ink-2)"></div>
+      </div>
     </div>
   </aside>
 
@@ -415,7 +491,7 @@ EDITOR_TEMPLATE = r'''<!doctype html>
       <button class="cbtn" id="findNext" title="next match (Enter)" disabled>&#8595;</button>
     </div>
     <div class="viewbar">
-      <button class="cbtn editonly" id="autoLayout" title="Arrange in layers that follow the connection direction">Auto layout</button>
+      <button class="cbtn" id="autoLayout" title="Arrange in layers that follow the connection direction">Auto layout</button>
       <label class="cbtn tgl" id="autoSidesWrap" title="Put each connected port on the edge facing its partner (left, right or bottom) instead of the fixed kind side, so wires stop crossing the card">
         <input type="checkbox" id="autoSides"> auto sides</label>
       <button class="cbtn" id="zFit" title="Fit to content (F)">Fit</button>
@@ -537,6 +613,73 @@ var DATA = /*__DATA__*/null;
   // which interfaces have their QoS panel open. Kept OUTSIDE `project` on purpose: it is view
   // state, and putting it in the model would make opening a panel an undoable edit.
   var qosOpen={}, cmtOpen={};
+  // Collapsible-section open/closed state: a UI preference like theme or autoSides, not model
+  // content, so it lives in localStorage keyed by rosStudio.secOpen and NEVER in project.json or
+  // the undo stack -- collapsing a section must not become an undoable "edit". Keyed by a fixed
+  // context+slug (e.g. "node/interfaces"), not by node id or rendered title, so "I collapsed
+  // interfaces" applies to every node rather than being re-asked per selection.
+  var secOpen=(function(){ try{ return JSON.parse(localStorage.getItem("rosStudio.secOpen")||"{}"); }catch(e){ return {}; } })();
+  var SEC_DEFAULT_CLOSED={"rail/legend":1,"rail/kinds":1,"sys/types":1};
+  function secClosed(key){
+    return Object.prototype.hasOwnProperty.call(secOpen,key) ? secOpen[key]===false : !!SEC_DEFAULT_CLOSED[key];
+  }
+  function saveSecOpen(){ try{ localStorage.setItem("rosStudio.secOpen",JSON.stringify(secOpen)); }catch(e){} }
+  function secDomId(key){ return "secb_"+key.replace(/\//g,"-"); }
+  // Shared by the inspector (rebuilt on every selection -- `closed` is read fresh each call, so
+  // the class is simply baked into the string) and the rail (static markup -- applySecState
+  // below stamps the class on once at startup instead).
+  function sec(key,titleHtml,bodyHtml,metaHtml){
+    var closed=secClosed(key);
+    return '<div class="insec'+(closed?' collapsed':'')+'" data-sec="'+key+'">'
+      +'<h4><button type="button" class="sechead" aria-expanded="'+(closed?'false':'true')+'" aria-controls="'+secDomId(key)+'">'
+      +'<span class="caret">&#9662;</span><span class="sectitle">'+titleHtml+'</span>'
+      +(metaHtml?('<span class="secmeta">'+metaHtml+'</span>'):'')
+      +'</button></h4><div class="secbody" id="'+secDomId(key)+'">'+bodyHtml+'</div></div>';
+  }
+  function toggleSecBox(box){
+    var key=box.getAttribute("data-sec"); if(!key) return;
+    var closing=!box.classList.contains("collapsed");
+    box.classList.toggle("collapsed",closing);
+    var btn=box.querySelector(".sechead");
+    if(btn) btn.setAttribute("aria-expanded",closing?"false":"true");
+    secOpen[key]=!closing; saveSecOpen();
+  }
+  function expandSec(key){
+    // used by issue routing: a target hidden inside a collapsed section has to open first,
+    // and the point was to go there, so the expansion is persisted rather than temporary.
+    if(!secClosed(key)) return;
+    secOpen[key]=true; saveSecOpen();
+    var box=document.querySelector('.insec[data-sec="'+key+'"]');
+    if(box){ box.classList.remove("collapsed"); var btn=box.querySelector(".sechead"); if(btn) btn.setAttribute("aria-expanded","true"); }
+  }
+  function wireSecClicks(root){
+    if(!root) return;
+    root.addEventListener("click",function(e){
+      var btn=e.target.closest(".sechead"); if(!btn||!root.contains(btn)) return;
+      var box=btn.closest(".insec"); if(box) toggleSecBox(box);
+    });
+  }
+  function applySecState(root){
+    if(!root) return;
+    [].slice.call(root.querySelectorAll(".insec[data-sec]")).forEach(function(box){
+      var closed=secClosed(box.getAttribute("data-sec"));
+      box.classList.toggle("collapsed",closed);
+      var btn=box.querySelector(".sechead"); if(btn) btn.setAttribute("aria-expanded",closed?"false":"true");
+    });
+  }
+  // Which half of the inspector is showing: the current selection, or the project (system-level)
+  // panel. Reaching Project used to require deselecting -- there was no other way in -- which is
+  // why fillSystemInspector's fromFile hint had to end with "(deselect to reach it)". A tab
+  // switch is presentation, not a model edit: it never touches selNode/selEdge, never
+  // pushUndo()s, and (unlike a collapse) is NOT persisted -- it always starts on Selected/Project
+  // to match whatever got clicked, and a fresh selection always wins Selected back.
+  var inspTab="proj", lastSelForTab=null;
+  function tabStrip(){
+    var has=!!(selNode||selEdge);
+    return '<div class="seg insptabs">'
+      +'<button type="button" data-insptab="sel"'+(inspTab==="sel"?' class="on"':'')+(has?"":" disabled")+'>Selected</button>'
+      +'<button type="button" data-insptab="proj"'+(inspTab==="proj"?' class="on"':'')+'>Project</button></div>';
+  }
   // Comment panels are wired by a per-render registry key rather than by a model id, because the
   // same panel shape serves nodes, interfaces, parameters, connections, the system and a
   // package -- and only the first two of those have an id at all.
@@ -551,7 +694,11 @@ var DATA = /*__DATA__*/null;
   var PTYPES=["String","Boolean","Integer","Double"];
 
   document.getElementById("sysname").value=(project.system&&project.system.name)||"system";
-  if(DATA.banner){ var b=document.getElementById("banner"); b.className="banner err"; b.innerHTML="<b>"+esc(DATA.banner)+"</b>"; }
+  // The status chip's one-time notice: sourced from the companion's own DATA.banner (a
+  // generation/validation error) here at load, or replaced by a file-load report in
+  // applyLoadedProject. Independent of the live lint severity that also feeds the chip --
+  // buildStatus() takes the max of the two.
+  var opNotice=DATA.banner?{sev:"err",title:"Generation failed",html:'<pre>'+esc(DATA.banner)+'</pre>'}:null;
 
   // ---- datalists (offline autocomplete) ----
   (function(){
@@ -1812,18 +1959,15 @@ var DATA = /*__DATA__*/null;
     if(project.system&&project.system.name)
       document.getElementById("sysname").value=project.system.name;
     fillNsList();
-    sizeCanvas(); render(); fillInspector(); fitView();
-    var b=document.getElementById("banner");
     if(report&&report.length){
-      b.className="banner warn";
-      b.innerHTML="<b>Loaded "+esc(sourceName)+"</b> with "+report.length
-        +" note(s) — the companion's <code>init</code> is the authoritative seeder:<br>"
-        +report.map(function(r){return "• "+esc(r);}).join("<br>");
+      opNotice={sev:"warn",title:"Loaded "+sourceName,html:"<b>"+report.length
+        +" note(s)</b> — the companion's <code>init</code> is the authoritative seeder:<br>"
+        +report.map(function(r){return "• "+esc(r);}).join("<br>")};
     } else {
-      b.className="banner";
-      b.innerHTML="<b>Loaded "+esc(sourceName)+".</b> Edit, then <b>Commit</b> to hand the "
-        +"project.json back to the Python companion for generation and validation.";
+      opNotice={sev:"ok",title:"Loaded "+sourceName,html:"Edit, then <b>Commit</b> to hand the "
+        +"project.json back to the Python companion for generation and validation."};
     }
+    sizeCanvas(); render(); fillInspector(); fitView();   // render() -> runIssues() -> buildStatus() picks up opNotice
     return true;
   }
 
@@ -2672,9 +2816,13 @@ var DATA = /*__DATA__*/null;
   // ============================ inspector ============================
   function fillInspector(){
     cmtReg={};                       // the panel is rebuilt from scratch; so is its registry
-    if(selEdge){ return fillEdgeInspector(); }
     var n=selNode&&nodeById(selNode);
-    if(!n) return fillSystemInspector();
+    var curKey=selEdge?("e:"+selEdge):(n?("n:"+n.id):null);
+    if(curKey&&curKey!==lastSelForTab) inspTab="sel";  // a fresh selection always wins the tab back
+    lastSelForTab=curKey;
+    if(!curKey) inspTab="proj";        // nothing selected: Selected has nothing to show
+    if(inspTab==="proj") return fillSystemInspector();
+    if(selEdge){ return fillEdgeInspector(); }
     inspector.className="inspector";
     if(mode!=="edit"){ return fillReadonlyNode(n); }
     // A subSystems: node belongs to the REFERENCED file. Editing it here would be a lie: its
@@ -2682,8 +2830,7 @@ var DATA = /*__DATA__*/null;
     // the connections that name it while the subSystems: line still claimed to provide it.
     if(n.backing==="sub"){ return fillSubsystemNode(n); }
     var cat=n.backing==="cat";
-    var ih='<div class="insec"><h4>node: '+esc(n.label)+'</h4>'
-      +'<div class="fld"><label>label (rossystem instance)</label><input id="f_label" data-undo="1" value="'+esc(n.label)+'"></div>'
+    var headBody='<div class="fld"><label>label (rossystem instance)</label><input id="f_label" data-undo="1" value="'+esc(n.label)+'"></div>'
       +'<div class="fld"><label>backing</label><div class="radio">'
       +'<label><input type="radio" name="bk" value="hand" '+(cat?"":"checked")+'> hand-authored</label>'
       +'<label><input type="radio" name="bk" value="cat" '+(cat?"checked":"")+'> catalogue</label></div></div>'
@@ -2696,11 +2843,12 @@ var DATA = /*__DATA__*/null;
       +((n.namespace&&String(n.namespace).trim())
         ?'<div class="hint w">emitted between from: and interfaces:. 0 of 52 corpus files use it — rosmodel_lint warns (RM044); the 3.1.0 server accepts it.</div>'
         :'<div class="hint">set this to scope the node in a multi-robot system.</div>')+'</div>'
-      +'<div class="fld"><label>from: (derived)</label><div class="derived">"'+esc(n.pkg)+'.'+esc(n.node)+'"</div></div></div>';
-    ih+='<div class="insec"><h4>interfaces</h4>';
+      +'<div class="fld"><label>from: (derived)</label><div class="derived">"'+esc(n.pkg)+'.'+esc(n.node)+'"</div></div>';
+    var ih=sec("node/head","node: "+esc(n.label),headBody);
+    var ifBody='';
     for(var j=0;j<n.ifaces.length;j++){var f=n.ifaces[j];
       var conn=ifaceConnected(n,f);
-      ih+='<div class="iedit'+(f.orphan?" orphan":"")+'" data-i="'+f.id+'"><span class="kd '+f.kind+'" title="'+KIND_LABEL[f.kind]+'">'+f.kind+'</span>'
+      ifBody+='<div class="iedit'+(f.orphan?" orphan":"")+'" data-i="'+f.id+'"><span class="kd '+f.kind+'" title="'+KIND_LABEL[f.kind]+'">'+f.kind+'</span>'
         +'<span class="grow"><span class="inm2">'+esc(f.name)+'</span><br><span class="ity2">'+esc(f.type||"—")+' · "'+esc(n.artifact||"")+'::'+esc(f.name)+'"</span>'
         +'<span class="lblrow"><input class="ilbl" data-undo="1" data-lbl="'+f.id+'" value="'+esc(f.label||"")+'" placeholder="'+esc(f.name)+'" title="exposure label — the key written into the .rossystem. Blank derives it from the interface name.">'
         +'<label class="expchk" title="'+(conn?"connected — always exposed":"write this interface into the .rossystem even with nothing wired to it")+'">'
@@ -2711,19 +2859,20 @@ var DATA = /*__DATA__*/null;
         +'<span class="del" data-del="'+f.id+'">✕</span></div>'
         +qosPanel(f)+cmtPanel(f,"iface","i:"+f.id);
     }
-    ih+='<div class="addform"><div class="kseg" id="kseg">'+KINDS.map(function(k){return '<button data-k="'+k+'" class="'+(k===addKind?"on":"")+'">'+k+'</button>';}).join("")+'</div>'
+    ifBody+='<div class="addform"><div class="kseg" id="kseg">'+KINDS.map(function(k){return '<button data-k="'+k+'" class="'+(k===addKind?"on":"")+'">'+k+'</button>';}).join("")+'</div>'
       +'<input id="ni_name" placeholder="interface name (quoted for you)">'
       +'<input id="ni_type" list="typelist" placeholder="type e.g. std_msgs/msg/String">'
       +'<div class="typestate" id="ni_ts"></div>'
-      +'<button class="minibtn" id="ni_add">+ add interface</button></div></div>';
-    ih+='<div class="insec"><h4>parameters</h4>';
+      +'<button class="minibtn" id="ni_add">+ add interface</button></div>';
+    ih+=sec("node/interfaces","interfaces",ifBody,String(n.ifaces.length));
     // Two halves, shown as two lines, because they are two grammar slots and treating them as
     // one is what deleted every override on round-trip:
     //   .ros2   `name: / type: T / default: D`      the artifact DECLARES it
     //   .rossys `- "label": "artifact::name" / value: V`  this system EXPOSES and OVERRIDES it
+    var pmBody='';
     for(var p=0;p<n.params.length;p++){var pp=n.params[p];
       var pt=String(pp.ptype||"").trim()||inferPtype(pp.sysValue!=null?pp.sysValue:pp.value);
-      ih+='<div class="iedit'+(pp.orphan?" orphan":"")+'" data-p="'+pp.id+'">'
+      pmBody+='<div class="iedit'+(pp.orphan?" orphan":"")+'" data-p="'+pp.id+'">'
         +'<span class="kd" style="background:var(--k-param)" title="'+esc(pt)+'">'+esc(pt.slice(0,3))+'</span>'
         +'<span class="grow"><span class="inm2">'+esc(pp.name)+'</span> '
         +'<span class="ity2">'+esc(pt)+(pp.value==null||pp.value===""?"":" default "+esc(String(pp.value)))
@@ -2739,18 +2888,20 @@ var DATA = /*__DATA__*/null;
         +'</span></span>'
         +'<span class="del" data-delp="'+pp.id+'">✕</span></div>'+cmtPanel(pp,"param","p:"+pp.id);
     }
-    ih+='<div class="addform"><input id="np_name" placeholder="param name">'
+    pmBody+='<div class="addform"><input id="np_name" placeholder="param name">'
       +'<select id="np_type">'+PTYPES.map(function(o){return '<option>'+o+'</option>';}).join("")+'</select>'
       +'<input id="np_val" placeholder="value (typed-safe: no True/int traps)">'
-      +'<button class="minibtn" id="np_add">+ add parameter</button></div></div>';
-    // the node's own comments, always open: a leading block is the one an author reaches for
-    // most and hiding it behind a chip would keep it out of sight in exactly the file it
-    // documents.
-    ih+='<div class="insec"><h4>comments</h4>'+cmtRows(n,"node","n:"+n.id)
+      +'<button class="minibtn" id="np_add">+ add parameter</button></div>';
+    ih+=sec("node/parameters","parameters",pmBody,String(n.params.length));
+    // the node's own comments, always open by default: a leading block is the one an author
+    // reaches for most and hiding it behind a chip would keep it out of sight in exactly the
+    // file it documents.
+    var cmBody=cmtRows(n,"node","n:"+n.id)
       +'<div class="hint">re-emitted at these positions on generate; everything else is '
-      +'reported by <code>init</code> and dropped.</div></div>';
+      +'reported by <code>init</code> and dropped.</div>';
+    ih+=sec("node/comments","comments",cmBody);
     ih+='<button class="delnode" id="delNode">Delete node</button>';
-    inspector.innerHTML=ih;
+    inspector.innerHTML=tabStrip()+ih;
     wireInspector(n);
   }
   // fromFile is a SYSTEM member and fromGitRepo a PACKAGE member, so neither has a node to
@@ -2840,7 +2991,7 @@ var DATA = /*__DATA__*/null;
   function typesSection(edit){
     var known=definedTypeKeys(), ct=companionTypes();
     var files=Object.keys(ct).sort(), keys=Object.keys(project.types||{}).sort();
-    var h='<div class="insec"><h4>message types (.ros)</h4>';
+    var h='';
     h+='<div class="roinfo">'+(files.length
         ? esc(files.map(function(p){return p+".ros";}).join(", "))
         : "no companion .ros — every referenced type resolves in the vendored catalogue")
@@ -2853,7 +3004,7 @@ var DATA = /*__DATA__*/null;
         +'fields: '+esc(bodiless.sort().join(", "))+'</div>';
     keys.forEach(function(key){
       var p=String(key).split("/"), block=(p.length===3)?SEGBLOCK[p[1]]:null;
-      h+='<div class="pkgrow"><div class="pn">'+esc(key)+'</div>';
+      h+='<div class="pkgrow" data-typekey="'+esc(key)+'"><div class="pn">'+esc(key)+'</div>';
       if(!block){
         h+='<div class="hint w">not &lt;package&gt;/&lt;msg|srv|action&gt;/&lt;Name&gt; — the '
           +'only shape a spec\'s qualified name takes; generation is refused.</div></div>';
@@ -2894,7 +3045,7 @@ var DATA = /*__DATA__*/null;
         +'+ feedback — the keyword is mandatory even with no fields. Reference another spec by '
         +'its QUOTED qualified name, "my_msgs/msg/Reading", including one in this same package: '
         +'there is no short form.</div></div>';
-    return h+'</div>';
+    return sec("sys/types","message types (.ros)",h,keys.length?String(keys.length):"");
   }
 
   function wireTypes(){
@@ -2988,7 +3139,7 @@ var DATA = /*__DATA__*/null;
   function fillSystemInspector(){
     inspector.className="inspector syspanel";
     var ff=(project.system&&project.system.fromFile)||"", pkgs=handPackages(), edit=(mode==="edit");
-    var h='<div class="insec"><h4>system</h4>';
+    var out='', h='';
     if(edit){
       h+='<div class="fld"><label>fromFile (the launch file this system stands for)</label>'
         +'<input id="f_fromfile" data-undo="1" value="'+esc(ff)+'" placeholder="pkg/launch/bringup.launch.py">'
@@ -3011,7 +3162,7 @@ var DATA = /*__DATA__*/null;
     // only place it can be edited -- and on the TurtleBot 3 example it is 40 lines of the
     // author's reasoning, which `generate` used to delete outright.
     if(edit) h+=cmtRows(project,"system","sys");
-    h+='</div>';
+    out+=sec("sys/system","system",h);
 
     // subSystems: is reference-only -- the entries come from the seeded file and there is no UI
     // to invent one, because a reference that resolves to nothing exposes nothing connectable
@@ -3020,7 +3171,7 @@ var DATA = /*__DATA__*/null;
     // which catalogue file it resolves to and which nodes it brings in.
     var subs=project.subSystems||[];
     if(subs.length){
-      h+='<div class="insec"><h4>subsystems (reused compositions)</h4>';
+      h='';
       subs.forEach(function(s,i){
         var got=project.nodes.filter(function(n){return n.backing==="sub"&&n.subRef===s.ref;});
         var g=s.graph||null, st=subState(s.ref);
@@ -3045,14 +3196,14 @@ var DATA = /*__DATA__*/null;
             +'<code>interfaces:</code> blocks declare (checkIfInterfaceInSystem).</div>')
           +(edit?cmtRows(s,"sub","sub:"+i):"")+'</div>';
       });
-      h+='</div>';
+      out+=sec("sys/subsystems","subsystems (reused compositions)",h,String(subs.length));
     }
 
     // The system-level `parameters:` block: a peer of nodes: and connections:, not a node and
     // not a member of one. It had no UI at all because it had no slot in the project -- five of
     // them on ur_robot.rossystem were read, dropped, and reported as phantom NODES.
     var sps=project.params||[];
-    h+='<div class="insec"><h4>system parameters ('+sps.length+')</h4>';
+    h='';
     if(!sps.length) h+='<div class="roinfo">None. A system parameter is declared once for the '
       +'whole composition (<code>name: / type: T</code>), unlike a node parameter, which '
       +'exposes and overrides one parameter of one artifact.</div>';
@@ -3087,9 +3238,9 @@ var DATA = /*__DATA__*/null;
       +'<select id="sp_type">'+PTYPES.map(function(o){return '<option>'+o+'</option>';}).join("")+'</select>'
       +'<input id="sp_val" placeholder="value (optional)">'
       +'<button class="minibtn" id="sp_add">+ add system parameter</button></div>';
-    h+='</div>';
+    out+=sec("sys/params","system parameters",h,String(sps.length));
 
-    h+='<div class="insec"><h4>packages (.ros2)</h4>';
+    h='';
     if(!pkgs.length) h+='<div class="roinfo">No hand-authored package yet — catalogue nodes '
       +'reference a vendored .ros2 and generate none.</div>';
     pkgs.forEach(function(p){
@@ -3104,10 +3255,10 @@ var DATA = /*__DATA__*/null;
               :'<div class="derived">'+esc(git||"(no fromGitRepo)")+'</div>')
         +'</div>';
     });
-    h+='</div>'+typesSection(edit)
-      +'<div class="insec"><h4>selection</h4><div class="roinfo">Select a node to '
-      +(edit?'edit it, or add one from the rail':'inspect it')+'.</div></div>';
-    inspector.innerHTML=h;
+    out+=sec("sys/packages","packages (.ros2)",h,pkgs.length?String(pkgs.length):"")+typesSection(edit)
+      +'<div class="hint" style="margin-top:.6rem">Select a node to '
+      +(edit?'edit it, or add one from the rail':'inspect it')+'.</div>';
+    inspector.innerHTML=tabStrip()+out;
 
     var ffi=document.getElementById("f_fromfile");
     if(ffi) ffi.oninput=function(e){
@@ -3132,17 +3283,17 @@ var DATA = /*__DATA__*/null;
     var rows=n.ifaces.map(function(f){
       return f.kind+"  "+f.name+(f.type?"  "+f.type:"")
         +(ifaceConnected(n,f)?"   (connected)":"");}).join("\n")||"(none)";
-    inspector.innerHTML='<div class="insec"><h4>node: '+esc(n.label)+'</h4>'
-      +'<div class="roinfo">via subSystems: "'+esc(n.subRef||"")+'"'
-      +((sub&&sub.file)?'<br>'+esc("assets/rosmodelscatalog/"+sub.file):'')
-      +'<br>from: "'+esc(n.pkg)+'.'+esc(n.node)+'"</div>'
-      +'<div class="hint">read-only: this node is declared in the referenced system, not here. '
-      +'Edit it there, or drop the subSystems: entry and declare it under this file\'s own '
-      +'nodes: instead — declaring it in both is RM090.</div></div>'
-      +'<div class="insec"><h4>interfaces (from the referenced system)</h4>'
-      +'<pre class="roinfo" style="white-space:pre-wrap">'+esc(rows)+'</pre>'
-      +'<div class="hint">a connections: endpoint spells these names verbatim; they are not '
-      +'re-labelled here.</div></div>';
+    inspector.innerHTML=tabStrip()+sec("sub/head","node: "+esc(n.label),
+        '<div class="roinfo">via subSystems: "'+esc(n.subRef||"")+'"'
+        +((sub&&sub.file)?'<br>'+esc("assets/rosmodelscatalog/"+sub.file):'')
+        +'<br>from: "'+esc(n.pkg)+'.'+esc(n.node)+'"</div>'
+        +'<div class="hint">read-only: this node is declared in the referenced system, not here. '
+        +'Edit it there, or drop the subSystems: entry and declare it under this file\'s own '
+        +'nodes: instead — declaring it in both is RM090.</div>')
+      +sec("sub/interfaces","interfaces (from the referenced system)",
+        '<pre class="roinfo" style="white-space:pre-wrap">'+esc(rows)+'</pre>'
+        +'<div class="hint">a connections: endpoint spells these names verbatim; they are not '
+        +'re-labelled here.</div>',String(n.ifaces.length));
   }
   function fillReadonlyNode(n){
     var rows=n.ifaces.map(function(f){
@@ -3155,14 +3306,16 @@ var DATA = /*__DATA__*/null;
     var cm=cmtBlock(n,"before","")+CMT_FIELDS.node.slice(1).map(function(fd){
       var v=cmtMulti(fd[0])?cmtList(cmtOf(n,fd[0])).join("\n"):cmtClean(cmtOf(n,fd[0]));
       return v?(fd[1]+": "+v+"\n"):"";}).join("");
-    inspector.innerHTML='<div class="insec"><h4>node: '+esc(n.label)+'</h4>'
-      +'<div class="roinfo">from: "'+esc(n.pkg)+'.'+esc(n.node)+'"'
-      +((n.namespace&&String(n.namespace).trim())?'<br>namespace: '+esc(n.namespace):'')
-      +'<br>backing: '+n.backing+'<br>artifact: '+esc(n.artifact||"")+'</div></div>'
-      +'<div class="insec"><h4>interfaces</h4><pre class="roinfo" style="white-space:pre-wrap">'+esc(rows)+'</pre></div>'
-      +'<div class="insec"><h4>parameters</h4><pre class="roinfo" style="white-space:pre-wrap">'+esc(pr)+'</pre></div>'
-      +(cm?'<div class="insec"><h4>comments</h4><pre class="roinfo" style="white-space:pre-wrap">'+esc(cm)+'</pre></div>':'')
-      +((DIAG[n.id]&&DIAG[n.id].length)?'<div class="insec"><h4>diagnostics</h4><pre class="roinfo" style="white-space:pre-wrap;color:var(--dead)">'+esc(DIAG[n.id].join("\n"))+'</pre></div>':'');
+    inspector.innerHTML=tabStrip()+sec("ro/head","node: "+esc(n.label),
+        '<div class="roinfo">from: "'+esc(n.pkg)+'.'+esc(n.node)+'"'
+        +((n.namespace&&String(n.namespace).trim())?'<br>namespace: '+esc(n.namespace):'')
+        +'<br>backing: '+n.backing+'<br>artifact: '+esc(n.artifact||"")+'</div>')
+      +sec("ro/interfaces","interfaces",'<pre class="roinfo" style="white-space:pre-wrap">'+esc(rows)+'</pre>',String(n.ifaces.length))
+      +sec("ro/parameters","parameters",'<pre class="roinfo" style="white-space:pre-wrap">'+esc(pr)+'</pre>',String(n.params.length))
+      +(cm?sec("ro/comments","comments",'<pre class="roinfo" style="white-space:pre-wrap">'+esc(cm)+'</pre>'):'')
+      +((DIAG[n.id]&&DIAG[n.id].length)?sec("ro/diagnostics","diagnostics",
+          '<pre class="roinfo" style="white-space:pre-wrap;color:var(--dead)">'+esc(DIAG[n.id].join("\n"))+'</pre>',
+          String(DIAG[n.id].length)):'');
   }
   function fillEdgeInspector(){
     var c=null; for(var i=0;i<project.connections.length;i++)if(project.connections[i].id===selEdge)c=project.connections[i];
@@ -3171,16 +3324,15 @@ var DATA = /*__DATA__*/null;
     if(!a||!bb){selEdge=null;return fillInspector();}
     var pair=PAIR_TOPIC[a.kind]?"Topic (one-way)":"Service/Action (request ⇄ response)";
     inspector.className="inspector";
-    var h='<div class="insec"><h4>connection</h4>'
-      +'<div class="fld"><label>kind</label><div class="derived">'+pair+'</div></div>'
+    var h=sec("conn/head","connection",
+      '<div class="fld"><label>kind</label><div class="derived">'+pair+'</div></div>'
       +'<div class="fld"><label>from (server/publisher)</label><div class="derived">'+esc(nodeById(c.from.n).label)+' · '+esc(a.name)+' ('+a.kind+')</div></div>'
-      +'<div class="fld"><label>to (client/subscriber)</label><div class="derived">'+esc(nodeById(c.to.n).label)+' · '+esc(bb.name)+' ('+bb.kind+')</div></div>';
-    h+='</div>';
+      +'<div class="fld"><label>to (client/subscriber)</label><div class="derived">'+esc(nodeById(c.to.n).label)+' · '+esc(bb.name)+' ('+bb.kind+')</div></div>');
     // a connection has no name of its own, so its comment is keyed by the LABEL PAIR both here
     // and in emit_rossystem -- which is why it has to be editable from the edge, not the node.
-    if(mode==="edit") h+='<div class="insec"><h4>comments</h4>'+cmtRows(c,"conn","c:"+c.id)
-      +'</div><button class="delnode" id="delEdge">Delete connection</button>';
-    inspector.innerHTML=h;
+    if(mode==="edit") h+=sec("conn/comments","comments",cmtRows(c,"conn","c:"+c.id))
+      +'<button class="delnode" id="delEdge">Delete connection</button>';
+    inspector.innerHTML=tabStrip()+h;
     wireComments();
     var de=document.getElementById("delEdge");
     if(de) de.onclick=function(){pushUndo();project.connections=project.connections.filter(function(x){return x.id!==c.id;});selEdge=null;render();fillInspector();};
@@ -3362,32 +3514,115 @@ var DATA = /*__DATA__*/null;
   })();
 
   // ============================ issues ============================
+  // Transient "you clicked this" pointer -- distinct from .sel (the current selection, accent)
+  // and .hasdiag (persistent, the server's own verdict from a prior Commit).
+  function flashEl(el,sev){
+    if(!el) return;
+    el.classList.remove("flash","e"); void el.offsetWidth;
+    el.classList.add("flash"); if(sev==="e") el.classList.add("e");
+    setTimeout(function(){ el.classList.remove("flash","e"); },1400);
+  }
+  function focusField(id){
+    var el=document.getElementById(id); if(!el) return false;
+    el.scrollIntoView({block:"nearest"}); if(el.focus) el.focus(); if(el.select) el.select();
+    return true;
+  }
+  // Routes a clicked issue to its source: selects/centres the node or connection it names,
+  // flashes it, and -- in Edit mode, where the field actually exists -- focuses the exact
+  // input. View mode still selects and centres; a click on a diagnostic never changes the
+  // app's mode on its own.
+  // STUDIO.cssEsc wraps CSS.escape(), which escapes for a bare IDENTIFIER (#foo, .bar) --
+  // every other cssEsc call site in this file feeds it a plain alphanumeric id, so that never
+  // showed. it.ftag/it.typekey are message-type KEYS ("pkg/msg/Name") and DO contain "/", which
+  // CSS.escape() backslash-escapes character-by-character -- wrong inside an already-quoted
+  // attribute value, where only the quote and backslash themselves need escaping. Selectors
+  // built the cssEsc way against a slash-bearing string silently match nothing.
+  function attrEsc(s){ return String(s).replace(/["\\]/g,"\\$&"); }
+  function gotoIssue(it){
+    closeDrawers();
+    if(it.action==="addnode"){ var ab=document.getElementById("addNode"); if(ab) ab.click(); return; }
+    if(it.conn){
+      var c=null; for(var i=0;i<project.connections.length;i++) if(project.connections[i].id===it.conn) c=project.connections[i];
+      if(!c) return;
+      selEdge=it.conn; selNode=null; render(); fillInspector();
+      centreOn(c.from.n); flashEl(canvas.querySelector('.node[data-n="'+STUDIO.cssEsc(c.from.n)+'"]'),it.sev);
+      revealInspector(); return;
+    }
+    if(it.node){
+      selNode=it.node; selEdge=null; render(); fillInspector();
+      centreOn(it.node); flashEl(canvas.querySelector('.node[data-n="'+STUDIO.cssEsc(it.node)+'"]'),it.sev);
+      revealInspector();
+      if(mode==="edit"){
+        if(it.field){ focusField(it.field); return; }
+        if(it.qos&&it.iface){ qosOpen[it.iface]=true; fillInspector();
+          var qel=inspector.querySelector('[data-qi="'+STUDIO.cssEsc(it.iface)+'"][data-qk="'+it.qos+'"]');
+          if(qel){ qel.scrollIntoView({block:"nearest"}); qel.focus(); } return; }
+        if(it.iface) flashEl(inspector.querySelector('.iedit[data-i="'+STUDIO.cssEsc(it.iface)+'"]'),it.sev);
+        else if(it.param) flashEl(inspector.querySelector('.iedit[data-p="'+STUDIO.cssEsc(it.param)+'"]'),it.sev);
+      }
+      return;
+    }
+    if(it.sys){
+      selNode=null; selEdge=null; inspTab="proj"; render(); fillInspector(); revealInspector();
+      if(it.field){ focusField(it.field); return; }
+      if(it.ftag){ expandSec("sys/types");
+        var fel=inspector.querySelector('[data-ft="'+attrEsc(it.ftag)+'"]');
+        if(fel){ fel.scrollIntoView({block:"nearest"}); fel.focus(); } return; }
+      if(it.typekey){ expandSec("sys/types");
+        flashEl(inspector.querySelector('.pkgrow[data-typekey="'+attrEsc(it.typekey)+'"]'),it.sev); }
+    }
+  }
+  // Issues that repeat identically shaped across many nodes/interfaces (a namespace warning on
+  // 14 nodes, say) share a groupKey and collapse to one row -- the flat per-node list used to
+  // bury a real error under a wall of RM044 warnings. Ungrouped issues (groupKey absent) pass
+  // through unchanged. Grouping is scoped by severity too: an "e" and a "w" never merge.
+  function groupIssues(list){
+    var buckets={}, order=[], loose=[];
+    list.forEach(function(it){
+      if(!it.groupKey){ loose.push(it); return; }
+      var k=it.sev+":"+it.groupKey;
+      if(!buckets[k]){ buckets[k]=[]; order.push(k); }
+      buckets[k].push(it);
+    });
+    var out=[];
+    order.forEach(function(k){
+      var m=buckets[k];
+      if(m.length===1){ out.push(m[0]); return; }
+      out.push({sev:m[0].sev,code:m[0].code,msg:(m[0].groupLabel||m[0].msg)+" — "+m.length+" "+(m[0].groupUnit||"nodes"),group:m});
+    });
+    return out.concat(loose);
+  }
+  var lastIssues=[], issuesExpanded=false;
   function runIssues(){
     var issues=[];
-    var labels={};
+    function pushIssue(sev,msg,opts){ var it={sev:sev,msg:msg}; if(opts) for(var k in opts) it[k]=opts[k]; issues.push(it); }
+    var labels={}, labelFirst={};
     for(var i=0;i<project.nodes.length;i++){var n=project.nodes[i];
-      if(n.backing==="hand" && /[A-Z]/.test(n.pkg)) issues.push(["e",'package "'+n.pkg+'" has uppercase — validator ERROR (RM010)']);
+      if(!labelFirst[n.label]) labelFirst[n.label]=n.id;
+      if(n.backing==="hand" && /[A-Z]/.test(n.pkg))
+        pushIssue("e",n.label+': package "'+n.pkg+'" has uppercase',{code:"RM010",node:n.id,field:"f_pkg",groupKey:"rm010",groupLabel:"package name has uppercase"});
       labels[n.label]=(labels[n.label]||0)+1;
       // RM044: legal and the server accepts it, but 0 of 52 corpus files use it, so the linter
       // warns. Surface it here rather than letting Commit be the first mention.
       if(n.namespace&&String(n.namespace).trim())
-        issues.push(["w",n.label+': namespace "'+n.namespace+'" has zero corpus support (RM044)']);
+        pushIssue("w",n.label+': namespace "'+n.namespace+'" has zero corpus support',{code:"RM044",node:n.id,field:"f_ns",groupKey:"rm044",groupLabel:"namespace has zero corpus support"});
       var seen={};
       for(var j=0;j<n.ifaces.length;j++){var f=n.ifaces[j];
-        if(seen[f.name]) issues.push(["w",n.label+": duplicate interface name \""+f.name+"\""]); seen[f.name]=1;
+        if(seen[f.name]) pushIssue("w",n.label+': duplicate interface name "'+f.name+'"',{node:n.id,iface:f.id,groupKey:"dupiface",groupLabel:"duplicate interface name",groupUnit:"interfaces"});
+        seen[f.name]=1;
         // B2: a hand-authored interface with no type blocks generation (server can't resolve it)
-        if(n.backing==="hand" && (!f.type||String(f.type).trim()==="")) issues.push(["e",n.label+": interface \""+f.name+"\" ("+f.kind+") has no message type"]);
+        if(n.backing==="hand" && (!f.type||String(f.type).trim()===""))
+          pushIssue("e",n.label+': interface "'+f.name+'" ('+f.kind+') has no message type',{node:n.id,iface:f.id,groupKey:"notype",groupLabel:"interface has no message type",groupUnit:"interfaces"});
         // RM035 on a QoS duration is a hard ERROR that would stop `generate` after the files
         // are already written; the panel has to say so while it is still editable.
         if(f.qos) (QOS.durations||[]).forEach(function(k){
           if(qosDurationProblem(f.qos[k]))
-            issues.push(["e",n.label+': qos '+k+' "'+f.qos[k]+'" is rejected by CheckDuration (RM035)']);
+            pushIssue("e",n.label+': qos '+k+' "'+f.qos[k]+'" is rejected by CheckDuration',{code:"RM035",node:n.id,iface:f.id,qos:k,groupKey:"rm035",groupLabel:"qos duration rejected by CheckDuration",groupUnit:"interfaces"});
         });
       }
-      if(!project.nodes.length){}
-      if(DIAG[n.id]) DIAG[n.id].forEach(function(m){issues.push(["e",m]);});
+      if(DIAG[n.id]) DIAG[n.id].forEach(function(m){pushIssue("e",n.label+": "+m,{node:n.id,groupKey:"diag",groupLabel:"flagged by the server"});});
     }
-    for(var l in labels) if(labels[l]>1) issues.push(["e",'duplicate node label "'+l+'" (RM009)']);
+    for(var l in labels) if(labels[l]>1) pushIssue("e",'duplicate node label "'+l+'"',{code:"RM009",node:labelFirst[l],field:"f_label"});
     // .ros field rows. _validate_types() blocks generation on exactly these, so the counter
     // has to see them too -- otherwise the page reads "no issues" for a project `generate`
     // then refuses.
@@ -3402,43 +3637,174 @@ var DATA = /*__DATA__*/null;
           var typ=String(f.type||"").replace(/^\s+|\s+$/g,"");
           if(!typ||typ.indexOf("TODO")===0||typ.indexOf("/")<0) return;
           if(known[typ]||TYPEFILES[typ]) return;
-          issues.push(["e",n.label+": "+f.name+" type '"+typ+"' is defined neither here nor in "
-            +"the catalogue — define it under 'message types (.ros)'"]);
+          pushIssue("e",n.label+": "+f.name+" type '"+typ+"' is defined neither here nor in "
+            +"the catalogue — define it under 'message types (.ros)'",{code:"RM081",node:n.id,iface:f.id,
+            groupKey:"notresolved",groupLabel:"an interface type resolves nowhere",groupUnit:"interfaces"});
         });
       });
       Object.keys(project.types||{}).sort().forEach(function(key){
         var p=String(key).split("/"), block=(p.length===3)?SEGBLOCK[p[1]]:null;
-        if(!block){issues.push(["e",key+" is not <package>/<msg|srv|action>/<Name>"]);return;}
-        if(CATPKG[p[0]]){issues.push(["e",key+": '"+p[0]+"' is a catalogue package — "
-          +"redeclaring it is RM009"]);return;}
+        if(!block){pushIssue("e",key+" is not <package>/<msg|srv|action>/<Name>",{sys:true,typekey:key});return;}
+        if(CATPKG[p[0]]){pushIssue("e",key+": '"+p[0]+"' is a catalogue package — redeclaring it is RM009",{code:"RM009",sys:true,typekey:key});return;}
         (ROS.bodies[block]||[]).forEach(function(body){
-          (((project.types[key]||{}).fields||{})[body]||[]).forEach(function(f){
+          (((project.types[key]||{}).fields||{})[body]||[]).forEach(function(f,fi){
             var tn=rosTypeNote(f.type,known), nn=rosNameNote(f.name);
-            if(tn[0]) issues.push([tn[0],key+" / "+body+": "+tn[1]]);
-            else if(nn[0]) issues.push([nn[0],key+" / "+body+": "+nn[1]]);
+            var tag=key+"|"+body+"|"+fi;
+            if(tn[0]) pushIssue(tn[0],key+" / "+body+": "+tn[1],{sys:true,ftag:tag,typekey:key});
+            else if(nn[0]) pushIssue(nn[0],key+" / "+body+": "+nn[1],{sys:true,ftag:tag,typekey:key});
           });
         });
       });
     })();
-    if(!project.nodes.length) issues.push(["e","system has no nodes — add one before generating (the server rejects an empty nodes: block)"]);
+    if(!project.nodes.length) pushIssue("e","system has no nodes — add one before generating (the server rejects an empty nodes: block)",{action:"addnode"});
     // RM053. A warning, not an error: the current server ACCEPTS a system with no fromFile
     // (re-probed 2026-08-13, 0 errors / 0 warnings), so this must not be dressed up as a crash.
     if(!(project.system&&project.system.fromFile))
-      issues.push(["w","no fromFile — rosmodel_lint warns (RM053); set it in the system panel (deselect to reach it)"]);
+      pushIssue("w","no fromFile — rosmodel_lint warns (RM053); the 3.1.0 server accepts a system without it",{code:"RM053",sys:true,field:"f_fromfile"});
     // B1: a drawn connection whose endpoints carry different types is rejected by the server
     for(var ci=0;ci<project.connections.length;ci++){var c=project.connections[ci];
       var fa=ifaceById(nodeById(c.from.n),c.from.i), ta=ifaceById(nodeById(c.to.n),c.to.i);
       if(fa&&ta&&fa.type&&ta.type&&String(fa.type).trim()&&String(ta.type).trim()&&fa.type!==ta.type)
-        issues.push(["e","type mismatch: "+fa.name+" ("+fa.type+") ↔ "+ta.name+" ("+ta.type+") — endpoints must share one type"]);
+        pushIssue("e","type mismatch: "+fa.name+" ("+fa.type+") ↔ "+ta.name+" ("+ta.type+") — endpoints must share one type",{conn:c.id});
     }
-    var errs=issues.filter(function(x){return x[0]==="e";}).length, wrns=issues.length-errs;
+    // errors sort before warnings (stable within each) -- previously issues rendered in push
+    // order and a silent .slice(0,10) could drop a real error under a stack of RM044 warnings.
+    var grouped=groupIssues(issues).slice().sort(function(a,b){ return (a.sev==="e"?0:1)-(b.sev==="e"?0:1); });
+    lastIssues=issues;
+    var errs=grouped.filter(function(x){return x.sev==="e";}).length, wrns=grouped.length-errs;
     var ec=document.getElementById("errCnt"), wc=document.getElementById("wrnCnt");
-    ec.textContent=errs; ec.className="cnt "+(errs?"err":"ok");
-    wc.textContent=wrns; wc.className="cnt "+(wrns?"wrn":"ok");
+    ec.textContent=errs; wc.textContent=wrns;
+    var dot=document.getElementById("issDot");
+    if(dot){ dot.hidden=!(errs||wrns); dot.className="secdot "+(errs?"e":"w"); }
     var il=document.getElementById("issueList"); il.innerHTML="";
-    if(!issues.length) il.innerHTML='<div class="it" style="border-color:var(--accent)">No issues from the instant checks.</div>';
-    issues.slice(0,10).forEach(function(x){var d=document.createElement("div");d.className="it"+(x[0]==="e"?" e":"");d.textContent=x[1];il.appendChild(d);});
+    if(!grouped.length){ il.innerHTML='<div class="it ok">No issues from the instant checks.</div>'; }
+    else{
+      var shown=issuesExpanded?grouped:grouped.slice(0,10);
+      shown.forEach(function(it){ il.appendChild(renderIssueRow(it)); });
+      if(grouped.length>shown.length){
+        var more=document.createElement("button"); more.type="button"; more.className="itmore";
+        more.textContent="show all "+grouped.length;
+        more.onclick=function(){ issuesExpanded=true; runIssues(); };
+        il.appendChild(more);
+      }
+    }
+    buildStatus(errs,wrns);
   }
+  function renderIssueRow(it){
+    if(it.group){
+      // a collapsed run of identically-shaped issues (same code+severity, one per node or
+      // interface) -- expands in place to the individual, still-routable rows.
+      var wrap=document.createElement("div"); wrap.className="itgroup";
+      var head=document.createElement("button"); head.type="button"; head.className="it"+(it.sev==="e"?" e":"")+" itgrouphead";
+      var gtext=document.createElement("span"); gtext.className="ittext"; gtext.textContent=it.msg; head.appendChild(gtext);
+      var caret=document.createElement("span"); caret.className="caret"; caret.textContent="▾"; caret.style.transform="rotate(-90deg)"; head.appendChild(caret);
+      if(it.code){ var gcd=document.createElement("span"); gcd.className="itcode"; gcd.textContent=it.code; head.appendChild(gcd); }
+      var kids=document.createElement("div"); kids.className="itkids"; kids.hidden=true;
+      it.group.forEach(function(child){ kids.appendChild(renderIssueRow(child)); });
+      head.setAttribute("aria-expanded","false");
+      head.onclick=function(){ kids.hidden=!kids.hidden; head.setAttribute("aria-expanded",kids.hidden?"false":"true"); caret.style.transform=kids.hidden?"rotate(-90deg)":""; };
+      wrap.appendChild(head); wrap.appendChild(kids);
+      return wrap;
+    }
+    var routable=!!(it.node||it.conn||it.sys||it.action);
+    var el=document.createElement(routable?"button":"div");
+    if(routable) el.type="button";
+    el.className="it"+(it.sev==="e"?" e":"")+(routable?"":" noref");
+    var text=document.createElement("span"); text.className="ittext"; text.textContent=it.msg;
+    el.appendChild(text);
+    if(it.code){ var cd=document.createElement("span"); cd.className="itcode"; cd.textContent=it.code; el.appendChild(cd); }
+    if(routable) el.onclick=function(){ gotoIssue(it); };
+    if(it.action==="addnode"){
+      var btn=document.createElement("span"); btn.className="itmini"; btn.textContent="+ node";
+      btn.onclick=function(e){ e.stopPropagation(); gotoIssue(it); };
+      el.appendChild(btn);
+    }
+    return el;
+  }
+
+  // ============================ status chip / popover ============================
+  function popIssueRow(it){
+    // a grouped row has no single target -- "See all" (below) is the path into it, so it
+    // renders as plain text here rather than a click that would silently do nothing.
+    var routable=!it.group;
+    var b=document.createElement(routable?"button":"div");
+    if(routable) b.type="button";
+    b.className="popissue"+(it.sev==="e"?" e":"")+(routable?"":" noref");
+    b.textContent=it.msg;
+    if(routable) b.onclick=function(){ var pop=document.getElementById("statusPop"); if(pop&&pop.hidePopover) pop.hidePopover(); gotoIssue(it); };
+    return b;
+  }
+  function fillStatusPop(){
+    var pop=document.getElementById("statusPop"); if(!pop) return;
+    pop.innerHTML="";
+    // popover="auto" gets light-dismiss (click outside) and Escape for free from the browser --
+    // this button is a belt-and-braces explicit close, not a replacement for either.
+    var closeBtn=document.createElement("button"); closeBtn.type="button"; closeBtn.className="popclose";
+    closeBtn.setAttribute("aria-label","Close"); closeBtn.textContent="×";
+    closeBtn.onclick=function(){ if(pop.hidePopover) pop.hidePopover(); };
+    pop.appendChild(closeBtn);
+    if(opNotice){
+      var row=document.createElement("div"); row.className="poprow";
+      var h=document.createElement("h5"); h.textContent=opNotice.title; row.appendChild(h);
+      var body=document.createElement("div"); body.innerHTML=opNotice.html; row.appendChild(body);
+      pop.appendChild(row);
+    }
+    var grouped=groupIssues(lastIssues).slice().sort(function(a,b){return (a.sev==="e"?0:1)-(b.sev==="e"?0:1);});
+    var row2=document.createElement("div"); row2.className="poprow";
+    var h2=document.createElement("h5"); h2.textContent=grouped.length?"Before you commit":"/ros-studio"; row2.appendChild(h2);
+    if(grouped.length){
+      grouped.slice(0,3).forEach(function(it){ row2.appendChild(popIssueRow(it)); });
+      var foot=document.createElement("div"); foot.className="popfoot";
+      var seeAll=document.createElement("button"); seeAll.type="button"; seeAll.className="itmore";
+      seeAll.textContent="See all "+grouped.length+" in Issues";
+      seeAll.onclick=function(){
+        if(pop.hidePopover) pop.hidePopover();
+        if(isNarrow()) openDrawer("l");
+        else expandSec("rail/issues");
+        var box=document.querySelector('.rail .insec[data-sec="rail/issues"]');
+        if(box) box.scrollIntoView({block:"nearest"});
+      };
+      foot.appendChild(seeAll); row2.appendChild(foot);
+    } else if(!opNotice){
+      var p=document.createElement("div");
+      p.innerHTML='author in the browser, then <b>Commit</b> to generate &amp; validate in the Python companion.';
+      row2.appendChild(p);
+    } else {
+      var p2=document.createElement("div"); p2.textContent="No issues from the instant checks.";
+      row2.appendChild(p2);
+    }
+    pop.appendChild(row2);
+  }
+  // The chip is a rollup of overall model health -- max(companion notice, live lint) -- so
+  // there is exactly one place that answers "is this model okay", instead of a server-only
+  // banner and a separate rail count that can disagree. "ok" is deliberately not styled with
+  // --accent (see the CSS comment); a quiet resting state is the point.
+  function buildStatus(errs,wrns){
+    var chip=document.getElementById("statusChip"); if(!chip) return;
+    var glyph=document.getElementById("chipGlyph"), cnt=document.getElementById("chipCount");
+    var sev=(errs||(opNotice&&opNotice.sev==="err"))?"err":(wrns||(opNotice&&opNotice.sev==="warn"))?"warn":"ok";
+    chip.className="statuschip "+sev;
+    var label;
+    if(sev==="err"){ glyph.textContent="⚠"; cnt.textContent=errs||""; label=errs?(errs+" error(s), "+wrns+" warning(s)"):"Generation failed"; }
+    else if(sev==="warn"){ glyph.textContent="⚠"; cnt.textContent=wrns||""; label=wrns+" warning(s)"; }
+    else{ glyph.textContent="ⓘ"; cnt.textContent=""; label="No issues"; }
+    chip.title=label; chip.setAttribute("aria-label",label);
+    var live=document.getElementById("statusLive"); if(live) live.textContent=label;
+    var pop=document.getElementById("statusPop");
+    if(pop&&pop.matches&&pop.matches(":popover-open")) fillStatusPop();  // never go stale while open
+  }
+  (function(){
+    var pop=document.getElementById("statusPop");
+    if(pop) pop.addEventListener("beforetoggle",function(e){
+      if(e.newState!=="open") return;
+      fillStatusPop();
+      var chip=document.getElementById("statusChip"), r=chip.getBoundingClientRect();
+      var w=Math.min(380,window.innerWidth-24);
+      pop.style.width=w+"px";
+      pop.style.left=Math.max(8,Math.min(r.left,window.innerWidth-w-8))+"px";
+      pop.style.top=(r.bottom+6)+"px";
+    });
+  })();
 
   // ============================ commit / generate preview ============================
   // MUST stay in step with _exposure_labels() in ros_studio.py -- this is the live preview of
@@ -4108,12 +4474,27 @@ var DATA = /*__DATA__*/null;
     // the desktop three-column form, mid-session, with a drawer possibly open.
     document.body.classList.toggle("mode-edit",mode==="edit");
     document.body.classList.toggle("mode-view",mode!=="edit");
-    levelSeg.style.display=mode==="edit"?"none":"inline-flex";
-    if(mode==="edit"){ level=3; setLevelButtons(); }
     selEdge=null; render(); fillInspector();
   };});
   levelSeg.querySelectorAll("button").forEach(function(b){b.onclick=function(){level=+b.dataset.lvl;setLevelButtons();render();};});
   function setLevelButtons(){levelSeg.querySelectorAll("button").forEach(function(x){x.classList.toggle("on",+x.dataset.lvl===level);});}
+
+  // ============================ collapsible sections ============================
+  // Delegated once, at the container -- the inspector's whole innerHTML is replaced on every
+  // selection change, so per-button listeners would need re-wiring in five separate builders.
+  wireSecClicks(document.querySelector(".rail"));
+  wireSecClicks(inspector);
+  // The rail's four sections are static markup (only their contents get rebuilt), so unlike the
+  // inspector -- which bakes `collapsed` into the string via sec() on every render -- they need
+  // one explicit pass at startup to pick up persisted / default-closed state.
+  applySecState(document.querySelector(".rail"));
+  // Same delegation trick for the Selected/Project tab strip -- also rebuilt on every render.
+  // NOT pushUndo(): switching tabs is presentation, and it deliberately leaves selNode/selEdge
+  // alone, so Project is reachable without losing whatever was selected.
+  inspector.addEventListener("click",function(e){
+    var b=e.target.closest("[data-insptab]"); if(!b||b.disabled) return;
+    inspTab=b.dataset.insptab; fillInspector();
+  });
 
   // ============================ canvas controls ============================
   document.getElementById("autoLayout").onclick=autoLayout;
@@ -4177,8 +4558,12 @@ var DATA = /*__DATA__*/null;
       if(e.key==="-"||e.key==="_"){ e.preventDefault(); zoomCentre(1/1.25); return; }
     }
     if(e.key==="Escape"&&findQ){ findBox.value=""; findQ=""; findIdx=0; applyFind(); return; }
+    // A native popover already closes itself on Escape; without this bail the same keydown
+    // goes on to clear the selection underneath it as an unrelated side effect.
+    var _sp=document.getElementById("statusPop");
+    if(e.key==="Escape"&&_sp&&_sp.matches&&_sp.matches(":popover-open")) return;
     if(e.key==="Escape"){[].slice.call(document.querySelectorAll(".scrim.on:not([data-locked])")).forEach(function(s){s.classList.remove("on");});selNode=null;selEdge=null;render();fillInspector();}
-    if(mode==="view" && e.key>="1" && e.key<="4" && !typing){level=+e.key;setLevelButtons();render();}
+    if(e.key>="1" && e.key<="4" && !typing){level=+e.key;setLevelButtons();render();}
     if((e.key==="Delete"||e.key==="Backspace")&&mode==="edit"&&selNode&&!typing){
       // a subSystems: node is provided by the referenced file; deleting it here would strip the
       // connections that name it while the subSystems: line still claimed to provide them. The
@@ -4238,6 +4623,17 @@ var DATA = /*__DATA__*/null;
     if(b.w+2*pad<=W&&b.h+2*pad<=H){ view.k=1; view.tx=pad-b.x; view.ty=pad-b.y; applyView(); }
     else fitView();
   })();
+  // A real generation/validation error from the companion is the one status worth interrupting
+  // arrival for: open the popover on load (page load has no interaction to lose) and pulse the
+  // chip briefly so its location sticks -- dismissing it does NOT clear the red state, which
+  // stays until the next render() replaces DATA.banner's condition.
+  if(opNotice&&opNotice.sev==="err"){
+    var _sp2=document.getElementById("statusPop"), _sc2=document.getElementById("statusChip");
+    if(_sp2&&_sp2.showPopover){
+      try{ _sp2.showPopover(); }catch(e){}
+      if(_sc2){ _sc2.classList.add("pulse"); setTimeout(function(){ _sc2.classList.remove("pulse"); },2600); }
+    }
+  }
 })();
 </script>
 </body>
