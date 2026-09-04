@@ -72,6 +72,10 @@ SKIP_DIRS = {
 }
 
 
+NOTE_EMPTY_LIST = ("source default is an empty list; the DSL list production needs at least "
+                   "one element, so no default: is emitted")
+
+
 def wrap_comment(text, indent="", width=96):
     """Wrap into `# ` comment lines. Comments live at column 0, above the model, so a
     long one never risks RM094 (a column-0 comment inside an indented block)."""
@@ -99,10 +103,16 @@ class Interface:
 
 
 class Param:
-    def __init__(self, name, dsl_type, value, file, line):
+    def __init__(self, name, dsl_type, value, file, line, note=None):
         self.name = name
         self.dsl_type = dsl_type        # 'Double' | 'String' | ... | None
-        self.value = value              # already-formatted DSL literal, or None
+        # The DSL literal for the package's own declared default, or None when the
+        # source's default has no legal form. It is emitted as `default:`, not `value:`:
+        # SKILL.md rule 9 makes `default:` a member of ParameterType, and a compiled-in
+        # declare_parameter()/generate_parameter_library default IS a default. That keeps
+        # `value:` free for the DEPLOYED value, which belongs in the .rossystem.
+        self.value = value
+        self.note = note
         self.file = file
         self.line = line
 
@@ -132,12 +142,15 @@ class NodeDraft:
         self.confident = confident      # was the node name a literal in the source?
         self.interfaces = OrderedDict()  # key -> Interface
         self.params = OrderedDict()      # name -> Param
+        self.files = set()               # source files this node's declarations came from
 
     def add_interface(self, iface):
         self.interfaces.setdefault(iface.key(), iface)
+        self.files.add(iface.file)
 
     def add_param(self, p):
         self.params.setdefault(p.name, p)
+        self.files.add(p.file)
 
 
 class PackageDraft:
@@ -150,6 +163,7 @@ class PackageDraft:
         self.flags = []
         self.notes = []
         self.languages = set()
+        self.targets = {}                # source path -> build target (artifact) name
 
     def node_for(self, name, confident):
         if name not in self.nodes:
@@ -193,6 +207,56 @@ def read_package_xml(pkg_dir):
     bt = root.find("./export/build_type")
     build_type = bt.text.strip() if bt is not None and bt.text else None
     return name, build_type
+
+
+def read_build_targets(pkg_dir):
+    """{abs source path: build target name} from CMakeLists.txt / setup.py.
+
+    SKILL.md rule 2a: package, artifact and node are three different names, and the
+    artifact is *the executable to run*. That is what add_executable()/add_library()
+    names -- deriving it from the node name instead collapses two of the three."""
+    targets = {}
+    cmake = os.path.join(pkg_dir, "CMakeLists.txt")
+    if os.path.isfile(cmake):
+        try:
+            with open(cmake, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            text = ""
+        project = ""
+        if "project(" in text:
+            project = text.split("project(", 1)[1].split(")")[0].split()[0].strip()
+        for keyword in ("add_executable(", "add_library("):
+            for chunk in text.split(keyword)[1:]:
+                body = chunk.split(")")[0]
+                tokens = [t.strip('"\'') for t in body.split()]
+                if not tokens:
+                    continue
+                name = tokens[0].replace("${PROJECT_NAME}", project)
+                for token in tokens[1:]:
+                    if token in ("SHARED", "STATIC", "MODULE", "INTERFACE", "OBJECT"):
+                        continue
+                    candidate = os.path.join(pkg_dir, token)
+                    if os.path.isfile(candidate):
+                        targets[os.path.abspath(candidate)] = name
+    setup = os.path.join(pkg_dir, "setup.py")
+    if os.path.isfile(setup):
+        try:
+            with open(setup, encoding="utf-8", errors="replace") as fh:
+                tree = ast.parse(fh.read())
+        except (OSError, SyntaxError):
+            tree = None
+        for node in ast.walk(tree) if tree else []:
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            if "=" not in node.value or ":" not in node.value:
+                continue
+            exe, _, rest = node.value.partition("=")
+            module = rest.split(":")[0].strip().replace(".", os.sep)
+            candidate = os.path.join(pkg_dir, module + ".py")
+            if os.path.isfile(candidate):
+                targets[os.path.abspath(candidate)] = exe.strip()
+    return targets
 
 
 def source_files(pkg_dir):
@@ -521,10 +585,10 @@ def py_param_dsl(value):
     if isinstance(value, (list, tuple)):
         items = list(value)
         if not items:
-            # The grammar's list production requires at least one element, so an
-            # empty list cannot be written as []. The quoted form is the only way
-            # to say "the source default is an empty list"; RM095 warns on it.
-            return "Array[String]", '"[]"'
+            # The list production needs >=1 element, so `[]` is a parse error -- and a
+            # quoted "[]" is a ParameterString, i.e. a lie (RM095). value:/default: is
+            # optional on a .ros2 parameter, so the honest form is to omit it.
+            return "Array[String]", None
         inner = {py_param_dsl(v)[0] for v in items}
         if len(inner) != 1 or None in inner:
             return None, None
@@ -764,7 +828,8 @@ def _record_param(pkg, target, name_node, val_node, visitor, path, call, prefix=
             "parameter", "'%s' default value has no DSL type (%r)" % (name, val),
             path, line, snippet))
         return False
-    target.add_param(Param(name, dsl_type, dsl_val, path, line))
+    note = NOTE_EMPTY_LIST if (dsl_val is None and isinstance(val, (list, tuple))) else None
+    target.add_param(Param(name, dsl_type, dsl_val, path, line, note))
     return True
 
 
@@ -1013,14 +1078,129 @@ def cpp_param_type(targs, args, src):
     if default.type in ("compound_literal_expression", "initializer_list"):
         il = default if default.type == "initializer_list" else ts_find(default, "initializer_list", depth=2)
         if il is not None and not [c for c in il.children if c.type not in ("{", "}")]:
-            # empty list; the grammar cannot express `[]`, so use the quoted form
-            return (dsl or "Array[String]"), '"[]"'
+            return (dsl or "Array[String]"), None   # omit; see py_param_dsl
         if il is not None:
             items = [cpp_string_literal(src, c) for c in il.children
                      if c.type not in ("{", "}", ",")]
             if items and all(i is not None for i in items):
                 return (dsl or "Array[String]"), "[%s]" % ", ".join('"%s"' % i for i in items)
     return dsl, None
+
+
+def cpp_name_evidence(src, name_arg, owner, trees):
+    """For a name built as literals + one identifier, gather what that identifier is
+    actually given at every construction site VISIBLE in this package, and return the
+    candidate names.
+
+    This is EVIDENCE, never a declaration. Deciding whether the visible construction
+    sites are all of them is a completeness claim a per-package parser cannot make --
+    the class may also be built in another package, a test, or a loop -- so the caller
+    still flags. Emitting a plausible subset would turn a visible unknown into an
+    invisible one, which is strictly worse than saying nothing.
+    """
+    parts, names = [], set()
+    stack = [name_arg]
+    while stack:                      # flatten the concatenation, left to right
+        node = stack.pop(0)
+        if node.type == "binary_expression":
+            stack = [c for c in node.children if c.type != "+"] + stack
+            continue
+        lit = cpp_string_literal(src, node)
+        if lit is not None:
+            parts.append(("lit", lit))
+        elif node.type == "identifier":
+            ident = ts_text(src, node)
+            parts.append(("var", ident))
+            names.add(ident)
+        else:
+            return None
+    if len(names) != 1 or not owner:
+        return None
+    variable = names.pop()
+
+    index = _cpp_ctor_param_index(src, owner, variable, trees)
+    if index is None:
+        return None
+    values, incomplete = [], False
+    for path, fsrc, tree in trees:
+        for args in _cpp_construction_args(fsrc, tree, owner):
+            if index >= len(args):
+                incomplete = True
+                continue
+            lit = cpp_string_literal(fsrc, args[index])
+            if lit is None:
+                incomplete = True
+            elif lit not in values:
+                values.append(lit)
+    if not values:
+        return None
+    values.sort()          # stable across runs; the tree walk order is not meaningful
+    candidates = ["".join(v if kind == "lit" else value for kind, v in parts)
+                  for value in values]
+    return {"variable": variable, "values": values, "candidates": candidates,
+            "sites": len(values), "incomplete": incomplete}
+
+
+def _cpp_ctor_param_index(src, owner, variable, trees):
+    """Position of `variable` in owner's constructor parameter list."""
+    for path, fsrc, tree in trees:
+        stack = [tree.root_node]
+        while stack:
+            cur = stack.pop()
+            stack.extend(cur.children)
+            if cur.type not in ("class_specifier", "struct_specifier"):
+                continue
+            name_node = cur.child_by_field_name("name")
+            if name_node is None or ts_text(fsrc, name_node) != owner:
+                continue
+            for node in _descendants(cur, "function_declarator"):
+                ident = node.child_by_field_name("declarator")
+                if ident is None or ts_text(fsrc, ident) != owner:
+                    continue
+                plist = ts_find(node, "parameter_list", depth=1)
+                if plist is None:
+                    continue
+                params = [c for c in plist.children if c.type == "parameter_declaration"]
+                for i, param in enumerate(params):
+                    if variable in ts_text(fsrc, param).split():
+                        return i
+                    inner = ts_find(param, "identifier", depth=4)
+                    if inner is not None and ts_text(fsrc, inner) == variable:
+                        return i
+    return None
+
+
+def _descendants(node, type_name, limit=4000):
+    out, stack, seen = [], [node], 0
+    while stack and seen < limit:
+        cur = stack.pop()
+        seen += 1
+        if cur is not node and cur.type == type_name:
+            out.append(cur)
+        stack.extend(cur.children)
+    return out
+
+
+def _cpp_construction_args(src, tree, owner):
+    """Argument lists of every visible construction of `owner`."""
+    out = []
+    stack = [tree.root_node]
+    while stack:
+        cur = stack.pop()
+        stack.extend(cur.children)
+        if cur.type == "new_expression":
+            typ = cur.child_by_field_name("type")
+            alist = ts_find(cur, "argument_list", depth=2)
+            if typ is not None and ts_text(src, typ) == owner and alist is not None:
+                out.append([c for c in alist.children if c.type not in ("(", ")", ",")])
+            continue
+        if cur.type != "call_expression":
+            continue
+        fname, targs = cpp_callee(src, cur)
+        is_make = fname in ("make_unique", "make_shared") and targs and targs[0] == owner
+        if is_make or fname == owner:
+            out.append(cpp_args(cur))
+    return out
 
 
 def extract_cpp(pkg, paths, parser, resolver, report_root):
@@ -1058,11 +1238,12 @@ def extract_cpp(pkg, paths, parser, resolver, report_root):
 
     found = False
     for path, src, tree in trees:
-        found |= _cpp_walk(pkg, path, src, tree, aliases, named, resolver, report_root)
+        found |= _cpp_walk(pkg, path, src, tree, aliases, named, resolver, report_root,
+                           trees)
     return found
 
 
-def _cpp_walk(pkg, path, src, tree, aliases, named, resolver, report_root):
+def _cpp_walk(pkg, path, src, tree, aliases, named, resolver, report_root, trees):
     found = False
     stack = [tree.root_node]
     while stack:
@@ -1084,11 +1265,12 @@ def _cpp_walk(pkg, path, src, tree, aliases, named, resolver, report_root):
             block = CPP_METHOD_BLOCK[fname]
             found |= _cpp_record_iface(pkg, target, block, targs, args[0] if args else None,
                                        _cpp_qos(src, args, fname), src, path, line,
-                                       snippet, aliases)
+                                       snippet, aliases, owner, trees)
         elif ns == "rclcpp_action" and fname in CPP_ACTION_BLOCK:
             name_arg = _cpp_first_string_arg(src, args)
             found |= _cpp_record_iface(pkg, target, CPP_ACTION_BLOCK[fname], targs,
-                                       name_arg, None, src, path, line, snippet, aliases)
+                                       name_arg, None, src, path, line, snippet, aliases,
+                                       owner, trees)
         elif fname in ("declare_parameter", "auto_declare"):
             found |= _cpp_record_param(pkg, target, targs, args, src, path, line, snippet)
         elif fname == "declare_parameters":
@@ -1139,7 +1321,7 @@ def _cpp_qos(src, args, fname):
 
 
 def _cpp_record_iface(pkg, target, block, targs, name_arg, qos, src, path, line,
-                      snippet, aliases):
+                      snippet, aliases, owner=None, trees=()):
     if not targs:
         pkg.flags.append(Flag(block, "call has no explicit template type argument",
                               path, line, snippet))
@@ -1150,9 +1332,21 @@ def _cpp_record_iface(pkg, target, block, targs, name_arg, qos, src, path, line,
         return False
     name = cpp_string_literal(src, name_arg)
     if name is None:
-        pkg.flags.append(Flag(
-            block, "name is built at runtime (string concatenation, get_name(), or a "
-                   "variable), not a literal; resolve by hand", path, line, snippet))
+        reason = ("name is built at runtime (string concatenation, get_name(), or a "
+                  "variable), not a literal; resolve by hand")
+        evidence = cpp_name_evidence(src, name_arg, owner, trees)
+        if evidence:
+            reason += (". Built from %r, which %d construction site(s) of %s visible in "
+                       "this package pass as: %s. CANDIDATES (evidence, NOT emitted -- "
+                       "this parser cannot see construction sites outside the package, so "
+                       "it cannot claim these are all of them): %s"
+                       % (evidence["variable"], evidence["sites"], owner,
+                          ", ".join(repr(v) for v in evidence["values"]),
+                          ", ".join(evidence["candidates"])))
+            if evidence["incomplete"]:
+                reason += (". At least one construction site passes a non-literal, so the "
+                           "list above is definitely incomplete")
+        pkg.flags.append(Flag(block, reason, path, line, snippet))
         return False
     if ref is None:
         pkg.flags.append(Flag(
@@ -1174,14 +1368,20 @@ def _cpp_record_param(pkg, target, targs, args, src, path, line, snippet):
                               path, line, snippet))
         return False
     dsl_type, dsl_val = cpp_param_type(targs, args, src)
-    if dsl_type is None or dsl_val is None:
+    if dsl_type is None:
         pkg.flags.append(Flag(
             "parameter",
             "'%s' declared, but its type/default is not a literal this script can "
             "read (%s)" % (name, "no default" if len(args) < 2 else "non-literal default"),
             path, line, snippet))
         return False
-    target.add_param(Param(name, dsl_type, dsl_val, path, line))
+    note = None
+    if dsl_val is None:
+        # The type is known; only the default has no legal form. Keep the declaration --
+        # dropping it would lose a real parameter, and a .rossystem override needs it.
+        note = (NOTE_EMPTY_LIST if dsl_type.startswith("Array[")
+                else "source default is not a literal this script can read")
+    target.add_param(Param(name, dsl_type, dsl_val, path, line, note))
     return True
 
 
@@ -1236,14 +1436,23 @@ def emit_package(pkg, resolver, report_root, emit_qos):
     nodes = [n for n in pkg.nodes.values() if n.interfaces or n.params]
     if pkg.fallback is not None and (pkg.fallback.interfaces or pkg.fallback.params):
         nodes.append(pkg.fallback)
-    for node in sorted(nodes, key=lambda n: n.name):
-        lines.extend(emit_node(node, resolver, report_root, emit_qos))
+    for node in sorted(nodes, key=lambda n: artifact_name(n, pkg.targets)):
+        lines.extend(emit_node(node, resolver, report_root, emit_qos, pkg.targets))
     return "\n".join(lines) + "\n"
 
 
-def emit_node(node, resolver, report_root, emit_qos):
-    artifact = sanitize_node_name(node.name)
-    lines = ["    %s:" % artifact, "      node: %s" % artifact]
+def artifact_name(node, targets):
+    """The build target that owns this node's source, else the node name."""
+    for path in sorted(node.files):
+        hit = targets.get(os.path.abspath(path))
+        if hit:
+            return sanitize_node_name(hit)
+    return sanitize_node_name(node.name)
+
+
+def emit_node(node, resolver, report_root, emit_qos, targets):
+    artifact = artifact_name(node, targets)
+    lines = ["    %s:" % artifact, "      node: %s" % sanitize_node_name(node.name)]
     for block in BLOCK_ORDER:
         entries = sorted((i for i in node.interfaces.values() if i.block == block),
                          key=lambda i: i.name)
@@ -1262,9 +1471,11 @@ def emit_node(node, resolver, report_root, emit_qos):
         for name in sorted(node.params):
             p = node.params[name]
             lines.append("        '%s':" % p.name)
-            lines.append("          type: %s" % p.dsl_type)
+            lines.append("          type: %s%s"
+                         % (p.dsl_type, "  # " + p.note if p.note else ""))
             if p.value is not None:
-                lines.append("          value: %s" % p.value)
+                # sibling of type:, immediately after it (SKILL.md rule 9)
+                lines.append("          default: %s" % p.value)
     return lines
 
 
@@ -1305,8 +1516,7 @@ def gpl_value(dsl_type, value):
         if not isinstance(value, (list, tuple)):
             return None
         if not value:
-            # the list production needs >=1 element, so `[]` is a parse error
-            return '"[]"'
+            return None      # see py_param_dsl: omit rather than write a quoted "[]"
         elem = dsl_type[6:-1]
         parts = [gpl_value(elem, v) for v in value]
         return None if any(p is None for p in parts) else "[%s]" % ", ".join(parts)
@@ -1389,12 +1599,17 @@ def read_gpl_yaml(pkg, path, target):
                 continue
             raw = spec.get("default_value")
             value = gpl_value(dsl_type, raw)
-            if raw is not None and value is None:
-                pkg.flags.append(Flag(
-                    "parameter", "'%s' has default_value %r, which has no legal %s literal; "
-                                 "the parameter is declared without a value"
-                                 % (full, raw, dsl_type), path, 1))
-            target.add_param(Param(full, dsl_type, value, path, 1))
+            note = None
+            if value is None and raw is not None:
+                if isinstance(raw, (list, tuple)) and not raw:
+                    note = NOTE_EMPTY_LIST
+                else:
+                    note = "source default %r has no legal %s literal" % (raw, dsl_type)
+                    pkg.flags.append(Flag(
+                        "parameter", "'%s' has default_value %r, which has no legal %s "
+                                     "literal; it is declared without a default"
+                                     % (full, raw, dsl_type), path, 1))
+            target.add_param(Param(full, dsl_type, value, path, 1, note))
 
     walk(doc[next(iter(doc))], "")
 
@@ -1481,6 +1696,7 @@ def main(argv=None):
     for pkg_dir in sorted(pkg_dirs):
         name, build_type = read_package_xml(pkg_dir)
         pkg = PackageDraft(name, pkg_dir, build_type)
+        pkg.targets = read_build_targets(pkg_dir)
 
         files = [f for f in source_files(pkg_dir) if not is_launch_or_setup(f)]
         py_files = [f for f in files if os.path.splitext(f)[1].lower() in PY_EXT]
@@ -1543,6 +1759,7 @@ def main(argv=None):
             "file": os.path.relpath(out_path, os.getcwd()) if out_path else None,
             "nodes": [{
                 "node": n.name,
+                "artifact": artifact_name(n, pkg.targets),
                 "node_name_from_source_literal": n.confident,
                 "interfaces": [{
                     "block": i.block, "name": i.name, "type": i.type_ref,

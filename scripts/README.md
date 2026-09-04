@@ -362,10 +362,29 @@ SKILL.md's output-layout rule.
   parameter's value, are flagged instead. (`custom_joint_trajectory_controller` declares nothing
   via `declare_parameter()`; this recovers 16 real parameters it would otherwise be missing.)
 - **`--emit-msgs DIR`** writes a companion `.ros` per project-local message package the models
-  reference, transcribed from the package's own `.msg`/`.srv`/`.action` files. Without it, a model
-  referencing project-local types is **not loadable on its own** — an unresolved `type:` is a
-  linking-layer ERROR. Per-field defaults and bounded arrays have no `.ros` form and are dropped
-  with a report (SKILL.md §8b).
+  reference, transcribed from the package's own `.msg`/`.srv`/`.action` files, following
+  message-to-message references to closure. Without it, a model referencing project-local types
+  is **not loadable on its own** — an unresolved `type:` is a linking-layer ERROR. Per-field
+  defaults and bounded arrays have no `.ros` form and are dropped with a report (SKILL.md §8b).
+- **Package, artifact and node stay three distinct names** (SKILL.md §2a). The artifact is the
+  *build target* — `add_executable(...)`/`add_library(...)` in `CMakeLists.txt` (with
+  `${PROJECT_NAME}` resolved) or a `console_scripts` entry in `setup.py` — and the node is the
+  literal name the source constructs. Deriving the artifact from the node name instead collapses
+  two of the three, which is exactly what rule 2a warns against.
+- **A source-declared default is emitted as `default:`, not `value:`.** A compiled-in
+  `declare_parameter()` or `generate_parameter_library` default *is* a default (SKILL.md rule 9,
+  where `default:` is a member of `ParameterType` and sits immediately after `type:`), and this
+  leaves `value:` free for the deployed value, which belongs in the `.rossystem`.
+- **An empty-list default omits the slot** rather than writing `value: "[]"`. The list production
+  needs at least one element, so `[]` is a parse error and a quoted `"[]"` is a `ParameterString`
+  — i.e. a lie the linter flags as RM095. `default:` is optional, so saying nothing is the honest
+  form; the parameter is still declared, with a comment explaining why it has no default.
+- **A computed name is flagged with its evidence, never resolved.** When a topic name is built
+  from literals plus one identifier that is a constructor parameter, the flag reports the literal
+  values every *visible* construction site passes and the candidate names they produce — as
+  evidence, explicitly not as a declaration. Deciding whether the visible sites are all of them
+  is a completeness claim a per-package parser cannot make, and emitting a plausible subset would
+  turn a visible unknown into an invisible one.
 
 **Nothing is guessed.** A declaration is emitted only when its name *and* its type are literal in
 the source. A topic built from a parameter, an f-string, `get_name() + "/…"`, string
