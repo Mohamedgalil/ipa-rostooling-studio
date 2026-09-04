@@ -909,6 +909,31 @@ class Linter(object):
                            "indented, the same file is ACCEPTED with 0 errors."
                            % (len(self.lines) - idx))
 
+        # An unresolved `# FLAG` from scripts/extract_ros2_interfaces.py /
+        # extract_rossystem.py. Those scripts emit only what is literal in the source and turn
+        # every non-literal name, type or parameter into a flagged comment, so a draft that
+        # still carries one is a model with known holes -- and it lints clean and validates
+        # clean, which is exactly why a human or an agent can mistake it for finished.
+        # SKILL.md's "Converting real source" section makes each flag one §8e decision and
+        # self-check 18 requires none survive; this is the mechanical half of that gate.
+        #
+        # WARNING, not ERROR: a freshly extracted draft is *supposed* to carry flags, and
+        # extract_ros2_interfaces.py exits non-zero on a lint ERROR, so an ERROR here would
+        # make every normal extraction look like a failure.
+        flagged = [idx for idx, line in enumerate(self.lines, start=1)
+                   if line.lstrip().startswith("# FLAG ")]
+        if flagged:
+            self.warn(flagged[0], "RM097",
+                      "%d unresolved '# FLAG' comment(s) from the extractor scripts "
+                      "(first at line %d)." % (len(flagged), flagged[0]),
+                      "Each flag is one name, type or parameter the extractor could not read "
+                      "literally, carrying its file:line and the source expression. Resolve "
+                      "each under SKILL.md §8e -- trace it (case 1, citing both lines), infer "
+                      "it from a citable basis (case 2), or ask and report it (case 3) -- and "
+                      "delete the comment. A model still carrying flags is a draft, not a "
+                      "deliverable. '# DROPPED'/'# NOTE'/'# CAUTION' lines are the scripts' "
+                      "disclosures of things with no DSL slot, not a worklist: leave them.")
+
     # -- YAML composition ---------------------------------------------------------------
 
     def compose(self):

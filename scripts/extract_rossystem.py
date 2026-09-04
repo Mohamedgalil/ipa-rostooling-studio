@@ -567,18 +567,36 @@ class SystemDraft(object):
         return label
 
 
-def controller_type_map(controllers_file):
-    """controllers.yaml -> {instance: implementation package}, plus per-instance params."""
+def controller_type_map(controllers_file, problems=None):
+    """controllers.yaml -> {instance: implementation package}, plus per-instance params.
+
+    Failure here is not cosmetic: without the type: map every ros2_control spawner looks like a
+    controller with no declared type and is skipped, so a missing PyYAML would silently remove
+    four of this system's ten nodes AND misattribute it to the config. Report, never swallow.
+    """
     types, params = {}, {}
+    if problems is None:
+        problems = []
     if not controllers_file or not os.path.isfile(controllers_file):
         return types, params
     try:
         import yaml
+    except ImportError:
+        problems.append("PyYAML is not installed, so the controller config could not be read; "
+                        "every controller instance it declares is therefore MISSING from this "
+                        "model. pip install pyyaml")
+        return types, params
+    try:
         with open(controllers_file, encoding="utf-8", errors="replace") as fh:
             doc = yaml.safe_load(fh)
-    except Exception:
+    except Exception as exc:
+        problems.append("the controller config %s could not be parsed (%s), so every "
+                        "controller instance it declares is MISSING from this model"
+                        % (controllers_file, exc))
         return types, params
     if not isinstance(doc, dict):
+        problems.append("the controller config %s is not a mapping, so no controller instance "
+                        "could be resolved" % controllers_file)
         return types, params
     cm = (doc.get("controller_manager") or {}).get("ros__parameters") or {}
     for name, spec in cm.items():
@@ -595,7 +613,11 @@ def controller_type_map(controllers_file):
 
 def build_system(launch_files, index, workspace_pkgs, controllers_file, system_name):
     sys_draft = SystemDraft(system_name)
-    ctrl_types, ctrl_params = controller_type_map(controllers_file)
+    problems = []
+    ctrl_types, ctrl_params = controller_type_map(controllers_file, problems)
+    for problem in problems:
+        sys_draft.flags.append(Flag("controller-config", problem,
+                                    controllers_file or "<none>", 1))
 
     for lf in launch_files:
         sys_draft.flags.extend(lf.flags)

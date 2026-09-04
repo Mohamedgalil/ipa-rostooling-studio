@@ -10,9 +10,12 @@ Emit files for an **indentation-sensitive Xtext DSL**. It looks like YAML. It is
 Indentation is lexed into mandatory `BEGIN`/`END` tokens; a wrong indent is a parse error, not a
 style nit.
 
-`$ARGUMENTS` is the target: a path to a ROS 2 package (introspect it, emit one `.ros2` per node) or
-a bare system name (emit a `.rossystem`). If empty, ask which of the two the user wants before
-emitting anything.
+`$ARGUMENTS` is the target: a path to a ROS 2 package, or a bare system name (emit a
+`.rossystem`). If empty, ask which of the two the user wants before emitting anything.
+
+**When it is a path with source in it, start at "Converting real source" below — running the
+extractors is mandatory, not a shortcut.** One `.ros2` per *package*, named after the package it
+declares (see *Output layout*), not one per node.
 
 ## When to use
 
@@ -27,6 +30,67 @@ emitting anything.
   description reaches a model only as a `type: String` parameter whose value is a quoted path or an
   empty string `""`.
 - `.ros1` files. Out of scope.
+
+## Converting real source: run the extractors first — MANDATORY
+
+**When `$ARGUMENTS` is a path and that path contains ROS 2 source, you MUST run
+`scripts/extract_ros2_interfaces.py` before writing any `.ros2` by hand**, and
+`scripts/extract_rossystem.py` before writing a `.rossystem` when launch files exist. This is not
+a convenience. Transcribing `create_publisher`/`create_subscription`/`declare_parameter` calls is
+mechanical whenever the name and type are literal, and doing it by reading is slower,
+non-reproducible, and measurably worse: two independent runs of this skill over one package
+produced *different* names (`query_state` vs `~/query_state`) for the same non-literal interface,
+each looking equally confident in the file.
+
+```bash
+python ${CLAUDE_PLUGIN_ROOT}/scripts/extract_ros2_interfaces.py <src> \
+    -o <project>/rosnodes --emit-msgs <project>/msgs --json <project>/extraction_record.json
+
+python ${CLAUDE_PLUGIN_ROOT}/scripts/extract_rossystem.py <launch-file> \
+    --models <project>/rosnodes -o <project>/<system>.rossystem --json <project>/system_record.json
+```
+
+`scripts/README.md` documents what each reads and emits; it is the authority, so do not restate
+it from memory. The short version: everything that is literal in the source, already cited.
+
+**What they emit is settled — do not re-derive it or "improve" it, and do not re-read the source
+to check it.** Your job is the remainder, and only the remainder.
+
+### The `# FLAG` comments are your worklist, not documentation
+
+The scripts emit only what is literal and turn everything else into a `# FLAG` comment in the file
+header carrying `file:line` and the source expression. **A model that still contains `# FLAG` is
+not finished.** Every flag is one §8e decision. `rosmodel_lint.py` counts them as **`RM097`**
+(WARNING) so this does not rest on you remembering self-check 18 — but note that a flagged file
+is otherwise clean, and the real oracle ACCEPTS it, so RM097 is the *only* signal that anything
+is outstanding.
+
+Where a name is built from literals plus one identifier, the flag already carries the evidence:
+
+```
+#   Built from 'side', which 2 construction site(s) of HandSide visible in this package pass
+#   as: 'left', 'right'. CANDIDATES (evidence, NOT emitted ...): /hand/left/cmd, /hand/right/cmd
+```
+
+That is §8e case 1 already half-done. **Confirm it — do not re-derive it, and do not take it on
+faith either.** The script cannot see construction sites outside the package, so check whether any
+exist; if the candidates hold, emit one interface per resolved value and cite both lines per §8e.
+
+### The two exemptions, and nothing else
+
+1. **No ROS 2 source on disk.** The scripts report `0 package(s)`; a repository whose `src/` holds
+   only READMEs and CMakeLists is the common case for a partial checkout. Say so and model from
+   whatever the caller did supply. Do not re-run hoping for a different answer.
+2. **Missing dependencies.** C++ needs `tree_sitter` + `tree_sitter_cpp`; both scripts' YAML
+   readers need PyYAML. Without tree-sitter every C++ package is skipped, and the summary line
+   says so and **names them** (`INCOMPLETE: the C++ source of N package(s) was NOT read`).
+   Without PyYAML, `generate_parameter_library` parameters and the controller config are not
+   read, so `extract_rossystem.py` cannot resolve controller instances and says so. Either
+   install them (`pip install tree_sitter tree_sitter_cpp pyyaml`) or read those packages
+   yourself — and say which, in the report.
+
+Prose-only requests, transcription of an existing model, and review tasks are outside this section
+— there is no source to extract from.
 
 ## Decision tree: which file
 
@@ -189,6 +253,14 @@ every referenced `.ros2`, so an invented connection is an unverifiable claim tha
 Instead, list the candidate label pairs in your response and let the caller decide. (`MT.rossystem`
 has 32 nodes and several obvious pairings — such as `relay`/`controller_server` on
 `kmriiwa/base/command/cmd_vel` — and declares zero connections. Leave it that way.)
+
+`extract_rossystem.py` computes those candidate pairs for you — same interface name, same type
+string, legal direction — and writes them to its `--json` record without emitting any. **That list
+is for your report, not for the file.** Having the pairs computed changes nothing about this rule:
+name and type equality is necessary but not sufficient, because `MatchPortMsgs` compares by object
+identity. Scoping to one launch file does prune the obviously wrong ones — on
+`bringup_onboard.launch.py` it leaves exactly one candidate — but "one candidate" is still a
+proposal for the caller, not a licence to wire it.
 
 ### 4b. `from:` is `package.NODE`; arrow targets are `artifact::interface`
 
@@ -484,14 +556,22 @@ catalogue reference that does not resolve (§8c) — a type you infer here must 
 by convention at all. QoS fields and parameter values are out of scope: never infer either. Emit
 only what the source states, and let the Pinned-oracle exclusion section's defaults stand.
 
+**When the source was extracted (see "Converting real source"), your worklist is exactly the
+script's `# FLAG` comments** — the literal cases are already emitted and cited, so every remaining
+decision is one of the three below. A flag that carries a `CANDIDATES:` line is case 1 with the
+enumeration already computed; confirm it against the source rather than re-deriving it, and note
+that the script only sees the package it was given.
+
 Three situations arise, each with one correct move.
 
 **1. It takes tracing, not transcription.** A `using FollowJTrajAction = ...` alias two lines up; a
 Python variable or dict entry holding a message class; a name built from pieces that are all
 determinable — `get_node()->get_name() + "/query_state"`, or a `side` variable assigned two frames
 away. Trace it and cite **both** lines: the call site and the thing that resolves it. This is not a
-guess — everything needed is in the source. Reading for meaning is the whole reason this step is
-done by a model and not by a syntactic extractor, so do the reading before reaching for case 2 or 3.
+guess — everything needed is in the source. Reading for meaning is the whole reason **this step**
+— resolving what is not literal — is done by a model and not by a syntactic extractor, so do the
+reading before reaching for case 2 or 3. It is not a reason to redo the extractor's work on the
+parts that *were* literal: those are settled.
 
 Python shapes that need the same treatment: a message class imported under an alias or held in a
 variable/dict; a topic read back from `self.declare_parameter('topic_name', '/scan')` — the
@@ -569,7 +649,14 @@ be the reader's only signal that nothing needed it.
 `default:` belongs to `ParameterType`, not to `Parameter`, and is legal on **every** scalar type —
 not only on `Array[T]`. It has no `BEGIN`/`END` of its own, so it sits as a sibling of `type:`
 immediately after it. **`default:` and `value:` are different slots and are never interchangeable**
-— preserve whichever the input uses. See `references/ros2-syntax.md` §6.
+— preserve whichever the input uses.
+
+**When the input is source code there is no slot to preserve, so choose by meaning: a compiled-in
+`declare_parameter()` or `generate_parameter_library` default is a `default:`.** That keeps
+`value:` for the *deployed* value, which comes from a launch file or a controller config and
+belongs in the `.rossystem`, not here. The extractors emit `default:` for this reason; a
+transcribed corpus file using `value:` for the same thing is preserved as-is per the rule above,
+so the two can legitimately differ between a generated and a transcribed model of one package. See `references/ros2-syntax.md` §6.
 
 The two `parameters:` shapes in a `.rossystem` are different rules and are easy to confuse — the
 node-level one is a **list** (`- "name": "node::param"` + `value:`), the system-level one is a
@@ -702,8 +789,22 @@ Run every line against the emitted file:
     (case 3). The "Assumptions & Inferences" table is present in the report — with the explicit
     "none" line when nothing needed it — and does not replace check 12's prose report of drops and
     synthesis.
+18. **No `# FLAG` comment survives into a finished model.** Every one the extractors emitted is
+    either resolved in place under §8e (cases 1/2, with its citation) or reported to the caller as
+    an open question (case 3) — and in both events named in the report. A file that still carries a
+    flag lints clean and validates clean while being unfinished, which is why this is checked
+    rather than assumed. `# DROPPED`/`# NOTE`/`# CAUTION` lines are the scripts' disclosures of
+    things with no DSL slot, not a worklist: leave them in place.
+19. **The extractors were run**, per "Converting real source", or the report names which of the two
+    exemptions applied (no source on disk / missing dependencies, saying which packages were
+    therefore read by hand). Anything the scripts emitted is unchanged unless a §8e resolution
+    required editing that exact line.
 
 ## Validation
+
+- **The extractors run the linter themselves** on everything they write, so a file that came out of
+  `extract_ros2_interfaces.py` / `extract_rossystem.py` has already passed it once. Re-run it after
+  your §8e edits — those are hand edits like any other.
 
 - **Static linter** (always available): `${CLAUDE_PLUGIN_ROOT}/scripts/rosmodel_lint.py`. Checks
   everything above that is decidable in one file.

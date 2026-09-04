@@ -278,6 +278,7 @@ in `--hook` mode) for a workspace whose references are heavily project-local. Se
 | `RM091` | WARNING | A `subSystems:` entry doesn't resolve, itself declares another `subSystems:` (nesting risk), or resolves but exposes zero `interfaces:` on any node | `.rossystem` |
 | `RM092` | WARNING | A local node and a node reachable via `subSystems:` resolve the same `from:` under different labels — likely the same real node modelled twice | `.rossystem` |
 | `RM094` | ERROR | Full-line comment at column 0 inside an indented block | `AbstractIndentationTokenSource` closes every open block; oracle case `19-neg-col0-comment`: `missing EOF at ''` |
+| `RM097` | WARNING | Unresolved `# FLAG` comment left by `extract_ros2_interfaces.py` / `extract_rossystem.py` | SKILL.md "Converting real source" + §8e, self-check 18 |
 | `RM093` | ERROR | `subSystems:` written as a bracket list `[...]` or as a `- item` block sequence — the grammar takes neither (settled 2026-08-14: oracle cases `17-subsystems-multi` / `18-neg-subsystems-dash`, `mismatched input '-' expecting RULE_END`). N entries are N bare lines | `.rossystem` |
 
 `RM081`/`RM084` are WARNING, not ERROR, for the same reason `RM076` is: a genuinely
@@ -610,8 +611,8 @@ the script appears in this README and vice versa, with no orphans in either dire
 
 ### Whole-corpus run — 336 files, 0 crashes
 
-**Re-measured 2026-08-14** against the current script. It emits **82** distinct ids -- RM000-RM094
-plus the `RM002B` and `RM008T` variants -- which is **81 rules**<!--@count:rules-->, RM000 being the internal
+**Re-measured 2026-08-14** against the current script. It emits **83** distinct ids -- RM000-RM097
+plus the `RM002B` and `RM008T` variants -- which is **82 rules**<!--@count:rules-->, RM000 being the internal
 read/parse failure rather than a rule. (RM094, the column-0 comment check, and the RM090/RM033
 severity corrections landed after this sweep and change none of its counts: no corpus file
 exhibits any of the three.) This supersedes the

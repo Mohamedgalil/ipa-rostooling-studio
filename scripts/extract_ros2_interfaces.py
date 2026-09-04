@@ -1689,6 +1689,7 @@ def main(argv=None):
                             [os.path.abspath(p) for p in args.package_root])
     cpp_parser = _load_cpp_parser()
     cpp_warned = False
+    skipped_cpp = []
 
     os.makedirs(args.out, exist_ok=True)
     written, record = [], []
@@ -1707,6 +1708,7 @@ def main(argv=None):
             got |= extract_python(pkg, f, resolver, report_root)
         if cpp_files:
             if cpp_parser is None:
+                skipped_cpp.append(pkg.name)
                 if not cpp_warned:
                     print("tree_sitter / tree_sitter_cpp not installed -- C++ packages "
                           "are skipped. pip install tree_sitter tree_sitter_cpp",
@@ -1798,6 +1800,13 @@ def main(argv=None):
     print("%d package(s) -> %d file(s) in %s" % (len(record), len(written), args.out))
     print("  %d interface(s), %d parameter(s) emitted; %d item(s) flagged for review"
           % (emitted, params, flagged))
+    if skipped_cpp:
+        # Loud, and in the primary output rather than only on stderr: a caller who reads
+        # just the summary must not mistake a degraded run for a complete one.
+        print("  INCOMPLETE: the C++ source of %d package(s) was NOT read (tree_sitter / "
+              "tree_sitter_cpp missing), so their interfaces are absent and any model "
+              "emitted for them is partial: %s"
+              % (len(skipped_cpp), ", ".join(sorted(skipped_cpp))))
 
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8", newline="\n") as fh:
