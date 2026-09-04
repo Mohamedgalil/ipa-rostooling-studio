@@ -465,6 +465,7 @@ def render_html(models, title="RosTooling system plot"):
         {"title": title, "tabs": models, "kindOrder": KIND_ORDER, "kindLabels": KIND_LABELS},
         ensure_ascii=False)
     return (_HTML_TEMPLATE
+            .replace("/*__THEME_BOOT__*/", C.THEME_BOOT_JS)
             .replace("/*__PALETTE_CSS__*/", C.PALETTE_CSS)
             .replace("/*__JS_PRIMITIVES__*/", C.JS_PRIMITIVES)
             .replace("__TITLE__", _html_escape(title))
@@ -484,6 +485,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__TITLE__</title>
+<script>/*__THEME_BOOT__*/</script>
 <style>
 /*__PALETTE_CSS__*/
   *{box-sizing:border-box;}

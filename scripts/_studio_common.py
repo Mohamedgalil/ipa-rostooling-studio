@@ -41,6 +41,18 @@ TYPE_SEG_TO_ROS_BLOCK = {"msg": "msgs", "srv": "srvs", "action": "actions"}
 
 
 # ----------------------------------------------------------------------------------------
+# A user's explicit light/dark choice (wireTheme, below) is persisted to localStorage --
+# but reading it back inside wireTheme itself, which only runs from a <script> down in the
+# BODY, would paint the page in the OS theme first and then visibly flip it. This runs
+# synchronously in <head>, before the <style> block below is even parsed, so the
+# data-theme attribute -- and therefore which half of PALETTE_CSS applies -- is already
+# decided by the time anything paints. Shared here (not duplicated per page) so /ros-studio
+# and /ros-plot, which already share one localStorage bucket on a file:// origin, agree.
+THEME_BOOT_JS = r"""try{
+  var t=localStorage.getItem("rosStudio.theme");
+  if(t==="light"||t==="dark") document.documentElement.setAttribute("data-theme",t);
+}catch(e){}"""
+
 # CSS: the shared palette. This is the exact `:root` block ros_plot has always shipped
 # (light default + prefers-color-scheme dark + manual data-theme overrides), plus a couple
 # of editor-only tokens (--glow, --dim) that are harmless in the viewer. Everything after
@@ -179,13 +191,19 @@ JS_PRIMITIVES = r"""var STUDIO = (function(){
     });
   }
 
-  // Manual light/dark toggle for a standalone file (no host stamps data-theme).
+  // Manual light/dark toggle for a standalone file (no host stamps data-theme). THREE
+  // states, not two, and persisted: auto (follows the OS) -> light -> dark -> auto -> ...
+  // A plain two-way toggle plus persistence would opt the user OUT of "follow my OS"
+  // permanently the moment they clicked once, with no way back short of clearing storage.
+  // THEME_BOOT_JS (in <head>) is what makes an explicit choice actually stick on reload
+  // without a flash of the wrong theme; this only owns the write half.
   function wireTheme(btn){
     var root=document.documentElement;
     btn.addEventListener("click",function(){
       var cur=root.getAttribute("data-theme");
-      if(!cur){ cur=(window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light"; }
-      root.setAttribute("data-theme", cur==="dark"?"light":"dark");
+      var next=cur==="light"?"dark":(cur==="dark"?null:"light");
+      if(next) root.setAttribute("data-theme",next); else root.removeAttribute("data-theme");
+      try{ if(next) localStorage.setItem("rosStudio.theme",next); else localStorage.removeItem("rosStudio.theme"); }catch(e){}
     });
   }
 

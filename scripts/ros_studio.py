@@ -3122,6 +3122,7 @@ def render_editor(project, diagnostics=None, banner=None):
     }
     data = json.dumps(payload, ensure_ascii=False)
     return (_EDITOR_TEMPLATE
+            .replace("/*__THEME_BOOT__*/", C.THEME_BOOT_JS)
             .replace("/*__PALETTE_CSS__*/", C.PALETTE_CSS)
             .replace("/*__JS_PRIMITIVES__*/", C.JS_PRIMITIVES)
             .replace("/*__DATA__*/null", data)), ac["warnings"]

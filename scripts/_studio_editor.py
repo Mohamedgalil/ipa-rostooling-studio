@@ -15,6 +15,7 @@ EDITOR_TEMPLATE = r'''<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>/ros-studio — editor</title>
+<script>/*__THEME_BOOT__*/</script>
 <style>
 /*__PALETTE_CSS__*/
   *{box-sizing:border-box}
@@ -146,6 +147,8 @@ EDITOR_TEMPLATE = r'''<!doctype html>
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .typeahead-box .ta-row.active,.typeahead-box .ta-row:hover{background:var(--accent-wash);color:var(--accent-2)}
   .typeahead-box .ta-empty{padding:.3rem .5rem;color:var(--ink-3)}
+  .typeahead-box .ta-divider{padding:.3rem .5rem .15rem;font-family:var(--mono);font-size:.64rem;
+    letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
   .canvas-wrap.panning{cursor:grabbing}
   .canvas-wrap.dropping{outline:2px dashed var(--accent);outline-offset:-6px}
   /* floating over the transformed layer, so they keep their size at every zoom level */
@@ -380,6 +383,10 @@ EDITOR_TEMPLATE = r'''<!doctype html>
      the viewport meta and lays the page out at some notional desktop width, because the
      measurement below consults screen.width too. */
   .drawerbtn{display:none}
+  /* The persisted kind/param filter can hide content silently -- on a phone the rail carrying
+     the checkboxes that explain why is behind this exact button, closed by default, so the
+     one place a "something is filtered" cue can live is here. */
+  #railToggle.hasfilter::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--warn);margin-left:.15rem}
   .scrim.drawer{display:none}
   #drawerClose{display:none}
   body.narrow{font-size:15px}            /* 14px is below comfortable reading size on a phone */
@@ -602,6 +609,27 @@ var DATA = /*__DATA__*/null;
   var PAIR_TOPIC={pub:1,sub:1};
   var BLOCK=DATA.blocks;                  // kind -> .ros2 spec block, from _studio_common
   var TYPES=DATA.types||[], TYPESET={}; TYPES.forEach(function(t){TYPESET[t]=1;});
+  // Recently-picked message types, most-recent-first, surfaced by the typeahead's empty-query
+  // state (see makeTypeahead's opts.getMru). Recorded where a type actually ENTERS the model
+  // -- ni_add's handler and inlineEdit's commit callback, both below -- not inside the
+  // typeahead's own pick(): that fires for a suggestion the user clicked or arrowed to and then
+  // changed their mind about (browsing, not choosing), and it never fires at all for someone
+  // who types a full type and tabs away, which would make the fastest users invisible to it.
+  var RECENT_TYPES_KEY="rosStudio.recentTypes";
+  function loadRecentTypes(){
+    try{
+      var arr=JSON.parse(localStorage.getItem(RECENT_TYPES_KEY)||"[]");
+      // drop anything that no longer resolves: a different project's catalogue, a stale entry.
+      return arr.filter(function(t){return TYPESET[t];});
+    }catch(e){ return []; }
+  }
+  function recordRecentType(v){
+    v=String(v||"").trim();
+    if(!v||!TYPESET[v]) return;   // only record types that actually resolve
+    var arr=loadRecentTypes().filter(function(t){return t!==v;});
+    arr.unshift(v);
+    try{ localStorage.setItem(RECENT_TYPES_KEY,JSON.stringify(arr.slice(0,8))); }catch(e){}
+  }
   var TYPEFILES=DATA.typeFiles||{};       // {type: relative .ros file} -- drives the RM089 comment
   var SEGBLOCK=DATA.typeSegBlocks||{};    // msg/srv/action -> msgs/srvs/actions
   // .ros vocabulary (rosmodel_lint's own tables). ROSSEG is the inverse of SEGBLOCK: a spec's
@@ -713,10 +741,29 @@ var DATA = /*__DATA__*/null;
   // same panel shape serves nodes, interfaces, parameters, connections, the system and a
   // package -- and only the first two of those have an id at all.
   var cmtReg={};
-  var kindShown={}; KINDS.forEach(function(k){kindShown[k]=true;});
+  // Persisted the same way autoSides (a couple hundred lines away) already is -- a view
+  // preference, never model data -- except THIS one hides content rather than just changing
+  // how it's drawn, which is the classic "where did my data go" trap if it's silently
+  // restored with no visible sign anything is filtered. railToggle's "(filtered)" marker,
+  // wired further down where the checkboxes are built, is the mitigation.
+  var HIDDEN_KINDS_KEY="rosStudio.hiddenKinds";
+  var hiddenKinds=(function(){ try{ return JSON.parse(localStorage.getItem(HIDDEN_KINDS_KEY)||"[]"); }catch(e){ return []; } })();
+  function saveHiddenKinds(){
+    var out=[];
+    KINDS.forEach(function(k){ if(!kindShown[k]) out.push(k); });
+    if(!paramShown) out.push("param");
+    try{ localStorage.setItem(HIDDEN_KINDS_KEY,JSON.stringify(out)); }catch(e){}
+    updateFilterIndicator();
+  }
+  var kindShown={}; KINDS.forEach(function(k){kindShown[k]=hiddenKinds.indexOf(k)<0;});
   // `param` is a pseudo-kind: it has its own filter toggle but no port and no edge, because a
   // parameter is not an interaction.
-  var paramShown=true;
+  var paramShown=hiddenKinds.indexOf("param")<0;
+  function updateFilterIndicator(){
+    var rt=document.getElementById("railToggle"); if(!rt) return;
+    var anyHidden=!paramShown||KINDS.some(function(k){return !kindShown[k];});
+    rt.classList.toggle("hasfilter",anyHidden);
+  }
   // The ParameterTypes the emitter can write a value for. List/Struct/Base64/Array exist in the
   // grammar (Basics.xtext:51-52) but _fmt_param_value has no representation for them, so
   // offering them here would let the author author a value the emitter cannot spell.
@@ -871,6 +918,30 @@ var DATA = /*__DATA__*/null;
   })();
   var storageNote=storage?null:"autosave unavailable — Commit before closing";
   var saveTimer=null, savedAt=null;
+  // A SAVE_KEY entry only ever gets removed when the user clicks Discard on the restore
+  // prompt (search doDiscard) -- every system name ever opened otherwise stays in this
+  // bucket forever. On a file:// origin the bucket is shared across every local HTML page
+  // on the machine, so it fills faster than one project's own history would suggest; when
+  // it does, saveNow's quota catch permanently disables autosave for the rest of THIS
+  // session (storage=null) while leaving the stale entries that caused it untouched. Keep
+  // only the most recent few, run once at startup; never prunes the CURRENT session's own
+  // key regardless of age, since that one has not necessarily saved yet.
+  (function pruneOldAutosaves(){
+    if(!storage) return;
+    try{
+      var entries=[];
+      for(var i=0;i<localStorage.length;i++){
+        var k=localStorage.key(i);
+        if(k&&k.indexOf("ros-studio/v1/")===0&&k!==SAVE_KEY){
+          var at=0;
+          try{ at=(JSON.parse(localStorage.getItem(k))||{}).at||0; }catch(e){}
+          entries.push({k:k,at:at});
+        }
+      }
+      entries.sort(function(a,b){ return b.at-a.at; });
+      entries.slice(7).forEach(function(e){ try{ localStorage.removeItem(e.k); }catch(e2){} });
+    }catch(e){}
+  })();
 
   function scheduleSave(){
     if(!storage) return;
@@ -2067,7 +2138,36 @@ var DATA = /*__DATA__*/null;
   (function wireOpen(){
     var input=document.getElementById("openInput"), btn=document.getElementById("openBtn");
     if(btn&&input){
-      btn.onclick=function(){ input.value=""; input.click(); };
+      btn.onclick=function(){
+        // The File System Access API remembers the last-used directory FOR THIS id across
+        // reloads (Chromium keeps a per-id, not per-file, memory) -- <input type=file> gives the
+        // page no visibility into which folder was used at all, by design, so there was nothing
+        // for this app's own code to remember. Feature-detected here (call time, not load time)
+        // so Firefox/Safari fall through to the plain input exactly as before; <input> itself
+        // stays in the DOM either way.
+        if(window.showOpenFilePicker){
+          // MUST be the first thing that runs in this handler, with no await ahead of it: the
+          // click's user-activation is what authorizes the picker, and it does not survive a
+          // microtask boundary -- an async gap here turns this into a SecurityError instead of
+          // a dialog.
+          window.showOpenFilePicker({
+            id:"rosStudioOpen",                 // distinctive: on a file:// page every local
+                                                 // HTML file shares one id-keyed bucket
+            multiple:true,
+            excludeAcceptAllOption:false,       // keep "All files" reachable
+            types:[{description:"RosTooling model files",
+              accept:{"application/octet-stream":[".rossystem",".ros2",".ros",".json"]}}]
+          }).then(function(handles){
+            return Promise.all(handles.map(function(h){ return h.getFile(); }));
+          }).then(function(files){ openFiles(files); })
+          .catch(function(err){
+            if(err&&err.name==="AbortError") return;   // the user cancelled -- not a failure
+            input.value=""; input.click();              // anything else: fall back rather than look inert
+          });
+          return;
+        }
+        input.value=""; input.click();
+      };
       input.onchange=function(){ openFiles(input.files); };
     }
     // Drag a whole model set onto the canvas. The default browser behaviour for a dropped file
@@ -2113,8 +2213,11 @@ var DATA = /*__DATA__*/null;
   // controller rather than wiring its own keydown/blur listeners, so a caller that already owns
   // the input's keyboard handling (inlineEdit, below) can drive it without two listeners on the
   // same element racing each other over the same keys.
-  function makeTypeahead(inputEl,candidates,onPick){
-    var box=null,items=[],activeIdx=-1;
+  // opts.getMru, when given, is called fresh on every open() -- a function, not a snapshot
+  // array, so a pick recorded by ANOTHER instance of this widget (the inline canvas editor
+  // and the add-interface form each make their own) is visible the next time either opens.
+  function makeTypeahead(inputEl,candidates,onPick,opts){
+    var box=null,items=[],activeIdx=-1,dividerAt=-1;
     function close(){ if(box){ box.remove(); box=null; } activeIdx=-1; }
     function position(){
       if(!box) return;
@@ -2124,15 +2227,32 @@ var DATA = /*__DATA__*/null;
     }
     function open(){
       var q=inputEl.value.trim().toLowerCase();
-      // substring, not prefix: a package/msg/Name string is often recalled by the NAME
-      // ("Odometry") rather than the package it lives in, which a prefix-only match would miss
-      // entirely. Ranked so a prefix/earlier hit still sorts above a coincidental later one.
-      var matches=q?candidates.filter(function(c){return c.toLowerCase().indexOf(q)>=0;}):candidates;
-      matches=matches.slice().sort(function(a,b){
-        var aw=a.toLowerCase().indexOf(q),bw=b.toLowerCase().indexOf(q);
-        return aw!==bw?aw-bw:a.length-b.length;
-      }).slice(0,40);      // 602 rows was the whole complaint -- never render anywhere near that many
-      items=matches;
+      dividerAt=-1;
+      if(!q&&opts&&opts.getMru){
+        // empty query: recent picks first (already most-recent-first), backfilled with the
+        // rest of the catalogue -- deduped -- up to 40, rather than showing 8 rows and
+        // nothing else, which would look broken. A blank query previously fell through to
+        // the sort below with every indexOf("") tying at 0, so it silently showed the 40
+        // SHORTEST names in the whole catalogue -- not "recent", not alphabetical, just an
+        // artifact of the comparator -- which is exactly the empty-box case MRU replaces.
+        var seen={}, mru=[];
+        (opts.getMru()||[]).forEach(function(m){ if(candidates.indexOf(m)>=0&&!seen[m]){ seen[m]=1; mru.push(m); } });
+        if(mru.length){
+          var rest=[];
+          candidates.forEach(function(c){ if(rest.length+mru.length<40&&!seen[c]){ seen[c]=1; rest.push(c); } });
+          items=mru.concat(rest);
+          dividerAt=mru.length<items.length?mru.length:-1;
+        } else items=candidates.slice(0,40);
+      } else {
+        // substring, not prefix: a package/msg/Name string is often recalled by the NAME
+        // ("Odometry") rather than the package it lives in, which a prefix-only match would
+        // miss entirely. Ranked so a prefix/earlier hit still sorts above a coincidental one.
+        var matches=q?candidates.filter(function(c){return c.toLowerCase().indexOf(q)>=0;}):candidates;
+        items=matches.slice().sort(function(a,b){
+          var aw=a.toLowerCase().indexOf(q),bw=b.toLowerCase().indexOf(q);
+          return aw!==bw?aw-bw:a.length-b.length;
+        }).slice(0,40);      // 602 rows was the whole complaint -- never render anywhere near that many
+      }
       if(activeIdx>=items.length) activeIdx=items.length-1;
       if(!box){
         box=document.createElement("div"); box.className="typeahead-box";
@@ -2147,6 +2267,8 @@ var DATA = /*__DATA__*/null;
       box.innerHTML="";
       if(!items.length){ var e=document.createElement("div"); e.className="ta-empty"; e.textContent="no match"; box.appendChild(e); }
       items.forEach(function(m,i){
+        if(i===0&&dividerAt>0){ var h1=document.createElement("div"); h1.className="ta-divider"; h1.textContent="recent"; box.appendChild(h1); }
+        if(i===dividerAt){ var h2=document.createElement("div"); h2.className="ta-divider"; h2.textContent="all types"; box.appendChild(h2); }
         var row=document.createElement("div"); row.className="ta-row"+(i===activeIdx?" active":"");
         row.textContent=m;
         row.onmousedown=function(){ pick(m); };
@@ -2172,7 +2294,7 @@ var DATA = /*__DATA__*/null;
     var suppressNext=false;
     var ta=makeTypeahead(inputEl,candidates,function(){
       suppressNext=true; inputEl.dispatchEvent(new Event("input",{bubbles:true})); inputEl.focus();
-    });
+    },{getMru:loadRecentTypes});
     inputEl.addEventListener("input",function(){ if(suppressNext){ suppressNext=false; return; } ta.open(); });
     inputEl.addEventListener("focus",ta.open);
     // Close IMMEDIATELY, not after a delay: a row's own mousedown already calls
@@ -2208,7 +2330,7 @@ var DATA = /*__DATA__*/null;
     el.parentNode.insertBefore(inp,el);
     el.style.display="none";
     var done=false;
-    var ta=opts.typeahead?makeTypeahead(inp,opts.typeahead,function(){finish(true);}):null;
+    var ta=opts.typeahead?makeTypeahead(inp,opts.typeahead,function(){finish(true);},{getMru:loadRecentTypes}):null;
     function finish(ok){
       if(done) return;
       done=true;
@@ -2268,6 +2390,7 @@ var DATA = /*__DATA__*/null;
           if(v===(f.type||"")){render();return;}
           pushUndo("itype:"+f.id);
           f.type=v||null;
+          recordRecentType(v);
           render();
           fillInspector();
         });
@@ -3660,9 +3783,11 @@ var DATA = /*__DATA__*/null;
         return;
       }
       pushUndo();
+      var tyVal=document.getElementById("ni_type").value.trim();
+      recordRecentType(tyVal);
       // a hand-added interface is exposed on sight: the author typed it in to model it, so it
       // belongs in the .rossystem whether or not it is wired up yet.
-      n.ifaces.push({id:nid(),name:nm,kind:addKind,type:document.getElementById("ni_type").value.trim()||null,qos:null,label:null,exposed:true});
+      n.ifaces.push({id:nid(),name:nm,kind:addKind,type:tyVal||null,qos:null,label:null,exposed:true});
       render();fillInspector();};
     var pAdd=document.getElementById("np_add");
     if(pAdd) pAdd.onclick=function(){
@@ -3769,17 +3894,18 @@ var DATA = /*__DATA__*/null;
     var fb=document.getElementById("filterBox");
     KINDS.forEach(function(k){
       var l=document.createElement("label");
-      l.innerHTML='<input type="checkbox" checked data-k="'+k+'"><span class="sw" style="background:var('+KCOL[k]+')"></span>'+k;
-      l.querySelector("input").onchange=function(e){kindShown[k]=e.target.checked;render();};
+      l.innerHTML='<input type="checkbox" '+(kindShown[k]?"checked ":"")+'data-k="'+k+'"><span class="sw" style="background:var('+KCOL[k]+')"></span>'+k;
+      l.querySelector("input").onchange=function(e){kindShown[k]=e.target.checked;saveHiddenKinds();render();};
       fb.appendChild(l);
     });
     // `param` toggles a BAND, not ports: it hides no edge, because a parameter is not an
     // interaction. It is here because a node's parameters are often the bulkiest thing on its
     // card and reading the wiring is easier without them.
     var pl=document.createElement("label");
-    pl.innerHTML='<input type="checkbox" checked data-k="param"><span class="sw" style="background:var(--k-param)"></span>param';
-    pl.querySelector("input").onchange=function(e){paramShown=e.target.checked;render();};
+    pl.innerHTML='<input type="checkbox" '+(paramShown?"checked ":"")+'data-k="param"><span class="sw" style="background:var(--k-param)"></span>param';
+    pl.querySelector("input").onchange=function(e){paramShown=e.target.checked;saveHiddenKinds();render();};
     fb.appendChild(pl);
+    updateFilterIndicator();
     var lg=document.getElementById("legend");
     [["pub → sub","Topic — one-way ▶"],["ss → sc","Service — request ⇄ response"],["as → ac","Action — request ⇄ response"]]
       .forEach(function(pair){var d=document.createElement("div");d.innerHTML='<b style="font-family:var(--mono);font-size:.66rem">'+pair[0]+'</b> — '+pair[1];lg.appendChild(d);});
