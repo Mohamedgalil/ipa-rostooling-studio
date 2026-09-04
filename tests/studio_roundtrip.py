@@ -677,6 +677,76 @@ def check_multifile(case, work):
     return not fails, fails
 
 
+def check_wrap(work):
+    """A project the editor produced by wrapping a selection into a new subsystem emits MORE
+    THAN ONE .rossystem, and the pieces have to agree with each other.
+
+    The invariant, and the whole reason this fixture exists: a `connections:` endpoint is a
+    LABEL STRING, and each file derives its own labels from its own node set. A connection that
+    crosses the new boundary is written by one file and has to resolve against an interface the
+    OTHER one declares -- so every endpoint anywhere in the output must name a label that
+    something in the output actually exposes. Checking that, rather than one known-bad case,
+    is what catches the next variant of it.
+
+    Returns (True|False|None, [lines]); None means SKIP."""
+    src = os.path.join(_HERE, "fixtures", "wrap", "wrapped.json")
+    if not os.path.isfile(src):
+        return None, ["skipped: tests/fixtures/wrap/wrapped.json is missing"]
+
+    proj = os.path.join(work, "wrapped.json")
+    shutil.copyfile(src, proj)
+    outdir = os.path.join(work, "generated")
+    code, gen_out = run(["generate", proj, "--outdir", outdir])
+    if code != 0:
+        return False, ["generate failed on the wrapped project (exit %d):\n%s" % (code, gen_out)]
+
+    systems = sorted(f for f in os.listdir(outdir) if f.endswith(".rossystem"))
+    fails = []
+    if len(systems) < 2:
+        fails.append("expected the wrapped subsystem to be emitted as its own .rossystem too; "
+                     "got %s" % systems)
+
+    # who declares each label, and how many times -- a plain set could not tell "declared once"
+    # from "declared by two different nodes", and the second is an endpoint that resolves to
+    # both of them (RM065) which is the failure mode label-pinning exists to prevent.
+    owners, endpoints = {}, []
+    for name in systems:
+        got = facts(os.path.join(outdir, name))
+        for exp in got["exposures"]:
+            owners.setdefault(exp[0], []).append(name + ":" + exp[1] if len(exp) > 1 else name)
+        for conn in got["connections"]:
+            endpoints += [(name, conn[0]), (name, conn[1])]
+    for name, ep in endpoints:
+        if ep not in owners:
+            fails.append("%s: connection endpoint %r is declared by no emitted system "
+                         "(labels: %s)" % (name, ep, sorted(owners)))
+        elif len(owners[ep]) > 1:
+            fails.append("%s: connection endpoint %r is declared %d times (%s) — an endpoint "
+                         "has to resolve to exactly one interface"
+                         % (name, ep, len(owners[ep]), owners[ep]))
+
+    # Every hand-authored node in every emitted system needs its artifact in the .ros2 for that
+    # package. Emitting per-system into one filename-keyed dict used to let the last system
+    # written silently drop the artifacts only the other one knew about.
+    ros2 = {}
+    for f in os.listdir(outdir):
+        if f.endswith(".ros2"):
+            ros2[f[:-5]] = open(os.path.join(outdir, f), encoding="utf-8").read()
+    for name in systems:
+        for line in open(os.path.join(outdir, name), encoding="utf-8"):
+            m = re.match(r'\s*from:\s*"([^"]+)\.([^".]+)"', re.sub(r"\s+#.*$", "", line.rstrip()))
+            if not m:
+                continue
+            pkg, art = m.group(1), m.group(2)
+            if pkg in ros2 and not re.search(r"^\s+%s:" % re.escape(art), ros2[pkg], re.M):
+                fails.append("%s references %s.%s but %s.ros2 has no such artifact — another "
+                             "system's emission overwrote it" % (name, pkg, art, pkg))
+
+    if "0 error(s)" not in gen_out:
+        fails.append("rosmodel_lint did not report 0 errors on the wrapped output:\n%s" % gen_out)
+    return not fails, fails
+
+
 def _default_targets():
     """examples/ plus the checked-in fixtures. examples/ is gitignored demo content that other
     work rewrites under this harness; tests/fixtures/ is what a change to this repo is held to,
@@ -780,6 +850,23 @@ def main(argv):
                         print("    multi-file: %s" % line)
             finally:
                 shutil.rmtree(work, ignore_errors=True)
+
+        # Wrapping is the other whole-project operation with no single source .rossystem: its
+        # input is a project the EDITOR produced, and what it proves is cross-FILE (the two
+        # emitted systems agreeing about a connection that crosses between them).
+        print()
+        print("%-32s %-12s" % ("WRAP", "CROSS-FILE"))
+        print("-" * 90)
+        work = tempfile.mkdtemp(prefix="studio-wrap-")
+        try:
+            ok, why = check_wrap(work)
+            print("%-32s %-12s" % ("fixtures/wrap/", verdict(ok)))
+            if ok is False:
+                failures += 1                 # one failed CHECK, however many lines explain it
+            for line in why:
+                print("    wrap: %s" % line)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
     print()
     print("%d fixture(s), %d failure(s)" % (len(targets), failures))

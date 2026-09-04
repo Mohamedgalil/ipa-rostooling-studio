@@ -2381,6 +2381,32 @@ def validate_project(project):
                           % (f.get("name", "?"), f.get("kind", "?"), typ))
 
     glob_errs += _validate_types(project)
+
+    # A wrapped subsystem is a whole system this project will WRITE, not a reference to someone
+    # else's file -- so the gate has to hold it to the same standard. It did not, and wrapping
+    # was therefore a way to launder a blocking error into a clean generate: the checks above
+    # skip `backing != "hand"`, and after a wrap the outer copies are all "sub" while the real
+    # (hand) definitions sit unexamined inside `content`.
+    outer_name = (project.get("system") or {}).get("name") or "system"
+    seen_names = {outer_name}
+    for sub in _invented_subprojects(project):
+        ref = sub["system"].get("name") or "?"
+        # Same emitted filename twice = the second silently replaces the first, and the whole
+        # outer system can vanish that way (naming a wrapped subsystem after its own parent).
+        if ref in seen_names:
+            glob_errs.append("Subsystem '%s' has the same name as another system this project "
+                             "writes, so both would be emitted as '%s.rossystem' and one would "
+                             "overwrite the other. Rename the subsystem." % (ref, ref))
+            continue
+        seen_names.add(ref)
+        inner = validate_project(sub)
+        for m in inner["global"]:
+            glob_errs.append("subsystem '%s': %s" % (ref, m))
+        # Reported against the node id, which the OUTER project shares (the wrap keeps ids), so
+        # the editor can still route the diagnostic to a card the author can see.
+        for nid_, msgs in inner["byNode"].items():
+            for m in msgs:
+                flag(nid_, "in subsystem '%s': %s" % (ref, m))
     return {"global": glob_errs, "byNode": by_node}
 
 
@@ -2459,26 +2485,76 @@ def _validate_types(project):
     return out
 
 
-def generate_files(project):
-    """Return {relpath: content} for every file the project generates."""
-    files = {}
-    companions = _companion_types(project)
-    companion_pkgs = set(companions.keys())
+def _normalize_subproject(content, ref):
+    """Fill in the project-shaped fields emit_rossystem/emit_ros2/_emit_system_into expect,
+    from the self-contained `content` an in-browser "wrap in subsystem" carries. `content` is
+    already nodes/connections/packages/types/params lifted straight out of the outer project by
+    the Studio editor -- this only supplies the handful of top-level fields a bare extraction
+    would not think to set for itself."""
+    p = dict(content)
+    p["system"] = dict(p.get("system") or {})
+    p["system"].setdefault("name", ref)
+    p["system"].setdefault("fromFile", None)
+    p.setdefault("nodes", [])
+    p.setdefault("connections", [])
+    p.setdefault("packages", {})
+    p.setdefault("types", {})
+    p.setdefault("params", [])
+    p.setdefault("subSystems", [])
+    return p
 
-    # group hand-authored nodes by package -> one .ros2 each
-    by_pkg = {}
-    for n in project["nodes"]:
-        if n["backing"] == "hand" and n["pkg"]:
-            by_pkg.setdefault(n["pkg"], []).append(n)
+
+def _invented_subprojects(project):
+    """Every subSystems: entry the Studio editor extracted in-browser, as a project-shaped dict.
+    A reference to a PRE-EXISTING file has no `content` and is not one of these: its bytes are
+    someone else's and only get staged (see _stage_local_subsystems), never regenerated."""
+    return [_normalize_subproject(s["content"], s["ref"])
+            for s in (project.get("subSystems") or [])
+            if s.get("invented") and s.get("content")]
+
+
+def generate_files(project):
+    """Return {relpath: content} for every file the project generates.
+
+    One `.rossystem` per system -- the outer one plus each wrapped subsystem -- but the `.ros2`
+    and `.ros` files are emitted ONCE from all of them together, because a package is not owned
+    by a system. Wrapping two nodes of a three-node package leaves the third behind in the outer
+    project, and emitting per-system wrote `<pkg>.ros2` twice into one dict: the second write
+    won and the artifacts only the other system knew about were gone from the file. `generate`
+    still exited 0 -- a node referenced by a `from:` whose artifact is missing is only RM084, a
+    warning -- while the real language server rejects it outright.
+    """
+    systems = [project] + _invented_subprojects(project)
+
+    # a package's artifacts are the union across every system that declares one, so a node stays
+    # in its .ros2 no matter which side of a wrap it ended up on
+    by_pkg, pkg_meta = {}, {}
+    for sysproj in systems:
+        for n in sysproj["nodes"]:
+            if n["backing"] == "hand" and n["pkg"]:
+                by_pkg.setdefault(n["pkg"], []).append(n)
+        for pkg, entry in (sysproj.get("packages") or {}).items():
+            pkg_meta.setdefault(pkg, entry or {})       # first system to describe it wins
+
+    # likewise the companion .ros: the type may be referenced from either side of the wrap
+    companions = {}
+    for sysproj in systems:
+        for pkg, blocks in _companion_types(sysproj).items():
+            companions.setdefault(pkg, set()).update(blocks)
+    companion_pkgs = set(companions.keys())
+    all_types = {}
+    for sysproj in systems:
+        all_types.update(sysproj.get("types") or {})
+
+    files = {}
     for pkg, recs in sorted(by_pkg.items()):
-        entry = project.get("packages", {}).get(pkg) or {}
+        entry = pkg_meta.get(pkg) or {}
         files[pkg + ".ros2"] = emit_ros2(pkg, entry.get("fromGitRepo"), _fold_artifacts(recs),
                                          companion_pkgs, entry.get("comments"))
-
     for pkg, blocks in sorted(companions.items()):
-        files[pkg + ".ros"] = _companion_ros(pkg, blocks, project.get("types"))
-
-    files[project["system"].get("name", "system") + ".rossystem"] = emit_rossystem(project)
+        files[pkg + ".ros"] = _companion_ros(pkg, blocks, all_types)
+    for sysproj in systems:
+        files[sysproj["system"].get("name", "system") + ".rossystem"] = emit_rossystem(sysproj)
     return files
 
 

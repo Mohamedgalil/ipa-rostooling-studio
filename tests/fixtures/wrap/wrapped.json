@@ -1,0 +1,251 @@
+{
+  "formatVersion": 5,
+  "system": {
+    "name": "demo_sys",
+    "fromFile": null
+  },
+  "subSystems": [
+    {
+      "ref": "camera_stack",
+      "file": null,
+      "invented": true,
+      "content": {
+        "system": {
+          "name": "camera_stack",
+          "fromFile": null
+        },
+        "nodes": [
+          {
+            "id": "x9001",
+            "label": "camera",
+            "backing": "hand",
+            "pkg": "cam_pkg",
+            "node": "camera",
+            "artifact": "camera",
+            "catalogueFile": null,
+            "namespace": null,
+            "x": 80,
+            "y": 80,
+            "ifaces": [
+              {
+                "id": "i9001",
+                "name": "info",
+                "kind": "sub",
+                "type": "sensor_msgs/msg/CameraInfo",
+                "qos": null,
+                "label": "info",
+                "exposed": true
+              },
+              {
+                "id": "i9002",
+                "name": "image",
+                "kind": "pub",
+                "type": "sensor_msgs/msg/Image",
+                "qos": null,
+                "label": "image",
+                "exposed": true
+              }
+            ],
+            "params": []
+          },
+          {
+            "id": "x9002",
+            "label": "filter",
+            "backing": "hand",
+            "pkg": "cam_pkg",
+            "node": "filter",
+            "artifact": "filter",
+            "catalogueFile": null,
+            "namespace": null,
+            "x": 400,
+            "y": 80,
+            "ifaces": [
+              {
+                "id": "i9003",
+                "name": "image",
+                "kind": "sub",
+                "type": "sensor_msgs/msg/Image",
+                "qos": null,
+                "label": "image_sub",
+                "exposed": true
+              }
+            ],
+            "params": []
+          }
+        ],
+        "connections": [
+          {
+            "id": "c9002",
+            "from": {
+              "n": "x9001",
+              "i": "i9002"
+            },
+            "to": {
+              "n": "x9002",
+              "i": "i9003"
+            }
+          }
+        ],
+        "packages": {
+          "cam_pkg": {
+            "fromGitRepo": null
+          }
+        },
+        "types": {},
+        "params": []
+      },
+      "graph": {
+        "nodes": [
+          {
+            "label": "camera",
+            "from": "cam_pkg.camera",
+            "interfaces": [
+              {
+                "label": "info",
+                "kind": "sub",
+                "name": "info",
+                "artifact": null
+              },
+              {
+                "label": "image",
+                "kind": "pub",
+                "name": "image",
+                "artifact": null
+              }
+            ]
+          },
+          {
+            "label": "filter",
+            "from": "cam_pkg.filter",
+            "interfaces": [
+              {
+                "label": "image_sub",
+                "kind": "sub",
+                "name": "image",
+                "artifact": null
+              }
+            ]
+          }
+        ],
+        "connections": [
+          [
+            "image",
+            "image_sub"
+          ]
+        ]
+      }
+    }
+  ],
+  "params": [],
+  "nodes": [
+    {
+      "id": "x9001",
+      "label": "camera",
+      "backing": "sub",
+      "pkg": "cam_pkg",
+      "node": "camera",
+      "artifact": "camera",
+      "catalogueFile": null,
+      "namespace": null,
+      "x": 80,
+      "y": 80,
+      "ifaces": [
+        {
+          "id": "i9001",
+          "name": "info",
+          "kind": "sub",
+          "type": null,
+          "qos": null,
+          "label": "info",
+          "exposed": false
+        },
+        {
+          "id": "i9002",
+          "name": "image",
+          "kind": "pub",
+          "type": null,
+          "qos": null,
+          "label": "image",
+          "exposed": false
+        }
+      ],
+      "params": [],
+      "subRef": "camera_stack"
+    },
+    {
+      "id": "x9002",
+      "label": "filter",
+      "backing": "sub",
+      "pkg": "cam_pkg",
+      "node": "filter",
+      "artifact": "filter",
+      "catalogueFile": null,
+      "namespace": null,
+      "x": 400,
+      "y": 80,
+      "ifaces": [
+        {
+          "id": "i9003",
+          "name": "image",
+          "kind": "sub",
+          "type": null,
+          "qos": null,
+          "label": "image_sub",
+          "exposed": false
+        }
+      ],
+      "params": [],
+      "subRef": "camera_stack"
+    },
+    {
+      "id": "x9003",
+      "label": "calib",
+      "backing": "hand",
+      "pkg": "cal_pkg",
+      "node": "calib",
+      "artifact": "calib",
+      "catalogueFile": null,
+      "namespace": null,
+      "x": 80,
+      "y": 300,
+      "ifaces": [
+        {
+          "id": "i9004",
+          "name": "info",
+          "kind": "pub",
+          "type": "sensor_msgs/msg/CameraInfo",
+          "qos": null,
+          "label": null,
+          "exposed": false
+        }
+      ],
+      "params": []
+    }
+  ],
+  "connections": [
+    {
+      "id": "c9001",
+      "from": {
+        "n": "x9003",
+        "i": "i9004"
+      },
+      "to": {
+        "n": "x9001",
+        "i": "i9001"
+      }
+    }
+  ],
+  "packages": {
+    "cam_pkg": {
+      "fromGitRepo": null
+    },
+    "cal_pkg": {
+      "fromGitRepo": null
+    }
+  },
+  "types": {},
+  "diagnostics": {
+    "global": [],
+    "byNode": {}
+  }
+}

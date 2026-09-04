@@ -16,9 +16,29 @@ EDITOR_TEMPLATE = r'''<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>/ros-studio — editor</title>
 <script>/*__THEME_BOOT__*/</script>
+<script>
+/* Same reason the theme is restored up here rather than in the body script: the panels would
+   otherwise paint at their default widths and jump to the stored ones on the next frame. Runs
+   before the stylesheet below is parsed, so the custom properties are already set the first
+   time .rail/.inspector are laid out. Deliberately does no clamping -- the body script re-clamps
+   against the live viewport once it can measure one; this only has to avoid the flash. */
+try{
+  var pw=JSON.parse(localStorage.getItem("rosStudio.panelWidths")||"{}");
+  if(pw&&typeof pw.rail==="number") document.documentElement.style.setProperty("--rail-w",pw.rail+"px");
+  if(pw&&typeof pw.insp==="number") document.documentElement.style.setProperty("--insp-w",pw.insp+"px");
+}catch(e){}
+</script>
 <style>
 /*__PALETTE_CSS__*/
   *{box-sizing:border-box}
+  /* The browser's own [hidden]{display:none} lives in the UA stylesheet, and ANY author rule
+     that sets `display` beats it -- specificity never enters into it, author always wins over
+     UA. So `el.hidden=true` on an element whose class sets a display silently does nothing.
+     This has now bitten twice (the .secdot dot, then the issue-list's collapsible groups, whose
+     .itkids sets display:flex -- so a "collapsed" group stayed fully expanded while its caret
+     and aria-expanded both claimed otherwise). One rule here ends the whole class of it rather
+     than adding a [hidden] override per element forever. */
+  [hidden]{display:none!important}
   html,body{height:100%}
   body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);font-size:14px;-webkit-font-smoothing:antialiased;display:flex;flex-direction:column;overflow:hidden}
   button{font-family:inherit}
@@ -81,7 +101,19 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .tbtn.primary:hover{background:var(--accent-2)}
 
   .main{flex:1;display:flex;min-height:0}
-  .rail{width:190px;flex-shrink:0;border-right:1px solid var(--rule);background:var(--surface);display:flex;flex-direction:column;gap:1rem;padding:.85rem;overflow-y:auto}
+  .rail{width:var(--rail-w,190px);flex-shrink:0;border-right:1px solid var(--rule);background:var(--surface);display:flex;flex-direction:column;gap:1rem;padding:.85rem;overflow-y:auto}
+  /* A 5px grab target is a miss more often than a hit, so the hit area is widened with a
+     transparent margin that eats into the neighbours -- the VISIBLE line stays 1px (the
+     panel's own border), which is what the layout was designed around. */
+  .resizer{flex:0 0 5px;margin:0 -2px;position:relative;z-index:5;cursor:col-resize;
+    background:transparent;transition:background .12s ease}
+  .resizer:hover,.resizer:focus-visible,.resizer.dragging{background:var(--accent);outline:none}
+  .resizer:focus-visible{box-shadow:0 0 0 2px var(--accent-wash)}
+  /* While a drag is live the pointer is captured by the handle, so it can leave it -- and any
+     text it crosses would select, and every hovered element would flicker its own cursor. */
+  body.resizing{cursor:col-resize;user-select:none;-webkit-user-select:none}
+  body.resizing .canvas-wrap{pointer-events:none}
+  @media (prefers-reduced-motion:reduce){ .resizer{transition:none} }
   .rail h4{margin:0 0 .35rem;font-family:var(--mono);font-size:.64rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
   .rail .secbody{display:flex;flex-direction:column;gap:.4rem}
   body.mode-view .editonly{display:none}
@@ -271,7 +303,7 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   path.edge.sel{stroke:var(--edge-hot);stroke-width:2.4}
   path.rubber{stroke:var(--edge-hot);stroke-width:2;stroke-dasharray:5 4;fill:none}
 
-  .inspector{width:298px;flex-shrink:0;border-left:1px solid var(--rule);background:var(--surface);overflow-y:auto;padding:.85rem}
+  .inspector{width:var(--insp-w,298px);flex-shrink:0;border-left:1px solid var(--rule);background:var(--surface);overflow-y:auto;padding:.85rem}
   .inspector.empty{display:flex;align-items:center;justify-content:center;color:var(--ink-3);font-size:.82rem;text-align:center;padding:2rem}
   .insec{margin-bottom:1rem}
   .insec h4{margin:0;font-family:var(--mono);font-size:.64rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);border-top:1px solid var(--rule-soft)}
@@ -316,6 +348,17 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .iedit .del:hover{color:var(--dead)}
   .iedit .lblrow{display:flex;align-items:center;gap:.35rem;margin-top:.2rem}
   .iedit .ilbl{flex:1;min-width:0;font-family:var(--mono);font-size:.62rem;padding:.12rem .3rem;border:1px solid var(--rule);border-radius:3px;background:var(--surface);color:var(--ink)}
+  .subempty{color:var(--dead);font-weight:600}
+  .expose{margin-top:.4rem;padding-top:.35rem;border-top:1px solid var(--rule-soft)}
+  .expose.none{border-top-color:var(--warn)}
+  .expose .expnode{font-family:var(--mono);font-size:.62rem;color:var(--ink-3);margin:.3rem 0 .1rem}
+  .expline{display:flex;align-items:center;gap:.3rem;font-size:.68rem;padding:.06rem 0;cursor:pointer}
+  .expline input{margin:0}
+  .expline .kd{flex:none;width:2.2em;text-align:center;border-radius:3px;color:#fff;font-family:var(--mono);
+    font-size:.54rem;font-weight:700;text-transform:uppercase;padding:.05em 0}
+  .expline .expname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bulkrow{display:flex;align-items:center;gap:.3rem;font-size:.66rem;color:var(--ink-3);margin-bottom:.35rem}
+  .bulkrow .bulkcount{margin-left:auto;font-family:var(--mono);font-size:.62rem}
   .iedit .expchk{display:flex;align-items:center;gap:.2rem;font-size:.6rem;color:var(--ink-3);white-space:nowrap;cursor:pointer}
   .iedit .expchk input{margin:0}
   .iedit.orphan{border-color:var(--dead);background:var(--dead-wash)}
@@ -331,9 +374,13 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .iedit .ctog{cursor:pointer;font-family:var(--mono);font-size:.56rem;font-weight:700;text-transform:uppercase;color:var(--ink-3);border:1px solid var(--rule);border-radius:3px;padding:.1em .3em;white-space:nowrap}
   .iedit .ctog.set{color:var(--accent-2);border-color:var(--accent);background:var(--accent-wash)}
   .cmtbox{margin:-.1rem 0 .35rem;padding:.4rem .45rem;border:1px solid var(--rule);border-top:none;border-radius:0 0 5px 5px;background:var(--surface)}
-  .cmtbox .crow{display:flex;flex-direction:column;gap:.12rem;margin-bottom:.3rem}
-  .cmtbox .crow label{font-size:.6rem;color:var(--ink-3)}
-  .cmtbox .crow input,.cmtbox .crow textarea{width:100%;font-family:var(--mono);font-size:.66rem;line-height:1.4;background:var(--surface-2);border:1px solid var(--rule);border-radius:4px;padding:.15rem .25rem;color:var(--ink);resize:vertical}
+  /* NOT scoped to .cmtbox: cmtRows() is called bare in six places (the system panel, a
+     subSystems: entry, a system parameter, a package, a connection) and only two of them wrap it
+     in a .cmtbox. Scoped, those six rendered as an unstyled label beside a browser-default
+     textarea -- ~20 rows tall, overflowing the panel and overlapping the row above. */
+  .crow{display:flex;flex-direction:column;gap:.12rem;margin-bottom:.3rem}
+  .crow label{font-size:.6rem;color:var(--ink-3)}
+  .crow input,.crow textarea{width:100%;font-family:var(--mono);font-size:.66rem;line-height:1.4;background:var(--surface-2);border:1px solid var(--rule);border-radius:4px;padding:.15rem .25rem;color:var(--ink);resize:vertical}
   .syspanel .pkgrow{margin-bottom:.5rem}
   .syspanel .pkgrow .pn{font-family:var(--mono);font-size:.7rem;font-weight:600;margin-bottom:.15rem}
   .syspanel .frow{display:flex;align-items:center;gap:.3rem;margin-bottom:.15rem}
@@ -379,6 +426,25 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   textarea.copybox{width:100%;height:160px;font-family:var(--mono);font-size:.7rem;background:var(--surface-2);border:1px solid var(--rule);border-radius:7px;color:var(--ink);padding:.6rem;margin-top:.6rem}
   .gennote{font-size:.72rem;color:var(--warn);background:var(--warn-wash);border-radius:5px;padding:.4rem .55rem;margin-bottom:.6rem;font-family:var(--mono)}
   .modalbtns{display:flex;gap:.5rem;margin-top:.7rem;flex-wrap:wrap}
+  .askline{display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:var(--ink-2);margin:.2rem 0}
+  #wrapName{width:100%;font-family:inherit;font-size:.82rem;padding:.4rem .55rem;border:1px solid var(--rule);
+    border-radius:5px;background:var(--surface);color:var(--ink);margin-bottom:.4rem}
+  #wrapErr{color:var(--warn);font-size:.72rem;margin-bottom:.4rem}
+  /* Transient, non-blocking confirmation for something the app did on its own (a type copied
+     across a wire, N nodes imported). Deliberately NOT a modal and NOT the status chip: the
+     point is to make an invisible action visible for a moment without asking for a click. */
+  .toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:1.1rem;z-index:95;
+    display:flex;flex-direction:column;gap:.35rem;align-items:center;pointer-events:none}
+  .toast{background:var(--ink);color:var(--paper);font-size:.75rem;padding:.4rem .8rem;border-radius:999px;
+    box-shadow:0 6px 20px rgba(0,0,0,.22);opacity:0;transform:translateY(6px);
+    transition:opacity .16s ease,transform .16s ease;max-width:min(70vw,520px);text-align:center}
+  .toast.in{opacity:1;transform:none}
+  @media (prefers-reduced-motion:reduce){ .toast{transition:none} }
+  .ctxmenu{position:fixed;z-index:90;background:var(--surface);border:1px solid var(--rule);border-radius:7px;
+    box-shadow:0 6px 20px rgba(0,0,0,.18);padding:.25rem;min-width:180px}
+  .ctxmenu button{display:block;width:100%;text-align:left;padding:.4rem .6rem;font-family:inherit;
+    font-size:.78rem;background:none;border:none;border-radius:4px;color:var(--ink);cursor:pointer}
+  .ctxmenu button:hover{background:var(--surface-2)}
   /* ================================ small screens ================================
      The desktop layout is three columns: a 190px rail, the canvas, a 298px inspector. That is
      ~490px of chrome before any graph, so on a phone there was nothing left to draw on.
@@ -429,6 +495,10 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   body.narrow.drawer-l .rail{transform:translateX(0);visibility:visible;pointer-events:auto}
   body.narrow.drawer-r .inspector{transform:translateX(0);visibility:visible;pointer-events:auto}
   body.narrow .main{overflow:hidden}     /* an off-canvas panel must not make .main scrollable */
+  /* A drawer overlays the canvas rather than sitting beside it, so there is no width to trade
+     and nothing for a separator to separate. Its `width` above also overrides --rail-w/--insp-w
+     outright, so a width dragged on a desktop cannot leak into the phone layout. */
+  body.narrow .resizer{display:none}
   /* The backdrop covers .main ONLY. As a fixed full-page element it sat over the toolbar and
      swallowed taps on the very buttons that open and close the drawers. */
   body.narrow.drawer-l .scrim.drawer,body.narrow.drawer-r .scrim.drawer{
@@ -493,8 +563,11 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   <span class="savestate" id="saveState"></span>
   <button class="tbtn" id="reset">Reset layout</button>
   <button class="tbtn" id="theme">&#9680; Theme</button>
-  <button class="tbtn" id="openBtn" title="Open a project.json, or a .rossystem with its .ros2/.ros files (several at once). You can also drag them onto the canvas.">&#8679; Open</button>
+  <button class="tbtn" id="openBtn" title="Open a project.json, or a .rossystem with its .ros2/.ros files -- REPLACES the current project. To add systems to what's already on the canvas, use Import instead.">&#8679; Open</button>
   <input type="file" id="openInput" multiple accept=".rossystem,.ros2,.ros,.json" style="display:none">
+  <button class="tbtn" id="importBtn" title="Add a project.json, or one or more .rossystem files (with their .ros2/.ros companions), to what's already on the canvas. Same as dragging them onto it.">&#8615; Import</button>
+  <input type="file" id="importInput" multiple accept=".rossystem,.ros2,.ros,.json" style="display:none">
+  <button class="tbtn" id="clearBtn" title="Empty the canvas and start a new, blank system">Clear</button>
   <button class="tbtn drawerbtn" id="inspToggle" title="Inspector for the current selection">&#9998; Inspect</button>
   <button class="tbtn primary" id="commit">&#8681; Commit</button>
 </div>
@@ -527,6 +600,13 @@ EDITOR_TEMPLATE = r'''<!doctype html>
     </div>
   </aside>
 
+  <!-- Separators, not decoration: role=separator with aria-valuenow is what makes a resizable
+       pane legible to a screen reader, and tabindex+arrow keys are the only way to move one
+       without a pointer. Both vanish under body.narrow, where the panels are overlay drawers
+       and there is nothing beside them to trade width with. -->
+  <div class="resizer" id="railResizer" role="separator" aria-orientation="vertical"
+       aria-label="Resize the tools panel" tabindex="0"></div>
+
   <div class="canvas-wrap" id="canvasWrap">
     <div class="canvas lvl3" id="canvas">
       <svg id="wires"></svg>
@@ -549,6 +629,9 @@ EDITOR_TEMPLATE = r'''<!doctype html>
       <button class="cbtn" id="zOne" title="Actual size (0)">100%</button>
     </div>
   </div>
+
+  <div class="resizer" id="inspResizer" role="separator" aria-orientation="vertical"
+       aria-label="Resize the inspector panel" tabindex="0"></div>
 
   <aside class="inspector empty" id="inspector">Select a node to edit it, or add one from the rail.</aside>
   <!-- Both only exist under body.narrow; either one closes whichever drawer is open. -->
@@ -598,6 +681,58 @@ EDITOR_TEMPLATE = r'''<!doctype html>
       <div class="modalbtns">
         <button class="tbtn primary" id="doRestore">&#8631; Restore the autosave</button>
         <button class="tbtn" id="doDiscard">Discard it and use the seeded project</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- No [data-close]: clearing is destructive enough that a stray backdrop click shouldn't do it. -->
+<div class="scrim" id="clearScrim" data-locked="1">
+  <div class="modal">
+    <h3>Clear the canvas?</h3>
+    <div class="body">
+      <div class="gennote">This empties the system back to zero nodes and zero connections. Ctrl+Z undoes it right after, same as any other edit -- but it is not a separate "trash" you can dig back through once you keep working.</div>
+      <label class="askline"><input type="checkbox" id="clearDontAsk"> Don&rsquo;t ask again</label>
+      <div class="modalbtns">
+        <button class="tbtn primary" id="doClear">Clear</button>
+        <button class="tbtn" id="cancelClear">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="ctxmenu" id="ctxMenu" hidden>
+  <button type="button" id="ctxWrap">Wrap in subsystem&hellip;</button>
+</div>
+
+<!-- Generic yes/no. Replaces the one native window.confirm() this page used to raise (Open,
+     over unsaved work): a native dialog blocks the whole JS thread, looks nothing like the
+     rest of the app, and was the only one left once Clear and Wrap got custom modals. -->
+<div class="scrim" id="confirmScrim" data-locked="1">
+  <div class="modal">
+    <h3 id="confirmTitle"></h3>
+    <div class="body">
+      <div class="gennote" id="confirmBody"></div>
+      <div class="modalbtns">
+        <button class="tbtn primary" id="confirmOk">OK</button>
+        <button class="tbtn" id="confirmCancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- No [data-close]: same reasoning as Clear -- this creates a NEW file on Commit, not a
+     backdrop-dismissable no-op. -->
+<div class="scrim" id="wrapScrim" data-locked="1">
+  <div class="modal">
+    <h3>Wrap in subsystem</h3>
+    <div class="body">
+      <div class="gennote">The selected nodes become a separate system, reached from here through subSystems: &mdash; same as one you imported. Commit will hand back a second .rossystem for it, alongside this one. Their own connections to each other move with them; anything wired to the rest of this system stays wired.</div>
+      <input type="text" id="wrapName" placeholder="subsystem name (e.g. nav_stack)" autocomplete="off">
+      <div class="roinfo" id="wrapErr" hidden></div>
+      <div class="modalbtns">
+        <button class="tbtn primary" id="doWrap">Wrap</button>
+        <button class="tbtn" id="cancelWrap">Cancel</button>
       </div>
     </div>
   </div>
@@ -669,8 +804,11 @@ var DATA = /*__DATA__*/null;
   project.packages=project.packages||{};
   project.types=project.types||{};        // formatVersion 4: locally defined message specs
   project.system=project.system||{};
+  project.subSystems=project.subSystems||[];
+  project.params=project.params||[];
   var DIAG=(project.diagnostics&&project.diagnostics.byNode)||{};
   var uid=1000; function nid(){return "x"+(++uid);}
+  var importSeq=0;                        // one prefix per imported fragment -- see importFiles
 
   var HOME=project.nodes.map(function(n){return {id:n.id,x:n.x,y:n.y};});
 
@@ -679,6 +817,10 @@ var DATA = /*__DATA__*/null;
       inspector=document.getElementById("inspector");
   STUDIO.makeArrowMarkers(svg,"");
   var selNode=null, selEdge=null, addKind="pub", mode="edit", level=3;
+  // Ctrl/Cmd+click adds a node to this set instead of replacing selNode, so several nodes can
+  // be dragged as one group; {} (nothing beyond selNode) and a single leftover entry both
+  // collapse back to plain single-selection -- see wireCanvas's pointerdown/up.
+  var multiSel=Object.create(null);
   // which interfaces have their QoS panel open. Kept OUTSIDE `project` on purpose: it is view
   // state, and putting it in the model would make opening a panel an undoable edit.
   var qosOpen={}, cmtOpen={};
@@ -834,6 +976,47 @@ var DATA = /*__DATA__*/null;
 
   function nodeById(id){for(var i=0;i<project.nodes.length;i++)if(project.nodes[i].id===id)return project.nodes[i];return null;}
   function ifaceById(n,id){if(!n)return null;for(var i=0;i<n.ifaces.length;i++)if(n.ifaces[i].id===id)return n.ifaces[i];return null;}
+  // Same rule the wire-drop inference below uses (search "Infer, don't just permit"), just
+  // triggered by an EDIT to an already-typed interface instead of a fresh connection: retyping
+  // one end of a wire almost always means the message on the wire changed too, so any partner
+  // this interface is already connected to gets the same type -- but only if that partner is
+  // still BLANK (a real, different type on the other end is a mismatch to flag, not overwrite)
+  // and only if it is hand-authored (a catalogue or subSystems: interface's type is fixed by
+  // the file it comes from; this editor has no way to change what that file says).
+  // Returns the labels it filled, so the caller can SAY it happened -- silently rewriting a
+  // field on a node the author is not looking at is correct but indistinguishable from a bug.
+  //
+  // Only ever call this on a COMMITTED value (blur, or a typeahead pick), never per keystroke.
+  // Per keystroke it fills the partner from the first character typed, and every later keystroke
+  // then sees a non-blank partner and declines -- leaving the neighbour permanently set to "s"
+  // and reporting a type mismatch on a node the author never touched.
+  function propagateInterfaceType(node,iface){
+    var v=String(iface.type||"").trim(), filled=[];
+    if(!v) return filled;
+    project.connections.forEach(function(c){
+      var other=null;
+      if(c.from.n===node.id&&c.from.i===iface.id) other={n:c.to.n,i:c.to.i};
+      else if(c.to.n===node.id&&c.to.i===iface.id) other={n:c.from.n,i:c.from.i};
+      if(!other) return;
+      var oNode=nodeById(other.n), oIface=oNode&&ifaceById(oNode,other.i);
+      if(!oNode||!oIface||oNode.backing!=="hand") return;
+      if(String(oIface.type||"").trim()) return;
+      oIface.type=v;
+      filled.push(oNode.label+"."+oIface.name);
+    });
+    // This writes to a node the author is not editing, from a blur handler that does NOT go
+    // through pushUndo -- and pushUndo is the only thing that marks the project dirty and
+    // schedules the autosave. Without this the fill lived in memory only: the debounced save
+    // had already fired for the keystrokes, nothing scheduled another, and beforeunload (which
+    // stays quiet while autosave is healthy) let the tab close on top of it.
+    if(filled.length) markDirty();
+    return filled;
+  }
+  function announceTypeFill(filled,typ){
+    if(!filled||!filled.length) return;
+    toast(filled.length===1 ? ("Set "+filled[0]+" to "+typ)
+                            : (filled.length+" connected interfaces set to "+typ));
+  }
 
   // ============================ history (undo / redo) ============================
   // ALL editor state is in `project`, so a snapshot is its JSON and undo is a stack of them.
@@ -900,6 +1083,7 @@ var DATA = /*__DATA__*/null;
     syncUid();
     document.getElementById("sysname").value=(project.system&&project.system.name)||"system";
     if(selNode&&!nodeById(selNode)) selNode=null;   // it may have been deleted in this state
+    Object.keys(multiSel).forEach(function(id){ if(!nodeById(id)) delete multiSel[id]; });
     lastTag=null;                                   // never coalesce across a jump in history
     keepFocus(function(){ render(); fillInspector(); });
     updateHistoryUI();
@@ -1095,6 +1279,294 @@ var DATA = /*__DATA__*/null;
   function isCollapsedMember(n){
     return n.backing==="sub"&&!!n.subRef&&subState(n.subRef)==="collapsed";
   }
+  // Every exposure label already spoken for in the OUTER file, which is the namespace a
+  // connections: endpoint resolves in. Both label-pinning paths (wrapping a selection, and
+  // exposing an interface afterwards) have to avoid all of it, not just their own subsystem:
+  //   - an outer node's own label, taken VERBATIM by _exposure_labels pass 1, which does not
+  //     disambiguate against a subsystem's -- a collision there is an emitted endpoint naming
+  //     two interfaces (RM051/RM065), not a renamed one;
+  //   - every other wrapped subsystem's pinned labels, claimed file-wide by pass 0;
+  //   - and unexposed-but-labelled interfaces too, since exposing one later reuses its label.
+  // `skipNodeIds` drops the nodes being wrapped right now, so their own current labels do not
+  // block them from keeping those names.
+  function projectLabelsInUse(skipNodeIds){
+    var used=Object.create(null);
+    project.nodes.forEach(function(n){
+      if(skipNodeIds&&skipNodeIds[n.id]) return;
+      (n.ifaces||[]).forEach(function(f){
+        var l=String(f.label||"").trim(); if(l) used[l]=1;
+        // an unlabelled outer interface derives its label from the NAME, so that is taken too
+        if(!l&&f.name&&n.backing!=="sub") used[String(f.name).trim()]=1;
+      });
+    });
+    (project.subSystems||[]).forEach(function(s){
+      if(!s.content) return;
+      (s.content.nodes||[]).forEach(function(cn){
+        if(skipNodeIds&&skipNodeIds[cn.id]) return;
+        (cn.ifaces||[]).forEach(function(cf){
+          var l=String(cf.label||"").trim(); if(l) used[l]=1;
+        });
+      });
+    });
+    return used;
+  }
+  // Extracts a group of this project's OWN hand-authored nodes into a brand new subsystem --
+  // the reverse of importing one. Unlike every other subSystems: entry in this file, there is
+  // no external .rossystem behind this one yet: `content` below is a self-contained,
+  // project-shaped snapshot of exactly what was pulled out, and it is what generate_files()
+  // (ros_studio.py) reads to write a SECOND .rossystem alongside this one on Commit -- see
+  // _normalize_subproject there. Until that Commit happens, the wrapped nodes exist only here.
+  function wrapNodesInSubsystem(ids,refName){
+    var idSet=Object.create(null); ids.forEach(function(id){idSet[id]=1;});
+    var wrapped=ids.map(nodeById).filter(Boolean);
+    if(wrapped.length<2) return {error:"select at least two nodes to wrap"};
+    // A catalogue node CAN be wrapped: the extracted .rossystem writes it as a `from:` reference
+    // exactly like this file does, and _emit_system_into only generates .ros2 files for
+    // hand-authored packages, so nothing tries to rewrite the vendored one. A driver stack
+    // assembled from catalogue nodes is the single most useful thing to wrap, and refusing it
+    // was the wrong call. A `sub` node is genuinely out: it is already a stand-in for another
+    // file's node, and this file has nothing to extract for it.
+    var already=wrapped.filter(function(n){return n.backing==="sub";});
+    if(already.length) return {error:"'"+already[0].label+"' already comes from the subsystem '"
+      +(already[0].subRef||"?")+"' — its definition lives in that file, so there is nothing here "
+      +"to move into a new one."};
+    refName=String(refName||"").trim();
+    if(!refName) return {error:"name the subsystem"};
+    if((project.subSystems||[]).some(function(s){return s.ref===refName;}))
+      return {error:"'"+refName+"' is already a subSystems: reference in this project"};
+    // Every system this project writes is emitted as "<its name>.rossystem" into one output
+    // directory, so two systems sharing a name means one file, and the loser is simply gone --
+    // name a wrapped subsystem after its own parent and the entire outer system disappears from
+    // the output with a clean lint and exit 0.
+    if(refName===String((project.system&&project.system.name)||"").trim())
+      return {error:"'"+refName+"' is this system's own name — both would be written to "
+        +refName+".rossystem and one would overwrite the other."};
+
+    // internal: both endpoints are being wrapped, so the connection moves with them and stops
+    // being this file's business. external: it crosses the new boundary and stays exactly as
+    // it is -- ids do not change, so nothing about it needs to be rewritten.
+    var internal=[], external=[];
+    project.connections.forEach(function(c){
+      var aIn=!!idSet[c.from.n], bIn=!!idSet[c.to.n];
+      (aIn&&bIn?internal:external).push(c);
+    });
+
+    var pkgs={}, types={};
+    wrapped.forEach(function(n){
+      if(n.pkg&&project.packages[n.pkg]) pkgs[n.pkg]=project.packages[n.pkg];
+      (n.ifaces||[]).forEach(function(f){ if(f.type&&project.types[f.type]) types[f.type]=project.types[f.type]; });
+    });
+
+    // ---- pin the exposure labels BEFORE anything is split -------------------------------
+    // The two files each derive their own labels (ros_studio._exposure_labels), from their own
+    // node sets, and a connections: endpoint is a LABEL STRING, not an id. So a cross-boundary
+    // connection only survives if both files spell its endpoint the same way -- which they will
+    // not, left to derive it: the outer file sees one node set, the extracted file another, and
+    // pass 2's disambiguation differs between them. Pinning an explicit label into BOTH copies
+    // makes pass 1 take it verbatim on both sides, so the endpoint matches by construction.
+    //
+    // Unique across the WHOLE OUTER FILE, not just this subsystem: in the outer file every one
+    // of these belongs to a `backing:"sub"` node, and those labels are claimed FILE-WIDE by
+    // _exposure_labels' pass 0 (an endpoint naming one has to resolve to exactly one interface).
+    // Scoping the uniqueness to the wrapped set alone produced two silent failures: two separate
+    // wraps both exposing "scan" emitted two different wires spelled identically (RM065), and a
+    // pinned label colliding with an outer node's AUTHOR-WRITTEN label -- which pass 1 takes
+    // verbatim and does not disambiguate -- emitted two endpoints with one name (RM051).
+    var pinned=projectLabelsInUse(idSet);
+    function pinLabel(n,f){
+      var base=String(f.label||f.name||"").trim()||"iface";
+      if(!pinned[base]){ pinned[base]=1; return base; }
+      var cand=base+"_"+f.kind;
+      if(!pinned[cand]){ pinned[cand]=1; return cand; }
+      cand=base+"_"+f.kind+"_"+sanitiseHint(n.label);
+      var k=2;
+      while(pinned[cand]){ cand=base+"_"+f.kind+"_"+sanitiseHint(n.label)+"_"+k; k++; }
+      pinned[cand]=1; return cand;
+    }
+    // What the extracted file must DECLARE. An interface counts if the author already marked it
+    // exposed, or if any connection touches it -- including one that is about to become
+    // external. That last case is the one that silently broke: the connection moves to the outer
+    // file, so the extracted file's own `connections:` no longer mentions the interface, and
+    // _exposure_labels there would not consider it exposed at all -- the subsystem would declare
+    // nothing for the outer file's endpoint to resolve against (RM050 at generate time).
+    var mustExpose=Object.create(null);   // node id + " " + iface id -> pinned label
+    wrapped.forEach(function(n){
+      (n.ifaces||[]).forEach(function(f){
+        if(!(f.exposed||ifaceConnected(n,f))) return;
+        mustExpose[n.id+" "+f.id]=pinLabel(n,f);
+      });
+    });
+
+    // presentation-only, same shape seedFromFiles builds for an externally-resolved reference
+    // (see its subSystems.forEach) -- built from what is already in hand rather than a
+    // re-parsed file, since there is no file yet.
+    function shownLabel(n,f){ return mustExpose[n.id+" "+f.id]||f.label||f.name; }
+    var graph={
+      nodes:wrapped.map(function(n){
+        return {label:n.label, from:n.pkg+"."+n.node,
+                interfaces:(n.ifaces||[]).map(function(f){
+                  return {label:shownLabel(n,f), kind:f.kind, name:f.name, artifact:null};
+                })};
+      }),
+      connections:internal.map(function(c){
+        var an=nodeById(c.from.n), af=ifaceById(an,c.from.i);
+        var bn=nodeById(c.to.n), bf=ifaceById(bn,c.to.i);
+        return [af?shownLabel(an,af):"", bf?shownLabel(bn,bf):""];
+      })
+    };
+    // cloned BEFORE the wrapped nodes are stripped down below -- content needs their full,
+    // original (hand-authored) shape, not the read-only shadow the outer project keeps instead.
+    var content={
+      system:{name:refName,fromFile:null},
+      nodes:JSON.parse(JSON.stringify(wrapped)),
+      connections:JSON.parse(JSON.stringify(internal)),
+      packages:JSON.parse(JSON.stringify(pkgs)),
+      types:JSON.parse(JSON.stringify(types)),
+      params:[]
+    };
+    // the extracted file's side of the pin: explicit label + explicit `exposed`, so what it
+    // declares does not depend on which connections happened to stay behind.
+    content.nodes.forEach(function(cn){
+      (cn.ifaces||[]).forEach(function(cf){
+        var lbl=mustExpose[cn.id+" "+cf.id];
+        if(!lbl) return;
+        cf.label=lbl; cf.exposed=true;
+      });
+    });
+
+    pushUndo("wrap:"+refName);
+    var cx=0,cy=0;
+    wrapped.forEach(function(n){
+      cx+=n.x||0; cy+=n.y||0;
+      // mirrors exactly what _subsystem_project_nodes (ros_studio.py) builds for a member of an
+      // externally-resolved reference: a read-only shadow, no params -- everything real now
+      // lives in `content` above. `exposed` stays FALSE here even for a pinned interface: this
+      // file does not declare them (emit_rossystem skips a sub node's whole block), and marking
+      // one exposed would only claim its name file-wide and push a local interface's derived
+      // label sideways for nothing. The pinned LABEL does matter, though -- it is the string a
+      // cross-boundary endpoint resolves through (pass 0).
+      n.backing="sub"; n.subRef=refName;
+      n.ifaces=(n.ifaces||[]).map(function(f){
+        return {id:f.id,name:f.name,kind:f.kind,type:null,qos:null,
+                label:mustExpose[n.id+" "+f.id]||f.label||null,exposed:false};
+      });
+      n.params=[];
+    });
+    project.connections=external;
+    project.subSystems.push({ref:refName,file:null,invented:true,content:content,graph:graph});
+    subPos[refName]={x:Math.max(0,Math.round(cx/wrapped.length)),y:Math.max(0,Math.round(cy/wrapped.length))};
+    return {ok:true,ref:refName};
+  }
+
+  // ---- what a wrapped subsystem exposes, after the fact ----------------------------------
+  // Only ever an INVENTED entry: a reference seeded from a file exposes what that file says it
+  // does, and this project has no business rewriting it. See subExposeEditor for the UI.
+  function subContentIface(entry,nodeId,ifaceId){
+    var cn=null, cf=null;
+    (entry.content.nodes||[]).forEach(function(x){ if(x.id===nodeId) cn=x; });
+    if(cn) (cn.ifaces||[]).forEach(function(y){ if(y.id===ifaceId) cf=y; });
+    return {node:cn,iface:cf};
+  }
+  // A connection on EITHER side of the boundary forces exposure: the outer file's endpoint has
+  // to resolve to something the subsystem declares, and the subsystem's own internal connection
+  // makes _exposure_labels declare it regardless of the flag. Unticking either would be a
+  // checkbox that says one thing while the emitted file says another.
+  function subIfaceWired(entry,nodeId,ifaceId){
+    function touches(c){ return (c.from.n===nodeId&&c.from.i===ifaceId)||(c.to.n===nodeId&&c.to.i===ifaceId); }
+    return project.connections.some(touches)||((entry.content.connections||[]).some(touches));
+  }
+  // Unique across the whole OUTER FILE, for the same reason wrapNodesInSubsystem pins in the
+  // first place: in the outer file these are `sub` labels, claimed file-wide, and an endpoint
+  // naming a duplicated one resolves to two interfaces. projectLabelsInUse covers the other
+  // subsystems and the outer nodes' own labels; this one interface is excluded so re-ticking a
+  // box it already owns keeps the same name rather than walking it to name_kind_2 each time.
+  function pinSubLabel(entry,cn,cf){
+    var used=projectLabelsInUse(null);
+    var mine=String(cf.label||"").trim();
+    if(mine) delete used[mine];
+    var base=String(cf.label||cf.name||"").trim()||"iface";
+    if(!used[base]) return base;
+    var cand=base+"_"+cf.kind;
+    if(!used[cand]) return cand;
+    var stem=base+"_"+cf.kind+"_"+sanitiseHint(cn.label), k=2;
+    cand=stem;
+    while(used[cand]){ cand=stem+"_"+k; k++; }
+    return cand;
+  }
+  function mirrorSubLabel(ref,nodeId,ifaceId,label){
+    var sn=nodeById(nodeId), sf=sn&&ifaceById(sn,ifaceId);
+    if(sn&&sn.backing==="sub"&&sn.subRef===ref&&sf) sf.label=label;
+  }
+  // the drill-in view reads graph labels, so keep them saying what the file will say
+  function refreshSubGraphLabels(entry){
+    if(!entry.graph) return;
+    (entry.graph.nodes||[]).forEach(function(gn){
+      var cn=null;
+      (entry.content.nodes||[]).forEach(function(x){ if(x.label===gn.label) cn=x; });
+      if(!cn) return;
+      // name AND kind: one node routinely has a `pub image` and a `sub image`, and matching on
+      // the name alone overwrote both graph rows with whichever interface came last.
+      (gn.interfaces||[]).forEach(function(gf){
+        (cn.ifaces||[]).forEach(function(cf){
+          if(cf.name===gf.name&&cf.kind===gf.kind) gf.label=cf.label||cf.name;
+        });
+      });
+    });
+  }
+  function exposeSubIface(entry,ref,cn,cf){
+    cf.exposed=true;
+    cf.label=pinSubLabel(entry,cn,cf);
+    mirrorSubLabel(ref,cn.id,cf.id,cf.label);
+  }
+  // A connection endpoint that lands on a WRAPPED subsystem's interface has to be something
+  // that subsystem's own emitted file declares, or the endpoint resolves to nothing. Returns
+  // what it exposed (for the toast), or null when there was nothing to do -- an already-exposed
+  // interface, an ordinary node, or a subsystem referencing a file this project does not own.
+  function ensureSubEndpointExposed(nodeId,ifaceId){
+    var n=nodeById(nodeId);
+    if(!n||n.backing!=="sub"||!n.subRef) return null;
+    var entry=subEntry(n.subRef);
+    if(!entry||!entry.invented||!entry.content) return null;
+    var hit=subContentIface(entry,nodeId,ifaceId);
+    if(!hit.iface||hit.iface.exposed) return null;
+    exposeSubIface(entry,n.subRef,hit.node,hit.iface);
+    refreshSubGraphLabels(entry);
+    return (hit.node.label||"?")+"."+(hit.iface.name||"?");
+  }
+  // Both of these take the undo snapshot THEMSELVES, and only once they know something will
+  // actually change. Snapshotting in the click handler instead meant a refused toggle (a wired
+  // interface cannot be withdrawn) still pushed an entry and marked the project dirty, so
+  // clicking a locked checkbox a few times buried the real last edit under no-op undo steps.
+  function setSubExposure(ref,nodeId,ifaceId,on){
+    var entry=subEntry(ref); if(!entry||!entry.content) return;
+    var hit=subContentIface(entry,nodeId,ifaceId);
+    if(!hit.iface) return;
+    if(!!hit.iface.exposed===!!on) return;              // nothing to do
+    if(!on&&subIfaceWired(entry,nodeId,ifaceId)){
+      toast('"'+(hit.iface.label||hit.iface.name)+'" is wired — it has to stay exposed');
+      return;                       // the re-render puts the checkbox back
+    }
+    pushUndo();
+    if(on) exposeSubIface(entry,ref,hit.node,hit.iface);
+    else cf_unexpose(hit.iface);
+    refreshSubGraphLabels(entry);
+  }
+  function cf_unexpose(cf){ cf.exposed=false; }   // label kept: re-ticking should reuse the name
+  function setSubExposureAll(ref,on){
+    var entry=subEntry(ref); if(!entry||!entry.content) return;
+    var todo=[];
+    (entry.content.nodes||[]).forEach(function(cn){
+      (cn.ifaces||[]).forEach(function(cf){
+        if(!!cf.exposed===!!on) return;
+        if(!on&&subIfaceWired(entry,cn.id,cf.id)) return;   // wired ones cannot be withdrawn
+        todo.push({node:cn,iface:cf});
+      });
+    });
+    if(!todo.length) return;
+    pushUndo();
+    todo.forEach(function(t){ if(on) exposeSubIface(entry,ref,t.node,t.iface); else cf_unexpose(t.iface); });
+    refreshSubGraphLabels(entry);
+  }
   // The collapsed box's rows: one per distinct exposed LABEL, because a connections: endpoint
   // is a bare label resolved file-wide -- the label IS the subsystem's port, and that is the
   // DSL's own view of it. A label two member nodes both declare (the catalogued turtlebot's
@@ -1128,14 +1600,20 @@ var DATA = /*__DATA__*/null;
     var wired=0;
     rows.forEach(function(r){ if(r.wired) wired++; });
     var where=entry.file?("assets/rosmodelscatalog/"+entry.file)
-                        :(entry.localFile||"(not resolved)");
+                        :(entry.localFile||(entry.invented?"(new -- written on Commit)":"(not resolved)"));
     el.innerHTML='<div class="nhead" data-drag>'
       +'<span class="subtog" data-expand="'+esc(ref)+'" title="show the internals inside a frame">&#9656;</span>'
       +'<span class="ntitle">'+esc(ref)+'</span>'
-      +'<span class="badge" title="reached through subSystems: &mdash; declared in that file, not this one">subsystem</span>'
+      +'<span class="badge" title="'+(entry.invented
+        ?"wrapped out of this project &mdash; Commit writes it as its own .rossystem"
+        :"reached through subSystems: &mdash; declared in that file, not this one")+'">subsystem</span>'
       +'<span class="subtog" data-drill="'+esc(ref)+'" title="open this system on its own canvas">&#8599;</span></div>'
       +'<div class="nfrom">'+esc(where)
-      +'<br>'+members.length+' node(s) &middot; '+wired+' of '+rows.length+' interface(s) wired</div>'
+      +'<br>'+members.length+' node(s) &middot; '+(rows.length
+        ?(wired+' of '+rows.length+' interface(s) wired')
+        // "0 of 0 wired" reads as "not wired up yet" when it actually means "there is nothing
+        // here to wire, ever" -- the single most common defect in the real corpus.
+        :'<span class="subempty">no interfaces — nothing can connect to this</span>')+'</div>'
       +'<div class="ifaces"></div>';
     var box=el.querySelector(".ifaces");
     rows.forEach(function(r){
@@ -1258,7 +1736,7 @@ var DATA = /*__DATA__*/null;
     var nip=document.getElementById("nodeIssuePop");
     if(nip&&nip.hidePopover&&nip.matches&&nip.matches(":popover-open")) nip.hidePopover();
     nodePopNodeId=null;
-    drillRef=ref; selNode=null; selEdge=null; render(); fillInspector();
+    drillRef=ref; selNode=null; selEdge=null; multiSel=Object.create(null); render(); fillInspector();
   }
   function closeDrill(){ drillRef=null; render(); fillInspector(); }
   // Drill-in: the referenced system ALONE, read-only. Nothing here is part of this project --
@@ -1346,14 +1824,34 @@ var DATA = /*__DATA__*/null;
     canvasWrap.insertBefore(bar,canvasWrap.firstChild);
     document.getElementById("drillBack").onclick=closeDrill;
   }
+  // Says what just happened, then gets out of the way. Used for actions the app takes on the
+  // author's behalf without being asked -- copying a message type across a wire, folding N
+  // imported nodes in -- which were previously invisible: correct, but indistinguishable from
+  // nothing having happened. Never used for anything that needs a decision; that is a modal.
+  function toast(msg){
+    var host=document.getElementById("toasts");
+    if(!host){ host=document.createElement("div"); host.className="toasts"; host.id="toasts";
+               document.body.appendChild(host); }
+    var t=document.createElement("div"); t.className="toast"; t.textContent=msg;
+    host.appendChild(t);
+    requestAnimationFrame(function(){ t.classList.add("in"); });
+    setTimeout(function(){
+      t.classList.remove("in");
+      setTimeout(function(){ if(t.parentNode) t.remove(); },200);
+    },2600);
+  }
+  // Its own id, NOT the drill-in bar's: render() removes #drillbar unconditionally (the drill
+  // bar is rebuilt per render), so an alert borrowing that id vanished on the next render --
+  // which is exactly what the callers do. "Could not load: ..." was drawn and wiped in the same
+  // frame, leaving a failed Open looking like nothing had happened at all.
   function alertBar(msg){
-    var b=document.getElementById("drillbar");
+    var b=document.getElementById("alertbar");
     if(b) b.remove();
     var bar=document.createElement("div");
-    bar.className="drillbar"; bar.id="drillbar";
-    bar.innerHTML='<button class="minibtn" id="drillBack">&#10005;</button><span>'+esc(msg)+'</span>';
+    bar.className="drillbar"; bar.id="alertbar";
+    bar.innerHTML='<button class="minibtn" id="alertBarClose">&#10005;</button><span>'+esc(msg)+'</span>';
     canvasWrap.insertBefore(bar,canvasWrap.firstChild);
-    document.getElementById("drillBack").onclick=function(){bar.remove();};
+    document.getElementById("alertBarClose").onclick=function(){bar.remove();};
   }
   function renderNode(n){
     var el=document.createElement("div");
@@ -1364,7 +1862,7 @@ var DATA = /*__DATA__*/null;
     // as separate classes for what each MEANS in the CSS comments (the server's last verdict vs.
     // the live instant checks), not because they look different, so there's no reason to gate
     // one on the absence of the other.
-    el.className="node"+(n.backing==="cat"?" cat":"")+(n.backing==="sub"?" sub":"")+(selNode===n.id?" sel":"")
+    el.className="node"+(n.backing==="cat"?" cat":"")+(n.backing==="sub"?" sub":"")+((selNode===n.id||multiSel[n.id])?" sel":"")
       +(hasdiag?" hasdiag":"")+(liveErrs?" issue-e":"");
     el.style.left=n.x+"px"; el.style.top=n.y+"px"; el.dataset.n=n.id;
     var fromStr='"'+n.pkg+"."+n.node+'"';
@@ -1485,7 +1983,7 @@ var DATA = /*__DATA__*/null;
       path.setAttribute("class","edge "+edgeKindPair(c)+(selEdge===c.id?" sel":""));
       path.setAttribute("d",STUDIO.bezier(s.x,s.y,t.x,t.y));
       path.dataset.c=c.id; path.style.pointerEvents="stroke"; path.style.cursor="pointer";
-      (function(cid){path.addEventListener("click",function(ev){ev.stopPropagation();selEdge=cid;selNode=null;render();fillInspector();});})(c.id);
+      (function(cid){path.addEventListener("click",function(ev){ev.stopPropagation();selEdge=cid;selNode=null;multiSel=Object.create(null);render();fillInspector();});})(c.id);
       svg.appendChild(path);
     }
   }
@@ -2086,6 +2584,174 @@ var DATA = /*__DATA__*/null;
     return {project:project, report:report, name:primary.name};
   }
 
+  // ============================ import: add files to the CURRENT project ==================
+  // Open (above) REPLACES the project -- the one file you are working on. Dropping files onto
+  // the canvas means something else: bring these systems in ALONGSIDE what is already here, so
+  // they can be wired to it by hand. Never touches `dirty`'s replace-guard confirm; there is
+  // nothing to discard.
+  function sanitiseHint(s){ return String(s||"").replace(/[^A-Za-z0-9_]/g,"_"); }
+  // A node label (RM009) and an exposure label (RM065) must each be unique across the WHOLE
+  // project once merged, even though they were perfectly fine as the only file on someone's
+  // disk. Mirrors ros_studio._unique_label's convention (name_hint, then name_hint_2, ...) so a
+  // label an import renames here reads the same way a `seed_from_many` merge would have named it.
+  function uniqueLabel(base,used,hint){
+    if(!used[base]) return base;
+    var h=sanitiseHint(hint), cand=base+"_"+h, n=2;
+    while(used[cand]){ cand=base+"_"+h+"_"+n; n++; }
+    return cand;
+  }
+  // seedFromFiles() (and a dropped project.json) each mint their own ids from 1 -- fine standing
+  // alone, but two imports in the same drop, or an import against a project that already has
+  // ids, would collide outright. Prefixing every id in the fragment with a per-import tag makes
+  // collision impossible without needing to know anything about what is already on the canvas.
+  function remapFragmentIds(proj,prefix){
+    var nodeMap={}, ifaceMap={};
+    (proj.nodes||[]).forEach(function(n){ nodeMap[n.id]=prefix+n.id; });
+    (proj.nodes||[]).forEach(function(n){
+      (n.ifaces||[]).forEach(function(f){ ifaceMap[n.id+" "+f.id]=prefix+f.id; });
+    });
+    (proj.connections||[]).forEach(function(c){
+      var fi=ifaceMap[c.from.n+" "+c.from.i], ti=ifaceMap[c.to.n+" "+c.to.i];
+      c.id=prefix+c.id;
+      if(nodeMap[c.from.n]) c.from.n=nodeMap[c.from.n]; if(fi) c.from.i=fi;
+      if(nodeMap[c.to.n]) c.to.n=nodeMap[c.to.n]; if(ti) c.to.i=ti;
+    });
+    (proj.nodes||[]).forEach(function(n){
+      (n.ifaces||[]).forEach(function(f){ f.id=prefix+f.id; });
+      (n.params||[]).forEach(function(p){ p.id=prefix+p.id; });
+      n.id=prefix+n.id;
+    });
+    (proj.params||[]).forEach(function(p){ p.id=prefix+p.id; });
+  }
+  // Lands an imported fragment's own little grid (laid out relative to itself, starting near
+  // the origin) as a whole block to the right of whatever is already on the canvas, so a second
+  // and third import line up left-to-right instead of stacking on top of the first.
+  function placeFragmentNodes(nodes){
+    if(!nodes||!nodes.length) return;
+    var DW=240, DH=130, GAP=60, bbox=null, fbbox=null;
+    function grow(b,x,y,w,h){
+      if(!b) return {minX:x,minY:y,maxX:x+w,maxY:y+h};
+      b.minX=Math.min(b.minX,x); b.minY=Math.min(b.minY,y);
+      b.maxX=Math.max(b.maxX,x+w); b.maxY=Math.max(b.maxY,y+h); return b;
+    }
+    project.nodes.forEach(function(n){ bbox=grow(bbox,n.x||0,n.y||0,DW,DH); });
+    nodes.forEach(function(n){ fbbox=grow(fbbox,n.x||0,n.y||0,DW,DH); });
+    var offX=bbox?(bbox.maxX+GAP-fbbox.minX):(80-fbbox.minX);
+    var offY=bbox?(bbox.minY-fbbox.minY):(80-fbbox.minY);
+    nodes.forEach(function(n){ n.x=(n.x||0)+offX; n.y=(n.y||0)+offY; });
+  }
+  // Folds one already-built project fragment (a seedFromFiles() result, or a dropped
+  // project.json's own top level) into the live project: renames anything that collides,
+  // merges packages/types/system-parameters without clobbering what is already declared, and
+  // reports every rename or skip so nothing changes silently under the author.
+  function mergeFragmentIntoProject(proj,srcName){
+    var report=[];
+    var hint=(proj.system&&proj.system.name)||srcName.replace(/\.[^.]+$/,"");
+    remapFragmentIds(proj,"imp"+(++importSeq)+"_");
+
+    var labelUsed={}; project.nodes.forEach(function(n){ labelUsed[n.label]=1; });
+    var exposureUsed={};
+    project.nodes.forEach(function(n){ (n.ifaces||[]).forEach(function(f){ if(f.label) exposureUsed[f.label]=1; }); });
+
+    (proj.nodes||[]).forEach(function(n){
+      var lbl=uniqueLabel(n.label,labelUsed,hint);
+      if(lbl!==n.label){
+        report.push("node '"+n.label+"' collides with one already on the canvas, renamed to '"+lbl+"'.");
+        n.label=lbl;
+      }
+      labelUsed[lbl]=1;
+      (n.ifaces||[]).forEach(function(f){
+        if(!f.label) return;
+        var elbl=uniqueLabel(f.label,exposureUsed,hint);
+        if(elbl!==f.label){
+          report.push("interface '"+f.label+"' on node '"+n.label+"' collides with an exposure "
+            +"already on the canvas, renamed to '"+elbl+"'.");
+          f.label=elbl;
+        }
+        exposureUsed[elbl]=1;
+      });
+    });
+
+    placeFragmentNodes(proj.nodes||[]);
+    project.nodes=project.nodes.concat(proj.nodes||[]);
+    project.connections=project.connections.concat(proj.connections||[]);
+
+    (proj.subSystems||[]).forEach(function(s){
+      if(project.subSystems.some(function(x){return x.ref===s.ref;})) return;
+      project.subSystems.push(s);
+    });
+    Object.keys(proj.packages||{}).forEach(function(pkg){
+      if(!project.packages[pkg]) project.packages[pkg]=proj.packages[pkg];
+    });
+    Object.keys(proj.types||{}).forEach(function(k){
+      if(!project.types[k]) project.types[k]=proj.types[k];
+    });
+    var spNames={}; project.params.forEach(function(p){ spNames[p.name]=1; });
+    (proj.params||[]).forEach(function(p){
+      if(spNames[p.name]){
+        report.push("system parameter '"+p.name+"' is already declared, skipped from "+srcName+".");
+        return;
+      }
+      project.params.push(p); spNames[p.name]=1;
+    });
+
+    return {added:(proj.nodes||[]).length, report:report};
+  }
+  // The drop target: one or more .rossystem (with whatever .ros2/.ros companions were dropped
+  // alongside them, shared across all of them for type/artifact resolution) and/or project.json
+  // files, each folded in as its own fragment via mergeFragmentIntoProject. Every .rossystem is
+  // seeded on its OWN -- sibling .rossystem files in the same drop are deliberately NOT offered
+  // to each other for subSystems: cross-linking, so two unrelated systems never partially merge
+  // into one another by accident; each simply lands on the canvas as its own real nodes, ready
+  // to be wired to anything else here by hand.
+  function importFiles(fileList){
+    readFiles(fileList, function(files){
+      if(!files.length) return;
+      var jsonFiles=[], sysFiles=[], companions=[];
+      files.forEach(function(f){
+        if(/\.json$/i.test(f.name)){
+          try{
+            var parsed=JSON.parse(f.text);
+            if(parsed&&parsed.nodes&&parsed.system) jsonFiles.push({name:f.name,project:parsed});
+            else alertBar(f.name+" does not look like a /ros-studio project.json.");
+          }catch(e){ alertBar(f.name+" is not readable JSON: "+((e&&e.message)||e)); }
+        } else if(/\.rossystem$/i.test(f.name)) sysFiles.push(f);
+        else companions.push(f);   // .ros2 / .ros -- a shared type/artifact pool, not a system of its own
+      });
+      if(!jsonFiles.length&&!sysFiles.length){
+        alertBar("Drop a project.json, or one or more .rossystem files (with their .ros2/.ros "
+          +"companions if you have them, for real interface types and parameters).");
+        return;
+      }
+      pushUndo("import");
+      var notices=[];
+      jsonFiles.forEach(function(jf){
+        var rep=mergeFragmentIntoProject(jf.project,jf.name);
+        notices.push({name:jf.name,added:rep.added,report:rep.report});
+      });
+      sysFiles.forEach(function(sf){
+        var res=seedFromFiles([sf].concat(companions));
+        if(res.error){ notices.push({name:sf.name,added:0,report:[res.error]}); return; }
+        var rep=mergeFragmentIntoProject(res.project,sf.name);
+        notices.push({name:sf.name,added:rep.added,report:(res.report||[]).concat(rep.report)});
+      });
+      fillNsList();
+      var totalAdded=notices.reduce(function(s,n){return s+n.added;},0);
+      var allNotes=[];
+      notices.forEach(function(n){ n.report.forEach(function(r){ allNotes.push(n.name+": "+r); }); });
+      opNotice={sev:allNotes.length?"warn":"ok",
+        title:"Imported "+notices.length+" file(s)",
+        html:"<b>"+totalAdded+" node(s) added</b> from "+notices.map(function(n){return esc(n.name);}).join(", ")
+          +(allNotes.length?("<br>"+allNotes.map(function(r){return "&bull; "+esc(r);}).join("<br>")):"")
+          +"<br>Wire them to the rest of the system, then <b>Commit</b>."};
+      // The status chip carries the detail; this is just so a drop that lands off-screen, or one
+      // that renames a colliding label, is not indistinguishable from a drop that did nothing.
+      toast(totalAdded+" node(s) added from "+notices.map(function(n){return n.name;}).join(", ")
+        +(allNotes.length?(" — "+allNotes.length+" note(s), see the status chip"):""));
+      sizeCanvas(); render(); fillInspector(); fitView();
+    });
+  }
+
   // ---- the Open control ------------------------------------------------------------------
   function readFiles(fileList, done){
     var files=Array.prototype.slice.call(fileList||[]), out=[], left=files.length;
@@ -2099,15 +2765,39 @@ var DATA = /*__DATA__*/null;
     });
   }
 
-  function applyLoadedProject(next, sourceName, report){
+  // Custom yes/no, in place of window.confirm(): a native dialog freezes the page's whole JS
+  // thread while it is up (long enough to look like a hang to anything driving the page) and
+  // matches nothing else in this UI. Callback rather than a return value, because unlike
+  // confirm() this cannot answer synchronously.
+  function askConfirm(title,bodyHtml,okLabel,onOk){
+    var scrim=document.getElementById("confirmScrim");
+    if(!scrim){ onOk(); return; }                       // no modal in the DOM: never block the action
+    document.getElementById("confirmTitle").textContent=title;
+    document.getElementById("confirmBody").innerHTML=bodyHtml;
+    var ok=document.getElementById("confirmOk");
+    ok.textContent=okLabel||"OK";
+    scrim.classList.add("on");
+    ok.onclick=function(){ scrim.classList.remove("on"); onOk(); };
+    document.getElementById("confirmCancel").onclick=function(){ scrim.classList.remove("on"); };
+    setTimeout(function(){ ok.focus(); },0);
+  }
+  function applyLoadedProject(next, sourceName, report, confirmed){
     // Same guard the autosave prompt uses: replacing the model is not undoable past the stack,
-    // so unsaved work gets a chance to survive.
-    if(dirty && !window.confirm("Replace the current project with "+sourceName+"?\n\n"
-        +"There are changes since the last Commit. Loading discards them.")) return false;
+    // so unsaved work gets a chance to survive. `confirmed` is set only by the modal's own
+    // callback below -- the guard asks once, then the answer comes back through here.
+    if(dirty&&!confirmed){
+      askConfirm("Replace the current project?",
+        "<b>"+esc(sourceName)+"</b> replaces everything on this canvas. There are changes since "
+        +"the last Commit, and loading discards them.<br>Import adds a file to what is already "
+        +"here instead, without replacing it.",
+        "Replace",
+        function(){ applyLoadedProject(next,sourceName,report,true); });
+      return false;
+    }
     pushUndo("load:"+sourceName);
     project=next;
     DIAG=(project.diagnostics&&project.diagnostics.byNode)||{};   // this is a different project now
-    selNode=null; selEdge=null;
+    selNode=null; selEdge=null; multiSel=Object.create(null);
     if(project.system&&project.system.name)
       document.getElementById("sysname").value=project.system.name;
     fillNsList();
@@ -2133,7 +2823,7 @@ var DATA = /*__DATA__*/null;
           var parsed=JSON.parse(f.text);
           if(parsed&&parsed.nodes&&parsed.system){ proj=parsed; projName=f.name; }
         }catch(e){
-          window.alert(f.name+" is not readable JSON: "+((e&&e.message)||e));
+          alertBar(f.name+" is not readable JSON: "+((e&&e.message)||e));
         }
       });
       if(proj){
@@ -2142,48 +2832,58 @@ var DATA = /*__DATA__*/null;
         return;
       }
       var res=seedFromFiles(files);
-      if(res.error){ window.alert("Could not load: "+res.error); return; }
+      if(res.error){ alertBar("Could not load: "+res.error); return; }
       applyLoadedProject(res.project, res.name, res.report);
     });
   }
 
+  // Shared by the Open and Import buttons: both pick the same kind of files, they just hand
+  // the result to a different function (openFiles replaces the project, importFiles adds to
+  // it). pickerId keys the File System Access API's remembered last-used directory -- kept
+  // distinct per button so opening your working project doesn't overwrite the folder memory
+  // for the systems you import into it, and vice versa.
+  function wireFilePickerButton(btn,input,pickerId,onFiles){
+    if(!btn||!input) return;
+    btn.onclick=function(){
+      // The File System Access API remembers the last-used directory FOR THIS id across
+      // reloads (Chromium keeps a per-id, not per-file, memory) -- <input type=file> gives the
+      // page no visibility into which folder was used at all, by design, so there was nothing
+      // for this app's own code to remember. Feature-detected here (call time, not load time)
+      // so Firefox/Safari fall through to the plain input exactly as before; <input> itself
+      // stays in the DOM either way.
+      if(window.showOpenFilePicker){
+        // MUST be the first thing that runs in this handler, with no await ahead of it: the
+        // click's user-activation is what authorizes the picker, and it does not survive a
+        // microtask boundary -- an async gap here turns this into a SecurityError instead of
+        // a dialog.
+        window.showOpenFilePicker({
+          id:pickerId,
+          multiple:true,
+          excludeAcceptAllOption:false,       // keep "All files" reachable
+          types:[{description:"RosTooling model files",
+            accept:{"application/octet-stream":[".rossystem",".ros2",".ros",".json"]}}]
+        }).then(function(handles){
+          return Promise.all(handles.map(function(h){ return h.getFile(); }));
+        }).then(onFiles)
+        .catch(function(err){
+          if(err&&err.name==="AbortError") return;   // the user cancelled -- not a failure
+          input.value=""; input.click();              // anything else: fall back rather than look inert
+        });
+        return;
+      }
+      input.value=""; input.click();
+    };
+    input.onchange=function(){ onFiles(input.files); };
+  }
   (function wireOpen(){
-    var input=document.getElementById("openInput"), btn=document.getElementById("openBtn");
-    if(btn&&input){
-      btn.onclick=function(){
-        // The File System Access API remembers the last-used directory FOR THIS id across
-        // reloads (Chromium keeps a per-id, not per-file, memory) -- <input type=file> gives the
-        // page no visibility into which folder was used at all, by design, so there was nothing
-        // for this app's own code to remember. Feature-detected here (call time, not load time)
-        // so Firefox/Safari fall through to the plain input exactly as before; <input> itself
-        // stays in the DOM either way.
-        if(window.showOpenFilePicker){
-          // MUST be the first thing that runs in this handler, with no await ahead of it: the
-          // click's user-activation is what authorizes the picker, and it does not survive a
-          // microtask boundary -- an async gap here turns this into a SecurityError instead of
-          // a dialog.
-          window.showOpenFilePicker({
-            id:"rosStudioOpen",                 // distinctive: on a file:// page every local
-                                                 // HTML file shares one id-keyed bucket
-            multiple:true,
-            excludeAcceptAllOption:false,       // keep "All files" reachable
-            types:[{description:"RosTooling model files",
-              accept:{"application/octet-stream":[".rossystem",".ros2",".ros",".json"]}}]
-          }).then(function(handles){
-            return Promise.all(handles.map(function(h){ return h.getFile(); }));
-          }).then(function(files){ openFiles(files); })
-          .catch(function(err){
-            if(err&&err.name==="AbortError") return;   // the user cancelled -- not a failure
-            input.value=""; input.click();              // anything else: fall back rather than look inert
-          });
-          return;
-        }
-        input.value=""; input.click();
-      };
-      input.onchange=function(){ openFiles(input.files); };
-    }
+    wireFilePickerButton(document.getElementById("openBtn"),document.getElementById("openInput"),
+      "rosStudioOpen",openFiles);
+    wireFilePickerButton(document.getElementById("importBtn"),document.getElementById("importInput"),
+      "rosStudioImport",importFiles);
     // Drag a whole model set onto the canvas. The default browser behaviour for a dropped file
     // is to NAVIGATE to it, which would discard the session, so both handlers are required.
+    // Unlike Open (above), a drop IMPORTS -- adds to what is already on the canvas -- rather
+    // than replacing it, so it never asks the dirty-guard question Open does.
     var zone=document.getElementById("canvasWrap")||document.body;
     ["dragenter","dragover"].forEach(function(ev){
       zone.addEventListener(ev,function(e){
@@ -2201,7 +2901,7 @@ var DATA = /*__DATA__*/null;
       if(!e.dataTransfer||!e.dataTransfer.files||!e.dataTransfer.files.length) return;
       e.preventDefault(); e.stopPropagation();
       zone.classList.remove("dropping");
-      openFiles(e.dataTransfer.files);
+      importFiles(e.dataTransfer.files);
     });
     window.addEventListener("dragover",function(e){
       if(e.dataTransfer&&Array.prototype.indexOf.call(e.dataTransfer.types||[],"Files")>=0)
@@ -2209,6 +2909,95 @@ var DATA = /*__DATA__*/null;
     });
     window.addEventListener("drop",function(e){
       if(e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files.length) e.preventDefault();
+    });
+  })();
+
+  // ---- Clear: wipe back to a blank system, with a one-time-skippable confirmation --------
+  var SKIP_CLEAR_KEY="rosStudio.skipClearConfirm";
+  function doClearProject(){
+    pushUndo("clear");
+    project.nodes=[]; project.connections=[]; project.subSystems=[]; project.params=[];
+    project.packages={}; project.types={};
+    project.system={name:"new_system",fromFile:null};
+    delete project.comments;
+    DIAG={}; selNode=null; selEdge=null; multiSel=Object.create(null);
+    document.getElementById("sysname").value=project.system.name;
+    fillNsList();
+    opNotice={sev:"ok",title:"Cleared",
+      html:"Blank system. Add a node from the rail, or drag .rossystem files onto the canvas to import."};
+    sizeCanvas(); render(); fillInspector(); fitView();
+  }
+  (function wireClear(){
+    var btn=document.getElementById("clearBtn"), scrim=document.getElementById("clearScrim");
+    if(!btn||!scrim) return;
+    btn.onclick=function(){
+      var skip=false;
+      try{ skip=localStorage.getItem(SKIP_CLEAR_KEY)==="1"; }catch(e){}
+      if(skip){ doClearProject(); return; }
+      document.getElementById("clearDontAsk").checked=false;
+      scrim.classList.add("on");
+    };
+    document.getElementById("doClear").onclick=function(){
+      if(document.getElementById("clearDontAsk").checked){
+        try{ localStorage.setItem(SKIP_CLEAR_KEY,"1"); }catch(e){}
+      }
+      scrim.classList.remove("on");
+      doClearProject();
+    };
+    document.getElementById("cancelClear").onclick=function(){ scrim.classList.remove("on"); };
+  })();
+
+  // ---- right-click a multi-selection: "Wrap in subsystem" ---------------------------------
+  (function wireWrap(){
+    var menu=document.getElementById("ctxMenu"), wrapBtn=document.getElementById("ctxWrap");
+    if(!menu||!wrapBtn) return;
+    var pendingIds=null;
+    function closeMenu(){ menu.hidden=true; pendingIds=null; }
+    canvas.addEventListener("contextmenu",function(ev){
+      var el=ev.target.closest(".node");
+      // only meaningful on a node that is part of an ACTIVE (2+) multi-selection -- a lone
+      // node, or one outside the current selection, has nothing to wrap it WITH.
+      if(!el||el.dataset.sub!==undefined) return;
+      var id=el.dataset.n, keys=Object.keys(multiSel);
+      if(keys.length<2||!multiSel[id]) return;
+      ev.preventDefault();
+      pendingIds=keys.slice();
+      wrapBtn.textContent="Wrap "+keys.length+" nodes in a subsystem…";
+      var mw=220, mh=44;   // clamp on-screen -- a right-click near the edge must not open off-canvas
+      menu.style.left=Math.min(ev.clientX,window.innerWidth-mw-4)+"px";
+      menu.style.top=Math.min(ev.clientY,window.innerHeight-mh-4)+"px";
+      menu.hidden=false;
+    });
+    document.addEventListener("pointerdown",function(ev){
+      if(!menu.hidden&&!menu.contains(ev.target)) closeMenu();
+    });
+    window.addEventListener("blur",closeMenu);
+    document.addEventListener("scroll",closeMenu,true);
+
+    var wrapScrim=document.getElementById("wrapScrim"), wrapName=document.getElementById("wrapName"),
+        wrapErr=document.getElementById("wrapErr");
+    var pendingWrapIds=null;
+    wrapBtn.onclick=function(){
+      var ids=pendingIds; closeMenu();
+      if(!ids) return;
+      pendingWrapIds=ids;
+      wrapName.value=""; wrapErr.hidden=true;
+      wrapScrim.classList.add("on");
+      setTimeout(function(){ wrapName.focus(); },0);
+    };
+    function submitWrap(){
+      var res=wrapNodesInSubsystem(pendingWrapIds||[],wrapName.value);
+      if(res.error){ wrapErr.textContent=res.error; wrapErr.hidden=false; return; }
+      wrapScrim.classList.remove("on"); pendingWrapIds=null;
+      multiSel=Object.create(null); selNode=null; selEdge=null; selSub=res.ref||null;
+      render(); fillInspector(); fitView();
+    }
+    document.getElementById("doWrap").onclick=submitWrap;
+    document.getElementById("cancelWrap").onclick=function(){
+      wrapScrim.classList.remove("on"); pendingWrapIds=null;
+    };
+    wrapName.addEventListener("keydown",function(ev){
+      if(ev.key==="Enter"){ ev.preventDefault(); submitWrap(); }
     });
   })();
 
@@ -2403,6 +3192,7 @@ var DATA = /*__DATA__*/null;
           if(v===(f.type||"")){render();return;}
           pushUndo("itype:"+f.id);
           f.type=v||null;
+          announceTypeFill(propagateInterfaceType(n,f),v);
           recordRecentType(v);
           render();
           fillInspector();
@@ -2448,9 +3238,30 @@ var DATA = /*__DATA__*/null;
       }
       var n=nodeById(el.dataset.n);
       if(!n) return;
+      // Ctrl/Cmd+click adjusts the multi-selection instead of picking the node up: a held
+      // modifier means "add/remove this from what's selected," never "start a drag." The first
+      // Ctrl+click after a plain single selection folds that existing selNode in too, so two
+      // clicks (one plain, one Ctrl) are enough to start a group of two.
+      if(ev.ctrlKey||ev.metaKey){
+        if(!Object.keys(multiSel).length&&selNode&&selNode!==n.id) multiSel[selNode]=1;
+        if(multiSel[n.id]) delete multiSel[n.id]; else multiSel[n.id]=1;
+        var keys=Object.keys(multiSel);
+        if(keys.length<=1){ selNode=keys.length?keys[0]:null; multiSel=Object.create(null); }
+        else selNode=null;
+        selEdge=null; selSub=null; render(); fillInspector();
+        return;
+      }
+      // Picking up a node that is already part of an active (2+) multi-selection drags the
+      // whole group, each member keeping its own offset from the pointer.
+      var group=null;
+      if(multiSel[n.id]&&Object.keys(multiSel).length>1){
+        group=Object.keys(multiSel).map(function(id){
+          var nn=nodeById(id); return nn?{node:nn,ox:nn.x,oy:nn.y}:null;
+        }).filter(Boolean);
+      }
       // snapshot the pre-drag layout now; it is only pushed on pointerup if the pointer
       // actually moved, so selecting a node does not fill the undo stack with no-ops.
-      dragState={n:n,px:ev.clientX,py:ev.clientY,ox:n.x,oy:n.y,moved:0,snap:snapshot()};
+      dragState={n:n,group:group,px:ev.clientX,py:ev.clientY,ox:n.x,oy:n.y,moved:0,snap:snapshot()};
       try{el.setPointerCapture(ev.pointerId);}catch(e){}
     });
     canvas.addEventListener("pointermove",function(ev){
@@ -2463,6 +3274,15 @@ var DATA = /*__DATA__*/null;
         sp.x=Math.max(0,dragState.ox+ddx); sp.y=Math.max(0,dragState.oy+ddy);
         var sel=canvas.querySelector('.node.subbox[data-sub="'+STUDIO.cssEsc(dragState.sub)+'"]');
         if(sel){ sel.style.left=sp.x+"px"; sel.style.top=sp.y+"px"; }
+        drawEdges();
+        return;
+      }
+      if(dragState.group){
+        dragState.group.forEach(function(g){
+          g.node.x=Math.max(0,g.ox+ddx); g.node.y=Math.max(0,g.oy+ddy);
+          var gel=canvas.querySelector('.node[data-n="'+STUDIO.cssEsc(g.node.id)+'"]');
+          if(gel){ gel.style.left=g.node.x+"px"; gel.style.top=g.node.y+"px"; }
+        });
         drawEdges();
         return;
       }
@@ -2479,12 +3299,18 @@ var DATA = /*__DATA__*/null;
       if(sref){
         // a click on the box selects it and shows the system panel, where its view state and
         // its "open" button live; a drag just leaves it where it was dropped (no undo entry)
-        if(wasClick){ selSub=sref; selNode=null; selEdge=null; render(); fillInspector();
+        if(wasClick){ selSub=sref; selNode=null; selEdge=null; multiSel=Object.create(null); render(); fillInspector();
                       revealInspector(); }
         else sizeCanvas();
         return;
       }
-      if(wasClick){selNode=n.id;selEdge=null;selSub=null;render();fillInspector();revealInspector();}
+      if(wasClick){
+        // a plain click (no drag) always narrows the selection down to just this node, whether
+        // it was part of a group or not; Ctrl+click (handled in pointerdown, above) is the only
+        // gesture that ADDS to a group.
+        multiSel=Object.create(null);
+        selNode=n.id;selEdge=null;selSub=null;render();fillInspector();revealInspector();
+      }
       else {sizeCanvas();pushSnapshot(snap);}
     });
     // Background drag = PAN. It shares its pointerdown with "click empty space to deselect",
@@ -2507,7 +3333,7 @@ var DATA = /*__DATA__*/null;
       if(!panState) return;
       var wasClick=panState.moved<5; panState=null;
       canvasWrap.classList.remove("panning");
-      if(wasClick){selNode=null;selEdge=null;render();fillInspector();}
+      if(wasClick){selNode=null;selEdge=null;multiSel=Object.create(null);render();fillInspector();}
     });
     // connection drawing
     canvas.addEventListener("pointerdown",function(ev){
@@ -2585,10 +3411,24 @@ var DATA = /*__DATA__*/null;
           var fromNode=nodeById(fromEnd.n), toNode=nodeById(toEnd.n);
           if(fromIface&&toIface){
             var fromBlank=!String(fromIface.type||"").trim(), toBlank=!String(toIface.type||"").trim();
-            if(fromBlank&&!toBlank&&fromNode&&fromNode.backing==="hand") fromIface.type=toIface.type;
-            else if(toBlank&&!fromBlank&&toNode&&toNode.backing==="hand") toIface.type=fromIface.type;
+            if(fromBlank&&!toBlank&&fromNode&&fromNode.backing==="hand"){
+              fromIface.type=toIface.type;
+              announceTypeFill([fromNode.label+"."+fromIface.name],fromIface.type);
+            } else if(toBlank&&!fromBlank&&toNode&&toNode.backing==="hand"){
+              toIface.type=fromIface.type;
+              announceTypeFill([toNode.label+"."+toIface.name],toIface.type);
+            }
           }
           project.connections.push({id:nid(),from:{n:fromEnd.n,i:fromEnd.i},to:{n:toEnd.n,i:toEnd.i}});
+          // The other half of setSubExposure's rule. That one refuses to UNexpose a wired
+          // interface; nothing exposed one when a wire was newly drawn to it -- and a wrapped
+          // subsystem's box offers a port for every interface it has, exposed or not. So wiring
+          // one of the unexposed ones produced an endpoint in this file naming an interface the
+          // subsystem's own file never declares: RM050, the exact failure wrapping was fixed for.
+          var exposedNow=[ensureSubEndpointExposed(fromEnd.n,fromEnd.i),
+                          ensureSubEndpointExposed(toEnd.n,toEnd.i)].filter(Boolean);
+          if(exposedNow.length)
+            toast(exposedNow.join(" and ")+" now exposed by its subsystem");
         }
       }
       wire=null;
@@ -2670,6 +3510,98 @@ var DATA = /*__DATA__*/null;
     window.addEventListener("orientationchange",syncNarrow);
   })();
 
+  // ---- resizable side panels ---------------------------------------------------------------
+  // The rail is a fixed 190px and the inspector 298px, which is right for a laptop and wrong at
+  // both ends: on a wide screen the inspector truncates message types it has room for twice
+  // over, and on a small one the two of them are half the window before any graph is drawn.
+  // Widths live in CSS custom properties so the drag only writes ONE value each and the layout
+  // reflows itself; nothing about node positions or edges is in viewport coordinates, so there
+  // is nothing to recompute or redraw when a panel changes size.
+  var PANEL_KEY="rosStudio.panelWidths";
+  var RAIL_DEF=190, INSP_DEF=298, RAIL_MIN=150, INSP_MIN=220, CANVAS_MIN=320;
+  var panelW={rail:RAIL_DEF,insp:INSP_DEF};
+  function clampPanels(){
+    var vw=viewportW();
+    panelW.rail=Math.max(RAIL_MIN,Math.min(panelW.rail,Math.min(420,vw*0.35)));
+    panelW.insp=Math.max(INSP_MIN,Math.min(panelW.insp,Math.min(560,vw*0.45)));
+    // Neither panel may squeeze the canvas below CANVAS_MIN, however each was arrived at.
+    // Taken off whichever is currently wider, so shrinking the window does not collapse the
+    // panel you happen to have been resizing.
+    var over=(panelW.rail+panelW.insp+CANVAS_MIN)-vw;
+    while(over>0){
+      var wide=(panelW.rail-RAIL_MIN)>=(panelW.insp-INSP_MIN)?"rail":"insp";
+      var floor=wide==="rail"?RAIL_MIN:INSP_MIN;
+      var give=Math.min(over,panelW[wide]-floor);
+      if(give<=0) break;             // both at their floor: a viewport this small is body.narrow
+      panelW[wide]-=give; over-=give;
+    }
+  }
+  function applyPanels(){
+    document.documentElement.style.setProperty("--rail-w",Math.round(panelW.rail)+"px");
+    document.documentElement.style.setProperty("--insp-w",Math.round(panelW.insp)+"px");
+    var r=document.getElementById("railResizer"), s=document.getElementById("inspResizer");
+    if(r) r.setAttribute("aria-valuenow",String(Math.round(panelW.rail)));
+    if(s) s.setAttribute("aria-valuenow",String(Math.round(panelW.insp)));
+  }
+  function savePanels(){
+    try{ localStorage.setItem(PANEL_KEY,JSON.stringify({rail:Math.round(panelW.rail),insp:Math.round(panelW.insp)})); }catch(e){}
+  }
+  (function wireResizers(){
+    try{
+      var got=JSON.parse(localStorage.getItem(PANEL_KEY)||"{}");
+      if(got&&typeof got.rail==="number") panelW.rail=got.rail;
+      if(got&&typeof got.insp==="number") panelW.insp=got.insp;
+    }catch(e){}
+    clampPanels(); applyPanels();
+    // the head script restored these unclamped to avoid a flash; a window narrower than the one
+    // they were saved on has to be honoured now that there is one to measure.
+    window.addEventListener("resize",function(){ clampPanels(); applyPanels(); });
+
+    function drive(el,which,sign,defW){
+      if(!el) return;
+      el.setAttribute("aria-valuemin",String(which==="rail"?RAIL_MIN:INSP_MIN));
+      var drag=null;
+      el.addEventListener("pointerdown",function(ev){
+        if(isNarrow()) return;                       // drawers: nothing beside them to resize
+        ev.preventDefault();                          // or the pointer drag selects text instead
+        drag={x:ev.clientX,w:panelW[which]};
+        el.classList.add("dragging"); document.body.classList.add("resizing");
+        try{ el.setPointerCapture(ev.pointerId); }catch(e){}
+      });
+      el.addEventListener("pointermove",function(ev){
+        if(!drag) return;
+        // sign: the rail grows as the pointer moves right, the inspector as it moves left.
+        panelW[which]=drag.w+sign*(ev.clientX-drag.x);
+        clampPanels(); applyPanels();
+      });
+      function end(){
+        if(!drag) return;
+        drag=null;
+        el.classList.remove("dragging"); document.body.classList.remove("resizing");
+        savePanels();
+      }
+      el.addEventListener("pointerup",end);
+      el.addEventListener("pointercancel",end);      // the OS took the gesture mid-drag
+      // Double-click a separator to put it back -- the standard gesture, and the only way out of
+      // a width you dragged to somewhere unusable without hunting for a menu item.
+      el.addEventListener("dblclick",function(){
+        panelW[which]=defW; clampPanels(); applyPanels(); savePanels();
+      });
+      el.addEventListener("keydown",function(ev){
+        var step=ev.shiftKey?48:16, moved=true;
+        if(ev.key==="ArrowLeft") panelW[which]-=sign*step;
+        else if(ev.key==="ArrowRight") panelW[which]+=sign*step;
+        else if(ev.key==="Home") panelW[which]=defW;
+        else moved=false;
+        if(!moved) return;
+        ev.preventDefault();
+        clampPanels(); applyPanels(); savePanels();
+      });
+    }
+    drive(document.getElementById("railResizer"),"rail",1,RAIL_DEF);
+    drive(document.getElementById("inspResizer"),"insp",-1,INSP_DEF);
+  })();
+
   // ---- pinch to zoom, two-finger pan -------------------------------------------------------
   // .canvas-wrap sets touch-action:none, which hands the browser's own pan/pinch to us -- so
   // without this a phone could pan and drag but had NO way to zoom at all (the desktop gesture
@@ -2687,7 +3619,9 @@ var DATA = /*__DATA__*/null;
       // A second finger CANCELS whatever one finger had started -- otherwise the node under
       // the first finger is dragged across the canvas while the user is only zooming.
       if(dragState){
-        if(dragState.n){ dragState.n.x=dragState.ox; dragState.n.y=dragState.oy; }
+        if(dragState.group){
+          dragState.group.forEach(function(g){ g.node.x=g.ox; g.node.y=g.oy; });
+        } else if(dragState.n){ dragState.n.x=dragState.ox; dragState.n.y=dragState.oy; }
         else if(dragState.sub&&subPos[dragState.sub]){
           subPos[dragState.sub].x=dragState.ox; subPos[dragState.sub].y=dragState.oy;
         }
@@ -3206,6 +4140,16 @@ var DATA = /*__DATA__*/null;
       +'<div class="fld"><label>from: (derived)</label><div class="derived">"'+esc(n.pkg)+'.'+esc(n.node)+'"</div></div>';
     var ih=sec("node/head","node: "+esc(n.label),headBody);
     var ifBody='';
+    // A catalogue node arrives with its whole interface set unexposed on purpose (exposing all
+    // of it would write dozens of unwired lines), so "reuse this node, expose the four ports I
+    // actually need" was one checkbox per interface with no way to start from the other end.
+    // Only worth the row when there is more than one to act on.
+    if(n.ifaces.length>1)
+      ifBody+='<div class="bulkrow">expose'
+        +'<button class="minibtn" id="expAll" title="expose every interface below">all</button>'
+        +'<button class="minibtn" id="expNone" title="unexpose every interface below — a connected one stays exposed, it has to">none</button>'
+        +'<span class="bulkcount">'+n.ifaces.filter(function(x){return x.exposed||ifaceConnected(n,x);}).length
+        +' of '+n.ifaces.length+' exposed</span></div>';
     for(var j=0;j<n.ifaces.length;j++){var f=n.ifaces[j];
       var conn=ifaceConnected(n,f);
       // Kind is editable only while nothing depends on it yet: changing it out from under a
@@ -3215,8 +4159,13 @@ var DATA = /*__DATA__*/null;
       var kindEditable=!cat&&!conn;
       ifBody+='<div class="iedit'+(f.orphan?" orphan":"")+'" data-i="'+f.id+'">'
         +(kindEditable
-          ?'<select class="kd '+f.kind+'" data-kind="'+f.id+'" title="interface kind">'
-            +KINDS.map(function(k){return '<option value="'+k+'"'+(k===f.kind?" selected":"")+'>'+k+'</option>';}).join("")+'</select>'
+          // The badge is 2.2em, so the option TEXT has to stay the abbreviation or the collapsed
+          // select shows an ambiguous fragment ("Service server" and "Service client" both clip
+          // to "Ser"). The full word goes in title= instead -- on the select for the current
+          // kind, and on each option for the list -- so the abbreviations stop being something
+          // you have to already know.
+          ?'<select class="kd '+f.kind+'" data-kind="'+f.id+'" title="interface kind — '+esc(KIND_LABEL[f.kind]||f.kind)+'">'
+            +KINDS.map(function(k){return '<option value="'+k+'" title="'+esc(KIND_LABEL[k]||k)+'"'+(k===f.kind?" selected":"")+'>'+k+'</option>';}).join("")+'</select>'
           :'<span class="kd '+f.kind+'" title="'+KIND_LABEL[f.kind]+(conn?" — connected, kind is locked":"")+'">'+f.kind+'</span>')
         +'<span class="grow">'
         +(cat
@@ -3463,6 +4412,16 @@ var DATA = /*__DATA__*/null;
       setSubState(x.dataset.subview,x.value); relayoutSubs(); render(); fillSystemInspector();};});
     inspector.querySelectorAll("[data-subopen]").forEach(function(x){x.onclick=function(){
       openDrill(x.dataset.subopen);};});
+    // ---- what a wrapped subsystem exposes ---------------------------------------------------
+    // no pushUndo() here -- see setSubExposure/setSubExposureAll, which snapshot only once they
+    // know the change is actually going to happen
+    inspector.querySelectorAll("[data-subexp]").forEach(function(x){x.onchange=function(){
+      setSubExposure(x.dataset.subexp,x.dataset.subnode,x.dataset.subiface,x.checked);
+      render(); fillSystemInspector();};});
+    inspector.querySelectorAll("[data-subexpall]").forEach(function(x){x.onclick=function(){
+      setSubExposureAll(x.dataset.subexpall,true); render(); fillSystemInspector();};});
+    inspector.querySelectorAll("[data-subexpnone]").forEach(function(x){x.onclick=function(){
+      setSubExposureAll(x.dataset.subexpnone,false); render(); fillSystemInspector();};});
     // ---- system-level parameters ----------------------------------------------------------
     function sysParamById(id){
       var l=project.params||[];
@@ -3545,9 +4504,46 @@ var DATA = /*__DATA__*/null;
     if(edit) h+=cmtRows(project,"system","sys");
     out+=sec("sys/system","system",h);
 
-    // subSystems: is reference-only -- the entries come from the seeded file and there is no UI
-    // to invent one, because a reference that resolves to nothing exposes nothing connectable
-    // (RM091) and the studio has no way to check a name the author types. Their comments ARE
+    // What a WRAPPED subsystem offers the rest of the world. For a reference seeded from a file
+    // this is not ours to edit -- that file says what it exposes and we only read it -- but an
+    // invented entry's `content` is this project's own, so the one defect the corpus is full of
+    // (a reused system that declares nothing, so nothing can wire to it) is fixable right here
+    // instead of only after a Commit, a re-open of the generated file, and a re-import.
+    //
+    // Writes BOTH sides on purpose: `content` is what gets emitted as the subsystem's own file,
+    // and the outer shadow carries the pinned label the cross-boundary endpoint resolves through
+    // (see wrapNodesInSubsystem). They have to agree or the endpoint names nothing.
+    function subExposeEditor(s){
+      if(!s.invented||!s.content) return "";
+      var rows='', total=0, on=0;
+      (s.content.nodes||[]).forEach(function(cn){
+        var inner='';
+        (cn.ifaces||[]).forEach(function(cf){
+          total++; if(cf.exposed) on++;
+          inner+='<label class="expline" title="'+esc(KIND_LABEL[cf.kind]||cf.kind)+'">'
+            +'<input type="checkbox" data-subexp="'+esc(s.ref)+'" data-subnode="'+esc(cn.id)+'" data-subiface="'+esc(cf.id)+'"'
+            +(cf.exposed?" checked":"")+'>'
+            +'<span class="kd '+cf.kind+'">'+cf.kind+'</span>'
+            +'<span class="expname">'+esc(cf.label||cf.name)+'</span></label>';
+        });
+        if(inner) rows+='<div class="expnode">'+esc(cn.label)+'</div>'+inner;
+      });
+      if(!total) return "";
+      return '<div class="expose'+(on?"":" none")+'">'
+        +'<div class="bulkrow">exposes'
+        +'<button class="minibtn" data-subexpall="'+esc(s.ref)+'" title="expose every interface this subsystem has">all</button>'
+        +'<button class="minibtn" data-subexpnone="'+esc(s.ref)+'" title="expose none — anything a connection already uses stays exposed, it has to">none</button>'
+        +'<span class="bulkcount">'+on+' of '+total+'</span></div>'
+        +(on?'':'<div class="hint w">Nothing is exposed, so the .rossystem written for this on '
+          +'Commit would declare no interfaces and no other system could ever wire to it.</div>')
+        +rows+'</div>';
+    }
+    // subSystems: is otherwise reference-only -- an entry seeded from a file cannot be typed in
+    // here by name, because a reference that resolves to nothing exposes nothing connectable
+    // (RM091) and the studio has no way to check a name the author types. The one exception is
+    // an entry THIS session invented by wrapping a selection of nodes (right-click a
+    // multi-selection -> "Wrap in subsystem"): the studio built it, so it already knows it
+    // resolves -- see wrapNodesInSubsystem and the "invented" flag it sets. Their comments ARE
     // editable: on the TurtleBot 3 example the single entry carries the line naming exactly
     // which catalogue file it resolves to and which nodes it brings in.
     var subs=project.subSystems||[];
@@ -3556,8 +4552,9 @@ var DATA = /*__DATA__*/null;
       subs.forEach(function(s,i){
         var got=project.nodes.filter(function(n){return n.backing==="sub"&&n.subRef===s.ref;});
         var g=s.graph||null, st=subState(s.ref);
-        h+='<div class="pkgrow"><div class="pn">"'+esc(s.ref)+'"</div>'
-          +'<div class="roinfo">'+esc(s.file?("assets/rosmodelscatalog/"+s.file):(s.localFile||"(not in the vendored catalogue)"))
+        h+='<div class="pkgrow" data-subref="'+esc(s.ref)+'"><div class="pn">"'+esc(s.ref)+'"</div>'
+          +'<div class="roinfo">'+esc(s.file?("assets/rosmodelscatalog/"+s.file)
+            :(s.localFile||(s.invented?"(new -- written on Commit)":"(not in the vendored catalogue)")))
           +'<br>'+got.length+' node(s) reached: '+esc(got.map(function(n){return n.label;}).join(", ")||"none")
           +(g?('<br>'+(g.connections||[]).length+' internal connection(s)'):'<br>no graph captured &mdash; cannot be opened')
           +'</div>'
@@ -3575,6 +4572,7 @@ var DATA = /*__DATA__*/null;
           +(got.length?"":'<div class="hint w">this reference resolved to no nodes, so it has '
             +'nothing to draw &mdash; a subsystem exposes only what the referenced file&rsquo;s own '
             +'<code>interfaces:</code> blocks declare (checkIfInterfaceInSystem).</div>')
+          +(edit?subExposeEditor(s):"")
           +(edit?cmtRows(s,"sub","sub:"+i):"")+'</div>';
       });
       out+=sec("sys/subsystems","subsystems (reused compositions)",h,String(subs.length));
@@ -3766,6 +4764,19 @@ var DATA = /*__DATA__*/null;
       var f=ifaceById(n,x.dataset.exp); if(!f) return;
       pushUndo();
       f.exposed=x.checked; render();fillInspector();};});
+    (function wireBulkExpose(){
+      function setAll(v){
+        pushUndo();
+        // "none" cannot unexpose a WIRED interface: a connections: endpoint has to name
+        // something the file declares, so the emitter exposes it regardless. Skipping it here
+        // keeps the checkbox state and the emitted file telling the same story.
+        (n.ifaces||[]).forEach(function(f){ if(v||!ifaceConnected(n,f)) f.exposed=v; });
+        render(); fillInspector();
+      }
+      var a=document.getElementById("expAll"), z=document.getElementById("expNone");
+      if(a) a.onclick=function(){ setAll(true); };
+      if(z) z.onclick=function(){ setAll(false); };
+    })();
     // The .rossystem half of a parameter. Editing the label or the override does NOT touch the
     // artifact's declared type or default -- those are the .ros2 half, edited below through
     // data-pname/data-pval/data-ptype directly on the row (for a hand-backed node).
@@ -3821,9 +4832,17 @@ var DATA = /*__DATA__*/null;
         updateTypeHint();
         render();
       });
-      // recorded on blur, not per keystroke: a partial string mid-type is browsing, not a
-      // choice, and recordRecentType already only keeps what actually resolves in TYPESET.
-      x.addEventListener("blur",function(){ recordRecentType(x.value.trim()); });
+      // Both of these wait for a COMMITTED value rather than firing per keystroke: a partial
+      // string mid-type is browsing, not a choice. recordRecentType only keeps what resolves in
+      // TYPESET anyway, but propagation writes to ANOTHER node -- from the first character
+      // typed, if it ran on input, and never again after (see propagateInterfaceType).
+      x.addEventListener("blur",function(){
+        var v=x.value.trim();
+        recordRecentType(v);
+        var f=ifaceById(n,x.dataset.itype); if(!f) return;
+        var filled=propagateInterfaceType(n,f);
+        if(filled.length){ announceTypeFill(filled,v); render(); fillInspector(); }
+      });
     });
     inspector.querySelectorAll("[data-kind]").forEach(function(x){x.onchange=function(){
       var f=ifaceById(n,x.dataset.kind); if(!f) return;
@@ -3886,7 +4905,7 @@ var DATA = /*__DATA__*/null;
       pushUndo();
       project.connections=project.connections.filter(function(c){return c.from.n!==n.id&&c.to.n!==n.id;});
       project.nodes=project.nodes.filter(function(x){return x.id!==n.id;});
-      selNode=null;render();fillInspector();};
+      selNode=null;multiSel=Object.create(null);render();fillInspector();};
   }
 
   // ============================ rail ============================
@@ -3929,7 +4948,7 @@ var DATA = /*__DATA__*/null;
     var p=nextSpawnPos();
     var n={id:nid(),label:"new_node",backing:"hand",pkg:"new_package",node:"new_node",artifact:"new_node",
       catalogueFile:null,namespace:null,x:p.x,y:p.y,ifaces:[],params:[]};
-    project.nodes.push(n); selNode=n.id; selEdge=null; render(); fillInspector();
+    project.nodes.push(n); selNode=n.id; selEdge=null; multiSel=Object.create(null); render(); fillInspector();
     // otherwise a slot far from the current pan/zoom reads as "I clicked add and nothing
     // happened" -- centreOn brings the new card into view regardless of where it landed.
     centreOn(n.id);
@@ -3963,11 +4982,19 @@ var DATA = /*__DATA__*/null;
       // a catalogue node arrives with its FULL interface set; exposing all of it would write
       // dozens of unwired lines, so these start unexposed and surface as you connect them.
       ifaces:Object.keys(e.interfaces||{}).map(function(nm){return {id:nid(),name:nm,kind:e.interfaces[nm],type:tmap[nm]||null,qos:null,label:null,exposed:false};}),params:[]};
-    project.nodes.push(n); selNode=n.id; catScrim.classList.remove("on"); render(); fillInspector();
+    project.nodes.push(n); selNode=n.id; catScrim.classList.remove("on"); multiSel=Object.create(null); render(); fillInspector();
     centreOn(n.id);
   }
   [].slice.call(document.querySelectorAll("[data-close]")).forEach(function(b){b.onclick=function(e){e.target.closest(".scrim").classList.remove("on");};});
-  [].slice.call(document.querySelectorAll(".scrim:not([data-locked])")).forEach(function(s){s.onclick=function(e){if(e.target===s)s.classList.remove("on");};});
+  // #drawerScrim is deliberately NOT in here. It is the only scrim not driven by its own `on`
+  // class -- the mobile drawers are opened and closed by body.drawer-l/drawer-r -- so the
+  // generic handler would be a no-op on it. Worse, this loop runs AFTER wireDrawers assigned
+  // `sc.onclick=closeDrawers` and, being an assignment rather than a listener, silently replaced
+  // it: tapping the dimmed backdrop to dismiss a drawer, which is the gesture everyone tries
+  // first, did nothing at all. The ✕ and Escape still worked, so it read as a quirk rather than
+  // a bug and survived that way.
+  [].slice.call(document.querySelectorAll(".scrim:not([data-locked]):not(#drawerScrim)"))
+    .forEach(function(s){s.onclick=function(e){if(e.target===s)s.classList.remove("on");};});
 
   var KCOL={pub:"--k-pub",sub:"--k-sub",ss:"--k-ss",sc:"--k-sc",as:"--k-as",ac:"--k-ac"};
   (function(){
@@ -3989,6 +5016,15 @@ var DATA = /*__DATA__*/null;
     var lg=document.getElementById("legend");
     [["pub → sub","Topic — one-way ▶"],["ss → sc","Service — request ⇄ response"],["as → ac","Action — request ⇄ response"]]
       .forEach(function(pair){var d=document.createElement("div");d.innerHTML='<b style="font-family:var(--mono);font-size:.66rem">'+pair[0]+'</b> — '+pair[1];lg.appendChild(d);});
+    // Multi-select and everything gated behind it (group drag, "wrap in subsystem") were
+    // reachable ONLY by knowing to hold a modifier -- nothing on screen said so, which makes a
+    // feature that exists indistinguishable from one that does not.
+    var g=document.createElement("div");
+    g.className="editonly";
+    g.style.cssText="margin-top:.35rem;padding-top:.35rem;border-top:1px solid var(--rule-soft)";
+    g.innerHTML='<b style="font-family:var(--mono);font-size:.66rem">Ctrl/⌘+click</b> — select several nodes'
+      +'<br><span style="color:var(--ink-3)">then drag to move them together, or right-click to wrap them in a subsystem</span>';
+    lg.appendChild(g);
   })();
 
   // ============================ issues ============================
@@ -4026,12 +5062,12 @@ var DATA = /*__DATA__*/null;
     if(it.conn){
       var c=null; for(var i=0;i<project.connections.length;i++) if(project.connections[i].id===it.conn) c=project.connections[i];
       if(!c) return;
-      selEdge=it.conn; selNode=null; render(); fillInspector();
+      selEdge=it.conn; selNode=null; multiSel=Object.create(null); render(); fillInspector();
       centreOn(c.from.n); flashEl(canvas.querySelector('.node[data-n="'+STUDIO.cssEsc(c.from.n)+'"]'),it.sev);
       revealInspector(); return;
     }
     if(it.node){
-      selNode=it.node; selEdge=null; render(); fillInspector();
+      selNode=it.node; selEdge=null; multiSel=Object.create(null); render(); fillInspector();
       centreOn(it.node); flashEl(canvas.querySelector('.node[data-n="'+STUDIO.cssEsc(it.node)+'"]'),it.sev);
       revealInspector();
       if(mode==="edit"){
@@ -4044,8 +5080,17 @@ var DATA = /*__DATA__*/null;
       }
       return;
     }
+    if(it.sub){
+      // the subsystems panel is where both the diagnosis and (for a wrapped one) the fix live
+      selNode=null; selEdge=null; selSub=it.sub; inspTab="proj"; multiSel=Object.create(null);
+      expandSec("sys/subsystems");
+      render(); fillInspector(); revealInspector();
+      flashEl(inspector.querySelector('.pkgrow[data-subref="'+attrEsc(it.sub)+'"]'),it.sev);
+      flashEl(canvas.querySelector('.node.subbox[data-sub="'+attrEsc(it.sub)+'"]'),it.sev);
+      return;
+    }
     if(it.sys){
-      selNode=null; selEdge=null; inspTab="proj"; render(); fillInspector(); revealInspector();
+      selNode=null; selEdge=null; inspTab="proj"; multiSel=Object.create(null); render(); fillInspector(); revealInspector();
       if(it.field){ focusField(it.field); return; }
       if(it.ftag){ expandSec("sys/types");
         var fel=inspector.querySelector('[data-ft="'+attrEsc(it.ftag)+'"]');
@@ -4074,7 +5119,7 @@ var DATA = /*__DATA__*/null;
     });
     return out.concat(loose);
   }
-  var lastIssues=[], issuesExpanded=false, nodeIssueIndex={};
+  var lastIssues=[], issuesExpanded=false, nodeIssueIndex={}, subIssueIndex={};
   // Every issue that names a node, keyed by that node's id -- read by renderNode() to paint the
   // per-node warning icon. Rebuilt fresh on every runIssues() call (which now runs at the TOP
   // of render(), before any node card exists) and node cards are always removed and rebuilt
@@ -4089,6 +5134,13 @@ var DATA = /*__DATA__*/null;
       // neither, since a type mismatch is exactly as much each node's problem as the wire's.
       if(it.nodes) it.nodes.forEach(function(nid2){ if(nid2) (idx[nid2]=idx[nid2]||[]).push(it); });
     });
+    return idx;
+  }
+  // Same idea keyed by subSystems: ref, so a collapsed box can say on its own face that the
+  // thing it stands for offers nothing -- an empty box and an unwired one look identical.
+  function indexIssuesBySub(list){
+    var idx=Object.create(null);
+    list.forEach(function(it){ if(it.sub) (idx[it.sub]=idx[it.sub]||[]).push(it); });
     return idx;
   }
   function runIssues(){
@@ -4138,6 +5190,48 @@ var DATA = /*__DATA__*/null;
       pushIssue("e",'duplicate node label "'+l+'"',{code:"RM009",node:nid2,field:"f_label",groupKey:"rm009dup",groupLabel:"duplicate node label",
         fix:"Rename this node, or the other one sharing the label — instance labels must be unique within one system."});
     });
+    // ---- subSystems: what a reused composition actually offers ---------------------------
+    // The defect this catches is the most common one in the real corpus: a subSystems: entry
+    // that RESOLVES (its nodes are here, drawn, countable) but exposes no interface at all, so
+    // nothing in this system can be wired to it. Rendering all 87 corpus models found reused
+    // nodes arriving with zero interfaces again and again -- and until now the studio drew that
+    // silently, which is how it stayed invisible. It is the one thing a reader of the diagram
+    // cannot deduce: an empty box looks the same as a box you simply have not wired yet.
+    liveSubRefs().forEach(function(ref){
+      var entry=subEntry(ref)||{}, members=subMembers(ref);
+      var ifaceCount=0;
+      members.forEach(function(m){ ifaceCount+=(m.ifaces||[]).length; });
+      if(!ifaceCount){
+        pushIssue("e",'subsystem "'+ref+'" exposes nothing — its '+members.length
+          +' node(s) arrive with no interfaces',{sub:ref,groupKey:"subempty",groupLabel:"a subsystem exposes nothing connectable",groupUnit:"subsystems",
+          fix:"The referenced file declares its nodes but no interfaces:, so no connection in this "
+             +"system can name one of them. Fix it in that file (add the interfaces: its nodes "
+             +"expose), or open it here, expose what you need and re-Commit it."});
+        return;
+      }
+      // An invented (wrapped) subsystem is OUR file to fix -- so the test is what its own
+      // content will DECLARE, and the fix is one click away in the subsystems panel.
+      if(entry.invented&&entry.content){
+        var declared=0, cc=entry.content;
+        (cc.nodes||[]).forEach(function(cn){ (cn.ifaces||[]).forEach(function(cf){ if(cf.exposed) declared++; }); });
+        (cc.connections||[]).forEach(function(){ declared++; });   // a wired interface is declared too
+        if(!declared)
+          pushIssue("w",'subsystem "'+ref+'" will be written with nothing exposed',{sub:ref,groupKey:"subnoexpose",groupLabel:"a wrapped subsystem exposes nothing",groupUnit:"subsystems",
+            fix:"Commit writes it as its own .rossystem, and right now that file would declare no "
+               +"interfaces — nothing could ever reuse it. Open the subsystems panel and tick the "
+               +"interfaces it should offer."});
+      }
+    });
+    // The grammar takes each subSystems: entry as a bare scalar on its own line, so two of them
+    // produce a block that the Xtext parser accepts and a plain YAML reader does not -- and
+    // rossdl, the live generator downstream of this, reads these files with yaml.safe_load.
+    // One entry parses by accident (a scalar continuation); the second is the cliff.
+    if((project.subSystems||[]).length>1)
+      pushIssue("w",(project.subSystems.length)+" subSystems: entries — the emitted block is not readable as plain YAML",
+        {sys:true,groupKey:"submulti",groupLabel:"multiple subSystems: entries",
+         fix:"The Xtext grammar accepts it and rosmodel_lint passes it, but two bare entries under "
+            +"one key is a YAML parse error, and the rossdl generator reads these files as YAML. "
+            +"Keep it to one reference until the grammar gains a list form, or merge the two."});
     // .ros field rows. _validate_types() blocks generation on exactly these, so the counter
     // has to see them too -- otherwise the page reads "no issues" for a project `generate`
     // then refuses.
@@ -4199,6 +5293,7 @@ var DATA = /*__DATA__*/null;
     var grouped=groupIssues(issues).slice().sort(function(a,b){ return (a.sev==="e"?0:1)-(b.sev==="e"?0:1); });
     lastIssues=issues;
     nodeIssueIndex=indexIssuesByNode(issues);
+    subIssueIndex=indexIssuesBySub(issues);
     var errs=grouped.filter(function(x){return x.sev==="e";}).length, wrns=grouped.length-errs;
     var ec=document.getElementById("errCnt"), wc=document.getElementById("wrnCnt");
     ec.textContent=errs; wc.textContent=wrns;
@@ -4250,7 +5345,7 @@ var DATA = /*__DATA__*/null;
       wrap.appendChild(head); wrap.appendChild(kids);
       return wrap;
     }
-    var routable=!!(it.node||it.conn||it.sys||it.action);
+    var routable=!!(it.node||it.conn||it.sys||it.sub||it.action);
     var el=document.createElement(routable?"button":"div");
     if(routable) el.type="button";
     el.className="it"+(it.sev==="e"?" e":"")+(routable?"":" noref");
@@ -5221,7 +6316,7 @@ var DATA = /*__DATA__*/null;
     // goes on to clear the selection underneath it as an unrelated side effect.
     var _sp=document.getElementById("statusPop"), _nip=document.getElementById("nodeIssuePop");
     if(e.key==="Escape"&&((_sp&&_sp.matches&&_sp.matches(":popover-open"))||(_nip&&_nip.matches&&_nip.matches(":popover-open")))) return;
-    if(e.key==="Escape"){[].slice.call(document.querySelectorAll(".scrim.on:not([data-locked])")).forEach(function(s){s.classList.remove("on");});selNode=null;selEdge=null;render();fillInspector();}
+    if(e.key==="Escape"){[].slice.call(document.querySelectorAll(".scrim.on:not([data-locked])")).forEach(function(s){s.classList.remove("on");});selNode=null;selEdge=null;multiSel=Object.create(null);render();fillInspector();}
     if(e.key>="1" && e.key<="4" && !typing){level=+e.key;setLevelButtons();render();}
     if((e.key==="Delete"||e.key==="Backspace")&&mode==="edit"&&selNode&&!typing){
       // a subSystems: node is provided by the referenced file; deleting it here would strip the
@@ -5230,10 +6325,20 @@ var DATA = /*__DATA__*/null;
       var sn=nodeById(selNode); if(sn&&sn.backing==="sub") return;
       pushUndo();
       project.connections=project.connections.filter(function(c){return c.from.n!==selNode&&c.to.n!==selNode;});
-      project.nodes=project.nodes.filter(function(x){return x.id!==selNode;});selNode=null;render();fillInspector();}
+      project.nodes=project.nodes.filter(function(x){return x.id!==selNode;});selNode=null;multiSel=Object.create(null);render();fillInspector();}
   });
   addEventListener("beforeunload",function(e){
     if(!dirty) return;                  // clean since the last Commit: never nag
+    // The autosave is debounced by 800ms, so a close landing inside that window would drop the
+    // last edits even though autosave is working. Flush first -- localStorage is synchronous,
+    // so this completes before the page goes.
+    if(saveTimer) saveNow();
+    // Only NOW is a prompt honest. With a working autosave the work is already in this browser
+    // and the restore prompt offers it back on the next load, so a native "Leave site?" dialog
+    // asks about a loss that cannot happen -- and it was the second native dialog stacked on
+    // top of this page's own custom recovery modal. When autosave is dead (quota exceeded ->
+    // storage=null, see saveNow), closing really does lose the work, and the nag is the point.
+    if(storage) return;
     e.preventDefault(); e.returnValue="";   // the browser supplies its own wording
   });
 
