@@ -68,6 +68,27 @@ rule 10.) Whether cross-file linking is directory-scoped or workspace-scoped is 
 `RosSystemScopeProvider` is an empty class, so stock Xtext scoping applies, and this cannot be
 confirmed without a running language server.
 
+## Before emitting: inventory the request
+
+When the composition is described in prose rather than transcribed from an existing model, write
+down — before the first line of output — every construct the caller asked for, one per line:
+
+- each pre-built composition to reuse ("reuses a composition called X … as a subsystem" →
+  `subSystems:` entry `"X"`)
+- each node, with the artifact/node it wires in
+- each interface to expose, each parameter to set, each connection, each process
+
+Emit, then tick the list off against the file. A requested construct that is not in the file is a
+defect even when the file lints and validates clean — the linter cannot see the request. The only
+legitimate reason to leave an asked-for construct out is a hard rule in this document, and then
+check 12 requires you to name the construct and the rule.
+
+This exists because of a concrete failure: a request that named a subsystem to reuse in its opening
+sentence and then spent sixty lines on five nodes and twenty-five parameters. Two independent
+attempts emitted the five nodes perfectly and silently dropped the `subSystems:` block; the same
+reuse in a two-paragraph request that had nothing else to say was emitted every time. Busy requests
+lose their preamble.
+
 ---
 
 ## Hard rules, ranked by how often an LLM breaks them
@@ -225,13 +246,33 @@ it needs a derivation ladder rather than a guess. 32 of 52 corpus models omit `f
 2. `<pkg>/launch/<system>.launch.py` exists on disk (check with `Glob`) → use the real path.
 3. Otherwise → `fromFile: "TODO_PACKAGE/launch/TODO.launch.py"`.
 
+Rung 2 means the launch file itself — a `*.launch.py` you found with `Glob` — not a `fromFile:`
+line you found in another model. Corpus models, `assets/rosmodelscatalog/*.rossystem`,
+`examples/`, and this plugin's own `tests/regenerated/` outputs are *models*; a path in one of
+them is that author's claim, and in `tests/regenerated/` it is this skill's own earlier guess.
+Copying it launders a guess into a fact. A path that reached you any way other than rung 1 or
+rung 2 is rung 3: emit the sentinel, and mention in your report where you saw the candidate path
+so the caller can confirm it.
+
 The sentinel satisfies the `contains("/")` check while staying obviously a placeholder. **Never
 invent a plausible-looking real path** — a fabricated `"cs4mt_bringup/launch/manufacturing_tb.launch.py"`
 is indistinguishable from a verified one and silently converts a known-unknown into a false fact.
 
-On rungs 2 and 3, report the value to the caller as **SYNTHESISED — not extracted from the source,
-supplied only to avoid the `fromFileHelper` NPE**. The linter flags the sentinel as `RM066` (INFO)
-so it stays visible.
+Say which rung on the line itself, the same way §8c discloses catalogue sources:
+
+```
+fromFile: "ur_bringup/launch/ur5e.launch.py"   # caller-supplied
+fromFile: "ur_bringup/launch/ur5e.launch.py"   # on disk: /abs/path/ur_bringup/launch/ur5e.launch.py
+fromFile: "TODO_PACKAGE/launch/TODO.launch.py"
+```
+
+The sentinel needs no comment (`RM066` already marks it). `RM096` warns when any other
+`fromFile:` has no provenance comment.
+
+On rung 2, report the on-disk path you confirmed. On rung 3, report **SYNTHESISED — not extracted
+from the source, supplied only to avoid the `fromFileHelper` NPE** and, if you saw a candidate path
+somewhere that you rejected as not being rung 1 or rung 2 evidence, say where. The linter flags the
+sentinel as `RM066` (INFO) so it stays visible.
 
 ### 6. Node names: never quoted, restricted charset
 
@@ -254,6 +295,16 @@ ERROR) or the bare keyword `infinite`. Under the current profile you never emit 
   silently holds a *string*. No validator catches it. 910 corpus occurrences are latently corrupt.
 - Doubles: **must carry a `.` or exponent**. `value: 10` under `type: Double` silently becomes a
   `ParameterInteger`. Emit `10.0`.
+- Lists: a list value is bracket syntax with double-quoted elements — `value: ["a", "b"]`, one
+  space after each comma. A quoted string whose *content* is bracket-shaped —
+  `value: "['a', 'b']"` — is a `ParameterString`, and `CheckParameterValue` rejects it against an
+  `Array[…]`/`List[…]` parameter with `Expect a list of elements` (ERROR; seen four times in one
+  file against the real server). Real project `.ros2` files carry this defect
+  (`type:Array [String]` over `value: "['x', 'y']"`). **It is a source defect, not a style to
+  preserve.** The declared type wins: when the referenced `.ros2` declares `Array[…]`/`List[…]`,
+  or the caller wrote the value as a list, emit the real list and report the conversion under
+  check 12 ("source held the list as a quoted string; emitted as a list"). `RM095` flags the
+  string form in both file types.
 - Never emit an empty name `'':`.
 
 ### 8b. `.ros` message bodies — emit the FIELDS, not just the type name
@@ -362,7 +413,7 @@ whether it points at a real vendored file (and which one) or a companion file th
 fire a WARNING when a reference resolves against the catalogue but the source line's text doesn't
 contain the resolved file's name.
 
-### 8d. Reuse a whole catalogued system via `subSystems:` — but only when it actually exposes ports
+### 8d. Reuse a whole pre-built system via `subSystems:` — emit it when asked; the exposure check governs wiring, not whether to emit
 
 `from:` names *one node's* real implementation. To reuse a whole pre-built `.rossystem`
 composition — not re-derive it node by node — use the system-level `subSystems:` block instead:
@@ -376,7 +427,15 @@ subSystems:
 `Process.nodes`'s `[...]` form — one bare (quote it anyway, per §8) system name per indented line,
 no leading `-`. `subSystems: ["turtlebot"]` is a parse error.
 
-**Before adding a `subSystems:` entry, check what it actually exposes.** A subsystem's
+**If the caller says a composition exists elsewhere and asks to reuse it, emit the entry** — even
+when the target is not among `assets/node_index.json`'s `_systems` and no `<name>.rossystem` sits
+beside the file. An unresolved entry is RM091 (WARNING, "does not resolve"), which is the correct,
+*disclosed* outcome for a project-local system kept elsewhere: say so in your report. Omitting the
+entry instead silently changes what the deployment brings up, and nothing — not the linter, not
+the oracle — can detect it. The exposure check below decides whether a node *inside* the subsystem
+can be a `connections:` endpoint; it never decides whether the subsystem is referenced at all.
+
+**Before wiring a connection *through* a subsystem, check what it actually exposes.** A subsystem's
 connectable ports are *exactly* what its own `nodes:` block declares under `interfaces:` — **never**
 derived from the `.ros2` file its `from:` points at (confirmed directly against
 `RosSystemValidator.xtend`'s `checkIfInterfaceInSystem`, which walks one level into a referenced
@@ -392,9 +451,11 @@ system's components and reads `rosnode.rosinterfaces` — populated only from th
   declares **zero** `interfaces:` on any of its 14 nodes. Referencing it via `subSystems:` is
   grammatically valid and resolves, but exposes nothing — none of its nodes can be a
   `connections:` endpoint through it. If a node from a subsystem like this needs external
-  wiring, **keep it as an explicit `nodes:` declaration in this file instead**, and say why in a
-  comment so a future pass doesn't "simplify" it into a broken `subSystems:` reference. This is
-  not a failure to reuse — the reference genuinely offers nothing to reuse.
+  wiring, **declare that one node explicitly under `nodes:` as well** (and mind RM090 — if the
+  same label is then reachable both ways, keep the explicit node and say in a comment why the
+  subsystem does not supply it), so a future pass doesn't "simplify" it into a broken
+  `subSystems:` reference. This is not a failure to reuse — the reference genuinely offers nothing
+  to reuse.
 
 `assets/node_index.json`'s `_systems` entries (built by `build_node_index.py`) record each
 catalogued system's nodes and their declared interfaces, so this is checkable before authoring
@@ -408,6 +469,92 @@ collision; RM092 (WARNING) catches the softer case of the same `from:` reachable
 different labels. RM091 (WARNING) covers a `subSystems:` entry that doesn't resolve at all, nests
 another `subSystems:` block (two levels deep throws `ClassCastException` in the real validator —
 keep nesting flat), or resolves but exposes zero interfaces, as above.
+
+### 8e. When an interface name or message type isn't literal in the source: trace it, infer it from a cited convention, or ask — never a silent guess, never a silent drop
+
+Most interfaces resolve straight from the literal source: a string topic name and a message class
+both sit in the same `create_publisher`/`create_subscription`/... call, or one hop away in a
+well-known alias. Handle those exactly as everywhere else in this document — read, transcribe, cite
+`file:line`.
+
+**This section does not loosen any other rule.** It is about reading *source code* that resolves
+with work. It never licenses inventing a `connections:` block (§4), a `fromFile:` path (§5), or a
+catalogue reference that does not resolve (§8c) — a type you infer here must still resolve against
+`assets/type_index.json` or come with a companion `.ros`, and a node/package name is never inferred
+by convention at all. QoS fields and parameter values are out of scope: never infer either. Emit
+only what the source states, and let the Pinned-oracle exclusion section's defaults stand.
+
+Three situations arise, each with one correct move.
+
+**1. It takes tracing, not transcription.** A `using FollowJTrajAction = ...` alias two lines up; a
+Python variable or dict entry holding a message class; a name built from pieces that are all
+determinable — `get_node()->get_name() + "/query_state"`, or a `side` variable assigned two frames
+away. Trace it and cite **both** lines: the call site and the thing that resolves it. This is not a
+guess — everything needed is in the source. Reading for meaning is the whole reason this step is
+done by a model and not by a syntactic extractor, so do the reading before reaching for case 2 or 3.
+
+Python shapes that need the same treatment: a message class imported under an alias or held in a
+variable/dict; a topic read back from `self.declare_parameter('topic_name', '/scan')` — the
+**declared default** is the name, cite the `declare_parameter` line; a name assembled from
+`self.get_name()`, a namespace, or an f-string.
+
+When the pieces are enumerable — `side` ranges over `"left"` and `"right"`, a loop over a list of
+joint names — **emit one interface per resolved value**, not one interface with the variable left in
+it and not just the first. If the range is not enumerable from the source, that is case 3.
+
+**2. It genuinely isn't in the source, but one answer is forced by a citable basis.** A topic named
+`cmd_vel`/`odom`/`scan`/`imu`/`tf` whose type lives in a header you cannot see or a dynamically
+loaded plugin. You may infer it **only** against something you can name: a REP, the `common_msgs`
+family, this project's own precedent for the same topic name elsewhere, or an unambiguous local
+pattern (identical sibling constructs in the same file, all carrying one type). General familiarity
+with "what ROS projects usually do" is not a basis. Two further gates, both hard:
+
+- the inferred type must resolve against `assets/type_index.json` per §8c — an inference that
+  misses the catalogue is not an inference, it is an invention;
+- exactly one candidate must survive. If two types are each plausible, this is case 3.
+
+Mark it in place. §8c already claims the trailing comment on that line, so **merge the two into one
+comment** — provenance first so RM089 still sees the resolved filename:
+
+```
+'cmd_vel':
+  type: 'geometry_msgs/msg/Twist' # assets/roscommonobjects/geometry_msgs.ros — INFERRED from the topic name (REP-119), no type in source; confirm
+```
+
+Keep it a trailing comment: a full-line comment at column 0 ends the model (RM094).
+
+**3. Neither applies.** No trace resolves it and no single basis picks one answer. Before you may
+use this case you must have actually looked: grepped the symbol across the package, checked the
+node's headers and `package.xml` dependencies, and checked whether the catalogue already models
+this node. Case 3 is for a genuine dead end — a header outside the tree, a config value, a plugin
+you cannot see into — not for a file you did not finish reading.
+
+Then ask the caller, once: collect **every** open question in the whole model into a single message,
+naming for each the node, the interface, the candidates considered, and what is missing. Do not ask
+one at a time and do not stall the rest of the model waiting.
+
+If no answer is available — a batch or non-interactive run — do not guess and do not fail. Leave the
+interface out, report it under check 12 as *UNRESOLVED — asked, no answer available*, and give it a
+table row. This mirrors §5's rung-3 sentinel: a known-unknown stays visibly unknown.
+
+**Mandatory: every model-generation report ends with an "Assumptions & Inferences" table**, in your
+response to the caller, whether or not case 2 or 3 ever fired. One row per inferred, assumed, or
+unresolved construct — message types are the highest-stakes case but not the only one. This is
+structured disclosure and does **not** replace check 12's prose report of drops and synthesis; a
+construct you dropped under case 3 appears in both.
+
+| Construct | Source | Case | What was inferred | Basis | Confidence |
+|---|---|---|---|---|---|
+| `hand_bridge` subscriber `/hand/left/cmd`, `/hand/right/cmd` | `hand_bridge.cpp:77`, `side` at `hand_bridge.cpp:149-150` | 1 | name assembled from `side` ∈ {`left`,`right`}; both emitted | traced in source | high |
+| *(illustrative — not a real project; shows the case-2 shape only)* `battery_node` publisher `/battery/status` | `battery_node.cpp:40`, message type not visible — declared in a header outside this package's tree | 2 | type `sensor_msgs/msg/BatteryState` | `/battery/status`-style topics are `sensor_msgs/msg/BatteryState` by REP-widespread convention and by this catalogue's own precedent for the same name; only one candidate resolves in `type_index.json` | medium |
+
+`Confidence` is exactly one of **high** (case 1, fully traced), **medium** (case 2, single citable
+basis), **low** (case 2 where the basis is weaker than a REP or catalogue precedent, or case 3
+answered by the caller from memory). Anything you would call lower than low is case 3.
+
+An empty run states so explicitly — `Assumptions & Inferences: none — every emitted construct traced
+to a literal or to an unambiguous local resolution` — never omit the section. Its absence must never
+be the reader's only signal that nothing needed it.
 
 ### 9. Ordering (grammar-fixed — violating is a parse error)
 
@@ -501,14 +648,19 @@ Run every line against the emitted file:
    this checklist: that would drop a concrete value the source carried. Two value rules do apply:
    a duration is a nanosecond string and must be under ~2.147 s (`Integer.parseInt`, RM035), and
    `liveliness:` is `automatic` or `manual`, bare — any other value is a parse error (RM033).
-7. Booleans lowercase; every `.ros2` `Double` value has a `.` or exponent. (In a `.rossystem` the
-   declared type is not visible — preserve the source literal instead.)
+7. Booleans lowercase; every `.ros2` `Double` value has a `.` or exponent. In a `.rossystem` the
+   declared type is not on the line — open the referenced `.ros2` and read it
+   (`references/rossystem-syntax.md` §5). Preserve the source literal only for scalars whose type
+   you cannot resolve; never preserve a bracket-shaped string where the declared type is
+   `Array`/`List` or the caller gave a list — see §8.
 8. Block order matches §9. `.ros2` entries alphabetical; `.rossystem` `nodes:` in **source order**.
    Any `default:` in the input is still a `default:` in the output, never rewritten to `value:`.
-9. `.rossystem` only: `fromFile:` present, quoted, contains `/`. Every connection is
-   `- [a , b]` where `a` is a `pub->`/`ss->`/`as->` label and `b` is the matching
-   `sub->`/`sc->`/`ac->` label. Both `type:` strings identical. Every label declared in this file.
-   Every node in a process's `nodes: [...]` declared in `nodes:`.
+9. `.rossystem` only: `fromFile:` present, quoted, contains `/`, and is one of exactly three
+   things — the caller's verbatim value, a `Glob`-confirmed on-disk launch file, or the sentinel —
+   with the rung stated in a trailing comment. Anything else is fabricated: replace it with the
+   sentinel. Every connection is `- [a , b]` where `a` is a `pub->`/`ss->`/`as->` label and `b` is
+   the matching `sub->`/`sc->`/`ac->` label. Both `type:` strings identical. Every label declared
+   in this file. Every node in a process's `nodes: [...]` declared in `nodes:`.
 10. `from:` in `.rossystem` is `<packageName>.<nodeName>` — **the node, never the artifact** — read
     from the **model contents**, never from the `.ros2` filename (76/253 files have a stem that
     differs from the declared package; `bt_navigator.ros2` declares `nav2_bt_navigator`). In the
@@ -520,20 +672,36 @@ Run every line against the emitted file:
     `"pkg/msg/Type"`. Constants have no spaces around `=`. See §8b.
 12. **Report what you dropped or synthesised.** Before finishing, tell the caller about: every
     comment removed from a transcribed source (file, line, text — *DROPPED PROVENANCE*); any
-    `fromFile:` from rung 2 or 3 of the ladder (*SYNTHESISED*); any `.ros` message body emitted
-    bodiless; any duplicate node label collapsed or renamed; any source defect preserved verbatim.
-    Silence about these is the failure mode — none of them is visible to the linter or the harness.
+    `fromFile:` from rung 3 of the ladder (*SYNTHESISED*), and where you saw a rejected candidate
+    path if you saw one; any `.ros` message body emitted bodiless; any duplicate node label
+    collapsed or renamed; any source defect preserved verbatim, and separately any source defect
+    you *converted* rather than preserved (a list held as a quoted string is always converted, not
+    preserved — see §8); any construct the request asked for — subsystem, node, interface,
+    parameter, connection — that you did not emit, and which rule excluded it. Silence about these
+    is the failure mode — none of them is visible to the linter or the harness.
 13. Every `type:` reference resolves against `assets/type_index.json`, and every `.rossystem`
     `from:`/arrow/parameter target resolves against `assets/node_index.json` — or is a genuine,
     disclosed project-local reference with its own companion `.ros`/`.ros2`. See §8c.
 14. Every resolved `type:`/`from:` reference names its exact vendored source file in a trailing
     comment on the same line (`# assets/rosmodelscatalog/navigation/amcl.ros2`), and every
     project-local one says so and points at its companion file instead. See §8c.
-15. Every `subSystems:` entry is the bare-per-line form, never `[...]`. Before emitting one,
-    confirmed via `assets/node_index.json`'s `_systems` entries that the target actually declares
-    `interfaces:` on the node(s) you need — if it declares none, an explicit `nodes:` entry is the
-    correct choice, not a broken `subSystems:` reference. No node is reachable both directly under
-    this file's `nodes:` and through a `subSystems:` entry. See §8d.
+15. If the request named a pre-built composition to reuse, a `subSystems:` block naming it is
+    present — unresolved is acceptable (RM091 WARNING, disclosed in the report); absent is not.
+    Every entry is the bare-per-line form, never `[...]`. Before routing a *connection* through a
+    subsystem, confirmed via `assets/node_index.json`'s `_systems` entries that the target
+    declares `interfaces:` on the node you need; if it declares none, that node also needs an
+    explicit `nodes:` entry. No node is reachable both directly under this file's `nodes:` and
+    through a `subSystems:` entry. See §8d.
+16. Requirements coverage: every construct in the inventory you wrote before emitting (see
+    "Before emitting: inventory the request") is in the file, or is named in your report together
+    with the rule that excluded it.
+17. Every name/type that wasn't literal in the source was handled one of three ways (§8e): traced
+    (case 1 — cites both the call site and the resolving line), inferred from a citable convention
+    (case 2 — resolves against `assets/type_index.json`, carries the merged provenance+`INFERRED`
+    trailing comment, names its basis), or asked about and, absent an answer, left out and reported
+    (case 3). The "Assumptions & Inferences" table is present in the report — with the explicit
+    "none" line when nothing needed it — and does not replace check 12's prose report of drops and
+    synthesis.
 
 ## Validation
 
@@ -553,6 +721,17 @@ Run every line against the emitted file:
   **`RM034` (`profile:` / `history:` / `depth:` used) is expected and correct when the value came
   from the input.** It warns against *inventing* those fields, not against transcribing them.
   Never drop a concrete value that was present in the source in order to get a clean linter run.
+
+  **`RM095`/`RM096` (added 2026-09-03) close two gaps a live validation round found.** `RM095`
+  (ERROR in `.rossystem`, WARNING in `.ros2`) fires on a parameter value that is a quoted string
+  shaped like a list (`value: "['a', 'b']"`) — see §8's Lists bullet; this is a real oracle
+  rejection, not a style nit, so it is wired into the `--hook` PostToolUse gate. `RM096`
+  (WARNING) fires on a non-sentinel `fromFile:` with no `# caller-supplied` / `# on disk:`
+  provenance comment (files under `assets/rosmodelscatalog/` are exempt) — see rule 5. **`RM061`
+  (`subSystems:` used) was demoted from WARNING to INFO in the same pass** — its presence was
+  never itself a defect, and the old WARNING read as a third nudge toward omitting a subsystem
+  the caller actually asked to reuse; see the "Before emitting: inventory the request" section
+  and §8d.
 
   **RM081-092 are the catalogue checks** (§8c, §8d) — RM081/084 (WARNING: reference not indexed
   at all, a project-local package/node is legitimate) and RM082/085/086 (ERROR: the package/node
