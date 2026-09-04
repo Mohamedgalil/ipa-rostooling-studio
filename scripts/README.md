@@ -327,10 +327,125 @@ case — same `from:`, different label, possibly two genuine instances rather th
 | `build_node_index.py` | Rebuilds `assets/node_index.json` and `references/node-catalogue.md` from `assets/rosmodelscatalog/`. Run after `sync_catalogue.sh` changes anything. |
 | `collect_deps.py <model>... <case-dir>` | Lints the given model(s) with the catalogue enabled and copies every file their RM083/RM087 findings named into `<case-dir>` — the automated replacement for hand-copying `tests/oracle/cases/_deps/` files. |
 | `sync_catalogue.sh` | Re-copies both vendored catalogues from the local `material/code` checkouts, diffs against the vendored copy, and reports what changed. Does **not** rebuild the indexes or update `PROVENANCE.md` itself — both are printed as next steps when it detects a change. |
+| `extract_ros2_interfaces.py <path>... -o DIR` | **Phase 1** — turns raw ROS 2 source into draft `.ros2` node-interface models, deterministically — no LLM. See below. |
+| `extract_rossystem.py <launch>... --models DIR -o F` | **Phase 2** — turns ROS 2 launch files into a draft `.rossystem`. See below. |
+
+### `extract_ros2_interfaces.py` — source → draft `.ros2`
+
+```bash
+python extract_ros2_interfaces.py <ros2-package-or-workspace> -o ros_model_draft --json record.json
+```
+
+Walks every `package.xml` under the given paths, decides the language **per file** (`.py` vs
+`.cpp`/`.hpp`/`.cc`; `package.xml`'s `<build_type>` is only a hint, because a package can be
+mixed), and emits one `.ros2` per package named after the **declared** package name, per
+SKILL.md's output-layout rule.
+
+- **Python** is read with the stdlib `ast` module: `create_publisher`, `create_subscription`,
+  `create_service`, `create_client`, `ActionServer`/`ActionClient`, `declare_parameter` and
+  `declare_parameters`. Message classes are resolved through the file's own
+  `from pkg.msg import Type` imports (aliases included) and through `pkg.msg.Type` attribute
+  chains. Node names come from `super().__init__("name")`.
+- **C++** is read with **tree-sitter-cpp** (`pip install tree_sitter tree_sitter_cpp`), not
+  regex: the same six call kinds plus `rclcpp_action::create_server`/`create_client`, reading
+  the template argument for the type and the first pure string-literal argument for the name.
+  `using X = a::b::C;` / `typedef` aliases are collected package-wide, so
+  `create_publisher<RobotStatus_Msg>` resolves. Node names come from a
+  `class X : public rclcpp::Node` constructor's `Node("name")` initialiser.
+- **Types** resolve against `assets/type_index.json` first (the resolved vendored file is named
+  in a trailing comment, per SKILL.md §8c); then against `.msg`/`.srv`/`.action` files found in
+  the scanned tree (emitted as `# project-local, defined by …`); otherwise the reference is kept
+  and marked with a `# TODO unresolved:` comment rather than guessed.
+- **`generate_parameter_library`** is a real declaration source, not a gap. When `CMakeLists.txt`
+  names a params YAML, it is parsed and its parameters emitted with their declared types and
+  `default_value`s. Dynamic `__map_*` groups, whose real names are built at runtime from another
+  parameter's value, are flagged instead. (`custom_joint_trajectory_controller` declares nothing
+  via `declare_parameter()`; this recovers 16 real parameters it would otherwise be missing.)
+- **`--emit-msgs DIR`** writes a companion `.ros` per project-local message package the models
+  reference, transcribed from the package's own `.msg`/`.srv`/`.action` files. Without it, a model
+  referencing project-local types is **not loadable on its own** — an unresolved `type:` is a
+  linking-layer ERROR. Per-field defaults and bounded arrays have no `.ros` form and are dropped
+  with a report (SKILL.md §8b).
+
+**Nothing is guessed.** A declaration is emitted only when its name *and* its type are literal in
+the source. A topic built from a parameter, an f-string, `get_name() + "/…"`, string
+concatenation or a launch-time remap becomes a wrapped `# FLAG` comment in the file header —
+kind, reason, `file:line`, and the source expression — for a human or an LLM to resolve. Header
+comments sit at column 0 *above* the model, so they never trip RM094.
+
+The generated files are passed through `rosmodel_lint.py` automatically (`--no-lint` to skip);
+a non-zero exit means a generated file has a lint ERROR.
+
+Two things it deliberately does **not** do:
+
+- **No `.rossystem`.** Inferring `connections:`/`subSystems:` needs cross-package topic matching
+  and architectural judgement, which is exactly what this script refuses to do. Phase 2 or a
+  manual/LLM step.
+- **No launch-file or config merging.** Node names overridden by `launch_ros`'s `name=`,
+  parameters set in a `controllers.yaml`, and controller instances spawned by
+  `controller_manager` are all invisible to a source-only reader. When a package's ROS calls sit
+  on a `get_node()` handle or an injected node with no literal name, the artifact falls back to
+  the package name and the file says so in a `# NOTE`. A package using
+  `generate_parameter_library` gets a `# NOTE` pointing at its YAML, since those parameters are
+  never `declare_parameter()` calls.
+
+`--emit-qos` adds `qos:`/`depth:` for literal integer depths. It is **off** by default: RM034
+warns against inventing those fields and no corpus model uses them. The depths are always in the
+`--json` record either way.
 
 `assets/roscommonobjects/PROVENANCE.md` and `assets/rosmodelscatalog/PROVENANCE.md` record each
 catalogue's source, pinned commit (where readable), and sync date — read those before assuming
 either vendored copy is current.
+
+### `extract_rossystem.py` — launch files → draft `.rossystem` (Phase 2)
+
+```bash
+python extract_rossystem.py <launch-file>... --models ros_model/rosnodes -o system.rossystem
+```
+
+Parses launch files with `ast` — **never executes them** — and emits the composition Phase 1
+deliberately leaves out.
+
+**The type/instance split is what makes this work without rewriting anything.** A `.rossystem`
+node is `"<label>": from: "<package>.<node>"`, where the label is free text and only `from:` is
+a cross-reference (rossystem-syntax.md §3). So a launch file's `name="g1_loco_motion"` over a
+source that says `Node("Loco_motion")` needs no rename anywhere: the label carries the
+deployment name, `from:` carries the type. One controller plugin spawned three times is three
+labels sharing one `from:`. Phase 1's files are never touched, so re-running Phase 1 cannot
+silently break a `.rossystem`'s references.
+
+- Follows `TimerAction` and `GroupAction`, resolves `var = Node(...)` assignments, and emits
+  **only** nodes reachable from `LaunchDescription([...])`, in that list's order (`RM040`
+  deliberately does not fire on a `.rossystem` `nodes:` block, so sorting it would silently
+  discard the bring-up sequence the order encodes).
+- Understands the ros2_control spawner idiom — `package="controller_manager",
+  executable="spawner", arguments=["left_arm_controller"]` — reading the implementation package
+  from `controllers.yaml`'s `controller_manager: ros__parameters: <name>: type:`. The controllers
+  file is located by resolving the launch file's own `controllers_file` argument through
+  `DeclareLaunchArgument` → `PathJoinSubstitution` → `FindPackageShare`, or given with
+  `--controllers-file`.
+- Resolves same-file `LaunchConfiguration("x")` one hop to its own `DeclareLaunchArgument`
+  default and **discloses it** on the value line as overridable on the command line. Launch
+  argument defaults are always *strings*, so values are converted against the `.ros2`'s declared
+  type — `"false"` under `type: Boolean` becomes `false`, never `true` by truthiness.
+- Emits a parameter override only when the target `.ros2` actually declares that parameter,
+  since `"artifact::param"` has to resolve. Otherwise it is flagged, not emitted.
+- **Never inlines a robot description.** The guard is on the parameter *name*, not on
+  `Command(...)` happening to be non-literal, so a future smarter resolver cannot start inlining
+  URDF (SKILL.md "When not to use").
+- A node resolving to neither a `--models` file nor `assets/node_index.json` is **skipped with a
+  `# FLAG`** rather than emitted with a dangling `from:` — an unresolved reference is a
+  linking-layer ERROR that stops the whole file loading, so one missing node beats a file that
+  will not open. A catalogue entry found under a different package name than the launch file
+  used (`moveit_ros_move_group` vs the catalogue's `move_group`) is emitted *with* a flag saying
+  so, never substituted silently.
+
+**`connections:` is never emitted.** SKILL.md hard rule 4, and `MatchPortMsgs` compares types by
+object identity. Candidate pairs (same interface name, same type string, legal direction,
+self-loops excluded) are computed, printed and written to the `--json` record for a human or an
+LLM to accept one at a time.
+
+Exit status is non-zero when anything was flagged — a partial model is a result, not a success.
 
 ---
 
