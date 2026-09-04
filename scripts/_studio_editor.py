@@ -298,9 +298,20 @@ EDITOR_TEMPLATE = r'''<!doctype html>
   .radio label{display:flex;align-items:center;gap:.3rem;cursor:pointer}
   .iedit{display:flex;align-items:center;gap:.4rem;font-size:.74rem;padding:.28rem .35rem;border:1px solid var(--rule-soft);border-radius:5px;margin-bottom:.3rem;background:var(--surface-2)}
   .iedit .kd{cursor:pointer;width:2.2em;text-align:center;border-radius:3px;color:#fff;font-family:var(--mono);font-size:.56rem;font-weight:700;text-transform:uppercase;padding:.1em 0}
+  /* a <select> carrying the same .kd class as the read-only badge, so an editable kind looks
+     IDENTICAL to a locked one -- appearance:none strips the native chrome a plain <span> never had. */
+  select.kd{appearance:none;-webkit-appearance:none;-moz-appearance:none;border:none;align-self:flex-start}
+  select.kd:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
   .iedit .grow{flex:1;min-width:0}
   .iedit .inm2{font-weight:600}
   .iedit .ity2{font-family:var(--mono);font-size:.62rem;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* the row IS the editor: same field an existing interface/parameter is edited through is what
+     a brand-new one (blank, from "+ interface") first appears as -- no separate add-form. */
+  .iedit .iname,.iedit .itype{display:block;width:100%;font-family:inherit;font-size:.78rem;font-weight:600;
+    padding:.12rem .3rem;border:1px solid var(--rule);border-radius:3px;background:var(--surface);color:var(--ink);margin-bottom:.15rem}
+  .iedit .itype{font-family:var(--mono);font-size:.66rem;font-weight:400}
+  .iedit .ity2.deriv{margin-bottom:.15rem;display:block}
+  .addifacebtn,.addparambtn{width:100%}
   .iedit .del{cursor:pointer;color:var(--ink-3);font-weight:700}
   .iedit .del:hover{color:var(--dead)}
   .iedit .lblrow{display:flex;align-items:center;gap:.35rem;margin-top:.2rem}
@@ -611,10 +622,11 @@ var DATA = /*__DATA__*/null;
   var TYPES=DATA.types||[], TYPESET={}; TYPES.forEach(function(t){TYPESET[t]=1;});
   // Recently-picked message types, most-recent-first, surfaced by the typeahead's empty-query
   // state (see makeTypeahead's opts.getMru). Recorded where a type actually ENTERS the model
-  // -- ni_add's handler and inlineEdit's commit callback, both below -- not inside the
-  // typeahead's own pick(): that fires for a suggestion the user clicked or arrowed to and then
-  // changed their mind about (browsing, not choosing), and it never fires at all for someone
-  // who types a full type and tabs away, which would make the fastest users invisible to it.
+  // -- an interface row's [data-itype] blur handler and inlineEdit's commit callback, both
+  // below -- not inside the typeahead's own pick(): that fires for a suggestion the user
+  // clicked or arrowed to and then changed their mind about (browsing, not choosing), and it
+  // never fires at all for someone who types a full type and tabs away, which would make the
+  // fastest users invisible to it.
   var RECENT_TYPES_KEY="rosStudio.recentTypes";
   function loadRecentTypes(){
     try{
@@ -2284,11 +2296,12 @@ var DATA = /*__DATA__*/null;
       pickActive:function(){ if(activeIdx>=0&&items[activeIdx]){ pick(items[activeIdx]); return true; } return false; }
     };
   }
-  // Wires a typeahead onto a PERSISTENT input (the add-interface form, a .ros field type box) --
-  // as opposed to inlineEdit's transient one, below, which owns the input's whole lifecycle.
+  // Wires a typeahead onto a PERSISTENT input (an interface row's own type field, a .ros field
+  // type box) -- as opposed to inlineEdit's transient one, below, which owns the input's whole
+  // lifecycle.
   function wireTypeahead(inputEl,candidates){
     // picking dispatches a real "input" event so any OTHER listener already on this element
-    // (ni_type's own resolve-status hint, at its call site below) still fires -- but that event
+    // (the row's own resolve-status hint, wired at its call site) still fires -- but that event
     // would otherwise also reach the "input" listener two lines down and immediately reopen the
     // box it was just closed by. suppressNext eats exactly that one echo.
     var suppressNext=false;
@@ -3195,8 +3208,25 @@ var DATA = /*__DATA__*/null;
     var ifBody='';
     for(var j=0;j<n.ifaces.length;j++){var f=n.ifaces[j];
       var conn=ifaceConnected(n,f);
-      ifBody+='<div class="iedit'+(f.orphan?" orphan":"")+'" data-i="'+f.id+'"><span class="kd '+f.kind+'" title="'+KIND_LABEL[f.kind]+'">'+f.kind+'</span>'
-        +'<span class="grow"><span class="inm2">'+esc(f.name)+'</span><br><span class="ity2">'+esc(f.type||"—")+' · "'+esc(n.artifact||"")+'::'+esc(f.name)+'"</span>'
+      // Kind is editable only while nothing depends on it yet: changing it out from under a
+      // real connection would need to unwire that connection first, so the badge stays a
+      // locked, static label the moment one exists -- same as it always has for a catalogue
+      // node's interfaces, whose kind belongs to the vendored file, not this one.
+      var kindEditable=!cat&&!conn;
+      ifBody+='<div class="iedit'+(f.orphan?" orphan":"")+'" data-i="'+f.id+'">'
+        +(kindEditable
+          ?'<select class="kd '+f.kind+'" data-kind="'+f.id+'" title="interface kind">'
+            +KINDS.map(function(k){return '<option value="'+k+'"'+(k===f.kind?" selected":"")+'>'+k+'</option>';}).join("")+'</select>'
+          :'<span class="kd '+f.kind+'" title="'+KIND_LABEL[f.kind]+(conn?" — connected, kind is locked":"")+'">'+f.kind+'</span>')
+        +'<span class="grow">'
+        +(cat
+          // a catalogue artifact's names are its own -- this mirrors the same restriction the
+          // canvas's inline editor already enforces (wireInline: "n.backing!=='hand'" returns).
+          ?'<span class="inm2">'+esc(f.name)+'</span><br><span class="ity2">'+esc(f.type||"—")+' · "'+esc(n.artifact||"")+'::'+esc(f.name)+'"</span>'
+          :'<input class="iname" data-undo="1" data-iname="'+f.id+'" value="'+esc(f.name)+'" placeholder="interface name">'
+            +'<input class="itype" data-undo="1" data-itype="'+f.id+'" value="'+esc(f.type||"")+'" placeholder="type e.g. std_msgs/msg/String" autocomplete="off">'
+            +'<div class="typestate" id="its_'+f.id+'"></div>'
+            +'<span class="ity2 deriv">"'+esc(n.artifact||"")+'::'+esc(f.name)+'"</span>')
         +'<span class="lblrow"><input class="ilbl" data-undo="1" data-lbl="'+f.id+'" value="'+esc(f.label||"")+'" placeholder="'+esc(f.name)+'" title="exposure label — the key written into the .rossystem. Blank derives it from the interface name.">'
         +'<label class="expchk" title="'+(conn?"connected — always exposed":"write this interface into the .rossystem even with nothing wired to it")+'">'
         +'<input type="checkbox" data-exp="'+f.id+'"'+((f.exposed||conn)?" checked":"")+(conn?" disabled":"")+'>expose</label>'
@@ -3206,11 +3236,10 @@ var DATA = /*__DATA__*/null;
         +'<span class="del" data-del="'+f.id+'">✕</span></div>'
         +qosPanel(f)+cmtPanel(f,"iface","i:"+f.id);
     }
-    ifBody+='<div class="addform"><div class="kseg" id="kseg">'+KINDS.map(function(k){return '<button data-k="'+k+'" class="'+(k===addKind?"on":"")+'">'+k+'</button>';}).join("")+'</div>'
-      +'<input id="ni_name" placeholder="interface name (quoted for you)">'
-      +'<input id="ni_type" placeholder="type e.g. std_msgs/msg/String" autocomplete="off">'
-      +'<div class="typestate" id="ni_ts"></div>'
-      +'<button class="minibtn" id="ni_add">+ add interface</button></div>';
+    // A blank interface appears the instant this is clicked -- no separate form to fill in
+    // first and then commit; the row IS the form, and it is the same row an already-existing
+    // interface edits through. Nothing here writes a name or type until the author does.
+    if(!cat) ifBody+='<button class="minibtn addifacebtn" id="addIface">+ interface</button>';
     ih+=sec("node/interfaces","interfaces",ifBody,String(n.ifaces.length));
     // Two halves, shown as two lines, because they are two grammar slots and treating them as
     // one is what deleted every override on round-trip:
@@ -3220,10 +3249,18 @@ var DATA = /*__DATA__*/null;
     for(var p=0;p<n.params.length;p++){var pp=n.params[p];
       var pt=String(pp.ptype||"").trim()||inferPtype(pp.sysValue!=null?pp.sysValue:pp.value);
       pmBody+='<div class="iedit'+(pp.orphan?" orphan":"")+'" data-p="'+pp.id+'">'
-        +'<span class="kd" style="background:var(--k-param)" title="'+esc(pt)+'">'+esc(pt.slice(0,3))+'</span>'
-        +'<span class="grow"><span class="inm2">'+esc(pp.name)+'</span> '
-        +'<span class="ity2">'+esc(pt)+(pp.value==null||pp.value===""?"":" default "+esc(String(pp.value)))
-        +' · "'+esc(n.artifact||"")+'::'+esc(pp.name)+'"</span>'
+        +(cat
+          ?'<span class="kd" style="background:var(--k-param)" title="'+esc(pt)+'">'+esc(pt.slice(0,3))+'</span>'
+          :'<select class="kd ptypesel" data-ptype="'+pp.id+'" style="background:var(--k-param)" title="parameter type">'
+            +PTYPES.map(function(o){return '<option value="'+o+'"'+(o===pt?" selected":"")+'>'+o+'</option>';}).join("")+'</select>')
+        +'<span class="grow">'
+        +(cat
+          // a catalogue artifact's declared parameters are its own -- same restriction as its
+          // interfaces, above.
+          ?'<span class="inm2">'+esc(pp.name)+'</span> <span class="ity2">'+esc(pt)+(pp.value==null||pp.value===""?"":" default "+esc(String(pp.value)))+' · "'+esc(n.artifact||"")+'::'+esc(pp.name)+'"</span>'
+          :'<input class="iname" data-undo="1" data-pname="'+pp.id+'" value="'+esc(pp.name)+'" placeholder="parameter name">'
+            +'<input class="itype" data-undo="1" data-pval="'+pp.id+'" value="'+esc(pp.value==null?"":String(pp.value))+'" placeholder="default value">'
+            +'<span class="ity2 deriv">"'+esc(n.artifact||"")+'::'+esc(pp.name)+'"</span>')
         +(pp.orphan?'<br><span class="hint w">the backing artifact declares no such parameter — '
           +'the arrow target will not resolve. Fix the name, or drop the exposure.</span>':"")
         +'<span class="lblrow">'
@@ -3235,10 +3272,7 @@ var DATA = /*__DATA__*/null;
         +'</span></span>'
         +'<span class="del" data-delp="'+pp.id+'">✕</span></div>'+cmtPanel(pp,"param","p:"+pp.id);
     }
-    pmBody+='<div class="addform"><input id="np_name" placeholder="param name">'
-      +'<select id="np_type">'+PTYPES.map(function(o){return '<option>'+o+'</option>';}).join("")+'</select>'
-      +'<input id="np_val" placeholder="value (typed-safe: no True/int traps)">'
-      +'<button class="minibtn" id="np_add">+ add parameter</button></div>';
+    if(!cat) pmBody+='<button class="minibtn addparambtn" id="addParam">+ parameter</button>';
     ih+=sec("node/parameters","parameters",pmBody,String(n.params.length));
     // the node's own comments, always open by default: a leading block is the one an author
     // reaches for most and hiding it behind a chip would keep it out of sight in exactly the
@@ -3733,8 +3767,8 @@ var DATA = /*__DATA__*/null;
       pushUndo();
       f.exposed=x.checked; render();fillInspector();};});
     // The .rossystem half of a parameter. Editing the label or the override does NOT touch the
-    // artifact's declared type or default -- those are the .ros2 half and are edited (for a
-    // hand-backed node) through the add form.
+    // artifact's declared type or default -- those are the .ros2 half, edited below through
+    // data-pname/data-pval/data-ptype directly on the row (for a hand-backed node).
     function paramById(id){
       for(var i=0;i<(n.params||[]).length;i++) if(n.params[i].id===id) return n.params[i];
       return null;
@@ -3761,45 +3795,91 @@ var DATA = /*__DATA__*/null;
       // incomplete block.
       if(pp.exposed&&(pp.sysValue==null||pp.sysValue==="")) pp.sysValue=pp.value;
       render();fillInspector();};});
-    var kseg=document.getElementById("kseg");
-    if(kseg) kseg.querySelectorAll("button").forEach(function(b){b.onclick=function(){addKind=b.dataset.k;kseg.querySelectorAll("button").forEach(function(x){x.classList.remove("on");});b.classList.add("on");};});
-    var tyIn=document.getElementById("ni_type"), ts=document.getElementById("ni_ts");
-    if(tyIn) wireTypeahead(tyIn,TYPES);
-    if(tyIn) tyIn.oninput=function(){
-      var v=tyIn.value.trim(), pk=v.split("/")[0];
-      if(!v){ts.textContent="";ts.className="typestate";}
-      else if(TYPESET[v]){ts.textContent="✓ resolves in the type catalogue";ts.className="typestate ok";}
-      else if(pk===n.pkg){ts.textContent="self-referencing — a companion .ros will be generated";ts.className="typestate warn";}
-      else {ts.textContent="not in catalogue — you will need to define or vendor this type";ts.className="typestate warn";}
-    };
-    var add=document.getElementById("ni_add");
-    if(add) add.onclick=function(){
-      var nameEl=document.getElementById("ni_name"), nm=nameEl.value.trim();
-      if(!nm){
-        // silently doing nothing here reads exactly like the type-picker bug this sits next to:
-        // "I clicked add and nothing happened." Send focus to the field that's actually missing
-        // input, with a visible flash, so it's a required-field cue instead of a dead button.
-        nameEl.focus(); flashEl(nameEl,"e");
-        return;
+    // ---- interface name/type/kind, edited directly on the row (hand-authored nodes only) ----
+    inspector.querySelectorAll("[data-iname]").forEach(function(x){x.oninput=function(){
+      var f=ifaceById(n,x.dataset.iname); if(!f) return;
+      pushUndo("iname:"+f.id);
+      f.name=x.value;    // blank mid-edit is fine -- the instant checks flag it, same as any
+      render();          // other required field; NOT fillInspector() here, or the caret is lost
+    };});
+    inspector.querySelectorAll("[data-itype]").forEach(function(x){
+      wireTypeahead(x,TYPES);
+      var tsEl=document.getElementById("its_"+x.dataset.itype);
+      function updateTypeHint(){
+        var v=x.value.trim(), pk=v.split("/")[0];
+        if(!tsEl) return;
+        if(!v){tsEl.textContent="";tsEl.className="typestate";}
+        else if(TYPESET[v]){tsEl.textContent="✓ resolves in the type catalogue";tsEl.className="typestate ok";}
+        else if(pk===n.pkg){tsEl.textContent="self-referencing — a companion .ros will be generated";tsEl.className="typestate warn";}
+        else {tsEl.textContent="not in catalogue — you will need to define or vendor this type";tsEl.className="typestate warn";}
       }
+      updateTypeHint();
+      x.addEventListener("input",function(){
+        var f=ifaceById(n,x.dataset.itype); if(!f) return;
+        pushUndo("itype:"+f.id);
+        f.type=x.value.trim()||null;
+        updateTypeHint();
+        render();
+      });
+      // recorded on blur, not per keystroke: a partial string mid-type is browsing, not a
+      // choice, and recordRecentType already only keeps what actually resolves in TYPESET.
+      x.addEventListener("blur",function(){ recordRecentType(x.value.trim()); });
+    });
+    inspector.querySelectorAll("[data-kind]").forEach(function(x){x.onchange=function(){
+      var f=ifaceById(n,x.dataset.kind); if(!f) return;
       pushUndo();
-      var tyVal=document.getElementById("ni_type").value.trim();
-      recordRecentType(tyVal);
-      // a hand-added interface is exposed on sight: the author typed it in to model it, so it
-      // belongs in the .rossystem whether or not it is wired up yet.
-      n.ifaces.push({id:nid(),name:nm,kind:addKind,type:tyVal||null,qos:null,label:null,exposed:true});
-      render();fillInspector();};
-    var pAdd=document.getElementById("np_add");
-    if(pAdd) pAdd.onclick=function(){
-      var nm=document.getElementById("np_name").value.trim(); if(!nm) return;
+      f.kind=x.value;
+      addKind=x.value;    // remembered as the default kind for the NEXT "+ interface"
+      render();fillInspector();
+    };});
+    var addIface=document.getElementById("addIface");
+    if(addIface) addIface.onclick=function(){
       pushUndo();
-      var t=document.getElementById("np_type").value, raw=document.getElementById("np_val").value.trim(), val=raw;
-      if(t==="Boolean") val=/^(t|1|y|true)/i.test(raw)?"true":"false";
-      else if(t==="Integer") val=String(parseInt(raw||"0",10)||0);
-      else if(t==="Double") val=(raw.indexOf(".")>=0?raw:String((parseFloat(raw||"0")||0).toFixed(1)));
-      n.params.push({id:nid(),name:nm,ptype:t,value:val,
-                     label:null,exposed:false,sysValue:null});
-      render();fillInspector();};
+      var newId=nid();
+      // blank on purpose: the row IS the form now, so there is nothing to validate here --
+      // the instant checks flag a nameless/typeless interface exactly like they would if it
+      // had been typed in and then cleared.
+      n.ifaces.push({id:newId,name:"",kind:addKind||"pub",type:null,qos:null,label:null,exposed:true});
+      render();fillInspector();
+      var el=inspector.querySelector('[data-iname="'+newId+'"]');
+      if(el) el.focus();
+    };
+    // ---- parameter name/default/type, edited directly on the row (hand-authored nodes only) ----
+    inspector.querySelectorAll("[data-pname]").forEach(function(x){x.oninput=function(){
+      var pp=paramById(x.dataset.pname); if(!pp) return;
+      pushUndo("pname:"+pp.id);
+      pp.name=x.value; render();
+    };});
+    inspector.querySelectorAll("[data-pval]").forEach(function(x){
+      x.oninput=function(){
+        var pp=paramById(x.dataset.pval); if(!pp) return;
+        pushUndo("pval:"+pp.id);
+        pp.value=x.value;    // raw while typing -- coercing every keystroke would fight "0.1"
+        render();            // as it's being typed, one character at a time
+      };
+      x.addEventListener("blur",function(){
+        var pp=paramById(x.dataset.pval); if(!pp) return;
+        var t=String(pp.ptype||"").trim()||inferPtype(pp.value);
+        var coerced=coerceParamValue(t,String(pp.value==null?"":pp.value).trim());
+        if(coerced!==pp.value){ pushUndo(); pp.value=coerced; x.value=coerced; render(); }
+      });
+    });
+    inspector.querySelectorAll("[data-ptype]").forEach(function(x){x.onchange=function(){
+      var pp=paramById(x.dataset.ptype); if(!pp) return;
+      pushUndo();
+      pp.ptype=x.value;
+      pp.value=coerceParamValue(x.value,String(pp.value==null?"":pp.value).trim());
+      render();fillInspector();
+    };});
+    var addParam=document.getElementById("addParam");
+    if(addParam) addParam.onclick=function(){
+      pushUndo();
+      var newId=nid();
+      n.params.push({id:newId,name:"",ptype:"String",value:"",label:null,exposed:false,sysValue:null});
+      render();fillInspector();
+      var el=inspector.querySelector('[data-pname="'+newId+'"]');
+      if(el) el.focus();
+    };
     wireComments();
     var del=document.getElementById("delNode");
     if(del) del.onclick=function(){
@@ -4641,6 +4721,16 @@ var DATA = /*__DATA__*/null;
     if(raw===String(pyFloat(raw))||/^[+-]?(\d+\.\d*|\.\d+)([eE][+-]?\d+)?$/.test(raw)
        ||/^[+-]?\d+[eE][+-]?\d+$/.test(raw)) return "Double";
     return "String";
+  }
+  // Normalizes a typed-in default to what its ptype actually needs -- "the True/int traps" the
+  // old add-only form's placeholder warned about (value: True under type: Boolean parses as a
+  // STRING; value: 10 under type: Double parses as an INTEGER). Applied on blur, not on every
+  // keystroke, so typing "0.1" doesn't fight a half-finished "0." along the way.
+  function coerceParamValue(t,raw){
+    if(t==="Boolean") return /^(t|1|y|true)/i.test(raw)?"true":"false";
+    if(t==="Integer") return String(parseInt(raw||"0",10)||0);
+    if(t==="Double") return raw.indexOf(".")>=0?raw:String((parseFloat(raw||"0")||0).toFixed(1));
+    return raw;
   }
   // MIRRORS ros_studio._art_param_decl -- ONE definition of the .ros2 declaration half, used by
   // both genRos2 and projectFacts so the emitter and its prediction cannot drift.
