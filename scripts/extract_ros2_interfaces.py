@@ -1328,7 +1328,13 @@ def _cpp_record_iface(pkg, target, block, targs, name_arg, qos, src, path, line,
         return False
     ref = cpp_type_ref(targs[0], aliases)
     if name_arg is None:
-        pkg.flags.append(Flag(block, "call has no name argument to read", path, line, snippet))
+        # Either the call really has no name argument, or the one it has is a variable or a
+        # struct member rather than a string literal. The old wording asserted the first, which
+        # sent a reader looking for the wrong thing on `create_client<T>(node, cfg.action_name)`.
+        pkg.flags.append(Flag(
+            block, "no name argument this parser can read: the call either has none, or passes "
+                   "a variable/member rather than a string literal; resolve by hand",
+            path, line, snippet))
         return False
     name = cpp_string_literal(src, name_arg)
     if name is None:

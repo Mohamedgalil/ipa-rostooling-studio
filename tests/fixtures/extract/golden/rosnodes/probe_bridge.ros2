@@ -1,0 +1,55 @@
+# GENERATED DRAFT -- scripts/extract_ros2_interfaces.py
+# Source package: probe_bridge
+#   package.xml declares: probe_bridge  (build_type: ament_cmake)
+#   parsed as: cpp
+#
+# Only declarations whose name AND type are literal in the source are
+# emitted. Everything the extractor could not read literally is listed
+# below as a FLAG for manual or LLM review -- it is NOT missing, it is
+# deliberately not guessed.
+#
+# NOTE: the parameters below come from generate_parameter_library, not from declare_parameter()
+# calls -- read from src/probe_bridge_parameters.yaml. Their values are that file's
+# default_value entries; deployment overrides (a controllers.yaml, a launch file) are NOT here
+# and belong in the .rossystem.
+# EXTRACTOR-FLAGS: 2
+#
+# FLAG publishers [probe_bridge/src/probe_bridge.cpp:22]
+#   name is built at runtime (string concatenation, get_name(), or a variable), not a literal;
+#   resolve by hand. Built from 'side', which 2 construction site(s) of ProbeSide visible in
+#   this package pass as: 'left', 'right'. CANDIDATES (evidence, NOT emitted -- this parser
+#   cannot see construction sites outside the package, so it cannot claim these are all of
+#   them): /probe/left/state, /probe/right/state
+#   source: node->create_publisher<std_msgs::msg::Float32MultiArray>( "/probe/" + side +
+#   "/state", 1)
+# FLAG subscribers [probe_bridge/src/probe_bridge.cpp:25]
+#   name is built at runtime (string concatenation, get_name(), or a variable), not a literal;
+#   resolve by hand. Built from 'side', which 2 construction site(s) of ProbeSide visible in
+#   this package pass as: 'left', 'right'. CANDIDATES (evidence, NOT emitted -- this parser
+#   cannot see construction sites outside the package, so it cannot claim these are all of
+#   them): /probe/left/cmd, /probe/right/cmd
+#   source: node->create_subscription<std_msgs::msg::Float32MultiArray>( "/probe/" + side +
+#   "/cmd", 10, [](const std_msgs::msg::Float32MultiArray &) {})
+probe_bridge:
+  artifacts:
+    probe_bridge_node:
+      node: probe_bridge_main
+      publishers:
+        '/probe/status':
+          type: 'std_msgs/msg/String' # assets/roscommonobjects/basic_msgs/ros_core.ros
+      subscribers:
+        '/probe/reset':
+          type: 'std_msgs/msg/String' # assets/roscommonobjects/basic_msgs/ros_core.ros
+      parameters:
+        'enable_probe':
+          type: Boolean
+          default: false
+        'frames':
+          type: Array[String]
+          default: ["base_link"]
+        'interface':
+          type: String
+          default: "eth0"
+        'rate_hz':
+          type: Double
+          default: 20.0

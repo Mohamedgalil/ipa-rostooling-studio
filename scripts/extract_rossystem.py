@@ -235,11 +235,23 @@ class ModelIndex(object):
             return None, None, None
         return parsed, "catalogue:" + entry["file"], note
 
-    def artifact_for_node(self, model, node_name=None):
-        """Pick the artifact to reference. A .ros2 usually has exactly one."""
+    def artifact_for_node(self, model, node_name=None, executable=None):
+        """Pick the artifact to reference. A .ros2 usually has exactly one.
+
+        Order matters: the node name is the strongest evidence, but a launch entry often has
+        no name= at all, and then the executable is the next-strongest -- SKILL.md rule 2a says
+        the artifact IS the executable to run, so `executable="demo_node"` naming the artifact
+        `demo_node` is a direct hit, not an inference. Without that step a package with more
+        than one artifact and no name= resolved to nothing and the node was dropped from the
+        system entirely.
+        """
         if node_name:
             for art, data in model.artifacts.items():
                 if data["node"] == node_name:
+                    return art, data
+        if executable:
+            for art, data in model.artifacts.items():
+                if art == executable:
                     return art, data
         if len(model.artifacts) == 1:
             art = next(iter(model.artifacts))
@@ -728,9 +740,9 @@ def _emit_node(sys_draft, spec, lf, index, workspace_pkgs, ctrl_types, ctrl_para
                     "loading" % (label_base, package), lf.path, line))
         return
 
-    artifact, data = index.artifact_for_node(model, node_name)
-    if artifact is None:
-        artifact, data = index.artifact_for_node(model, None)
+    # One call: artifact_for_node already falls through node name -> executable -> the
+    # sole artifact, so the old second call with node_name=None could never add anything.
+    artifact, data = index.artifact_for_node(model, node_name, executable)
     if artifact is None:
         sys_draft.flags.append(Flag(
             "node", "package '%s' has %d artifacts and none matches node name %r, so the "

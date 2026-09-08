@@ -1,0 +1,32 @@
+# GENERATED DRAFT -- scripts/extract_ros2_interfaces.py
+# Source package: probe_pilot
+#   package.xml declares: probe_pilot  (build_type: ament_python)
+#   parsed as: python
+#
+# Only declarations whose name AND type are literal in the source are
+# emitted. Everything the extractor could not read literally is listed
+# below as a FLAG for manual or LLM review -- it is NOT missing, it is
+# deliberately not guessed.
+# EXTRACTOR-FLAGS: 0
+#
+# (none -- every ROS call found in this package was literal.)
+probe_pilot:
+  artifacts:
+    probe_pilot_node:
+      node: probe_pilot
+      publishers:
+        '/probe/enable':
+          type: 'std_msgs/msg/Bool' # assets/roscommonobjects/basic_msgs/ros_core.ros
+      subscribers:
+        '/probe/status':
+          type: 'std_msgs/msg/String' # assets/roscommonobjects/basic_msgs/ros_core.ros
+      parameters:
+        'enabled':
+          type: Boolean
+          default: false
+        'label':
+          type: String
+          default: "pilot"
+        'period_sec':
+          type: Double
+          default: 0.5
