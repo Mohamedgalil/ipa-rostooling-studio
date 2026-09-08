@@ -1417,13 +1417,18 @@ def emit_package(pkg, resolver, report_root, emit_qos):
     for note in pkg.notes:
         lines.append("#")
         lines.append(wrap_comment(note))
+    # A durable record of how many items this extractor could not read. Resolving one
+    # deletes its comment, so the live comment count alone cannot distinguish a finished
+    # model from one whose flags were rewritten away. This line does not change. RM097
+    # reports it alongside the live count.
+    lines.append("# EXTRACTOR-FLAGS: %d" % len(pkg.flags))
     if pkg.flags:
         lines.append("#")
         for flag in sorted(pkg.flags, key=lambda f: (f.file, f.line)):
             lines.append(flag.as_comment(report_root))
     else:
         lines.append("#")
-        lines.append("# FLAGS: none -- every ROS call found in this package was literal.")
+        lines.append("# (none -- every ROS call found in this package was literal.)")
 
     safe_pkg = sanitize_package_name(pkg.name)
     if safe_pkg != pkg.name:

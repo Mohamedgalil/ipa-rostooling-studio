@@ -50,6 +50,11 @@ python ${CLAUDE_PLUGIN_ROOT}/scripts/extract_rossystem.py <launch-file> \
     --models <project>/rosnodes -o <project>/<system>.rossystem --json <project>/system_record.json
 ```
 
+`${CLAUDE_PLUGIN_ROOT}` is set when the plugin is installed; working inside the plugin repo it is
+not, and the paths are simply `scripts/extract_ros2_interfaces.py` and
+`scripts/extract_rossystem.py`. If the first invocation fails with "No such file or directory",
+that is which case you are in — it is not a reason to skip the step.
+
 `scripts/README.md` documents what each reads and emits; it is the authority, so do not restate
 it from memory. The short version: everything that is literal in the source, already cited.
 
@@ -64,6 +69,11 @@ not finished.** Every flag is one §8e decision. `rosmodel_lint.py` counts them 
 (WARNING) so this does not rest on you remembering self-check 18 — but note that a flagged file
 is otherwise clean, and the real oracle ACCEPTS it, so RM097 is the *only* signal that anything
 is outstanding.
+
+**Delete a flag only when you have actually put the thing it describes into the model.** If you
+cannot resolve it, keep the marker (`# FLAG`, or reworded to `# OPEN`/`# UNRESOLVED`) and say so
+in your report. Turning an unresolved flag into a prose note is the one way to make an unfinished
+model look finished to every check there is.
 
 Where a name is built from literals plus one identifier, the flag already carries the evidence:
 
@@ -789,12 +799,16 @@ Run every line against the emitted file:
     (case 3). The "Assumptions & Inferences" table is present in the report — with the explicit
     "none" line when nothing needed it — and does not replace check 12's prose report of drops and
     synthesis.
-18. **No `# FLAG` comment survives into a finished model.** Every one the extractors emitted is
-    either resolved in place under §8e (cases 1/2, with its citation) or reported to the caller as
-    an open question (case 3) — and in both events named in the report. A file that still carries a
-    flag lints clean and validates clean while being unfinished, which is why this is checked
-    rather than assumed. `# DROPPED`/`# NOTE`/`# CAUTION` lines are the scripts' disclosures of
-    things with no DSL slot, not a worklist: leave them in place.
+18. **Every `# FLAG` is accounted for, and deleting one is not the same as answering it.**
+    Delete a flag comment **only** when the thing it describes is now actually in the model
+    (§8e case 1/2, with its citation). If it stays unresolved (case 3), **leave the marker in
+    place** — rewrite the text if you like, but keep it starting `# FLAG`, `# OPEN` or
+    `# UNRESOLVED` — and name it in the report. Rewording a flag into prose makes a model with
+    known holes look finished, and it is the one failure mode nothing else catches: such a file
+    lints clean and the real oracle ACCEPTS it. The `# EXTRACTOR-FLAGS: N` line the scripts write
+    is a record of how many there were; do not edit it. `RM097` reports it against how many are
+    still open. `# DROPPED`/`# NOTE`/`# CAUTION` are the scripts' disclosures of things the DSL
+    cannot express, not a worklist: leave them in place.
 19. **The extractors were run**, per "Converting real source", or the report names which of the two
     exemptions applied (no source on disk / missing dependencies, saying which packages were
     therefore read by hand). Anything the scripts emitted is unchanged unless a §8e resolution
@@ -878,7 +892,13 @@ Run every line against the emitted file:
   `compare` exits 1 on any semantic difference, including the deviations this skill *mandates*
   (an added `fromFile:`, a renamed duplicate node label). Read the diff; a non-zero exit is not by
   itself a failure.
-- **Real oracle — available, use it.** Java 21 is installed and
+- **Real oracle — PREREQUISITE: a Java 21 runtime.** The language-server jars are Java 21
+  bytecode; on Java 11 or 8 they fail with `UnsupportedClassVersionError` before validating
+  anything. Check with `java -version`, and if it is older, either put a JDK 21 on `PATH` or point
+  `ROSMODEL_JAVA` at one. **If no Java 21 is available, say so in your report and describe the
+  model as linter-checked only** — do not present it as oracle-validated. (An earlier revision of
+  this file asserted "Java 21 is installed" as a fact; that was true of one machine and is not a
+  property of the toolchain.) With that in place,
   `tests/oracle/ask_oracle.py` drives the actual RosTooling language servers over stdio:
 
   ```
@@ -888,6 +908,12 @@ Run every line against the emitted file:
 
   Put the file under test in a directory together with every `.ros` it depends on, and read the
   verdict. `ACCEPTED` with 0 errors is the only passing result.
+
+  **`ACCEPTED` is necessary, not sufficient.** A draft still carrying `# FLAG` comments is
+  ACCEPTED by the oracle and clean in the linter apart from `RM097` — every automated signal
+  says "done" while the model has known holes. **A model with a non-zero `RM097` is not
+  finished** unless every surviving flag is named in your report with the reason it stays
+  (§8e case 3). Do not read "0 errors" as a licence to hand it over; check `RM097` too.
 
   **The shipped `ros2` JAR registers `RosIdeSetup` and `BasicsIdeSetup` as well as `Ros2IdeSetup`,
   so it validates `.ros` files too** — not just `.ros2`. A `.rossystem` server has now been built

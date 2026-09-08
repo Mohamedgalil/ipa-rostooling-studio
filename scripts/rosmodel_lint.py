@@ -631,6 +631,12 @@ def is_quoted(node):
 # The linter
 # --------------------------------------------------------------------------------------
 
+# What counts as an extractor item still open. The scripts write `# FLAG`; the other two
+# are what real runs reworded them into. Matching all three means RM097's count survives a
+# rename, which is the whole point -- see the check itself for why.
+OPEN_MARKER_RE = re.compile(r"^#\s*(FLAG|OPEN|UNRESOLVED)\b")
+
+
 class Linter(object):
 
     def __init__(self, path, use_catalogue=True):
@@ -909,30 +915,48 @@ class Linter(object):
                            "indented, the same file is ACCEPTED with 0 errors."
                            % (len(self.lines) - idx))
 
-        # An unresolved `# FLAG` from scripts/extract_ros2_interfaces.py /
-        # extract_rossystem.py. Those scripts emit only what is literal in the source and turn
-        # every non-literal name, type or parameter into a flagged comment, so a draft that
-        # still carries one is a model with known holes -- and it lints clean and validates
-        # clean, which is exactly why a human or an agent can mistake it for finished.
-        # SKILL.md's "Converting real source" section makes each flag one §8e decision and
-        # self-check 18 requires none survive; this is the mechanical half of that gate.
+        # How much of the extractor's work is still outstanding.
         #
-        # WARNING, not ERROR: a freshly extracted draft is *supposed* to carry flags, and
-        # extract_ros2_interfaces.py exits non-zero on a lint ERROR, so an ERROR here would
-        # make every normal extraction look like a failure.
-        flagged = [idx for idx, line in enumerate(self.lines, start=1)
-                   if line.lstrip().startswith("# FLAG ")]
-        if flagged:
-            self.warn(flagged[0], "RM097",
-                      "%d unresolved '# FLAG' comment(s) from the extractor scripts "
-                      "(first at line %d)." % (len(flagged), flagged[0]),
-                      "Each flag is one name, type or parameter the extractor could not read "
-                      "literally, carrying its file:line and the source expression. Resolve "
-                      "each under SKILL.md §8e -- trace it (case 1, citing both lines), infer "
-                      "it from a citable basis (case 2), or ask and report it (case 3) -- and "
-                      "delete the comment. A model still carrying flags is a draft, not a "
-                      "deliverable. '# DROPPED'/'# NOTE'/'# CAUTION' lines are the scripts' "
-                      "disclosures of things with no DSL slot, not a worklist: leave them.")
+        # The scripts leave a `# FLAG` comment wherever they refused to guess. Counting
+        # those alone does not work: a reader who resolves some and rewrites the rest in
+        # their own words drives the count to zero, and the file then looks untouched by
+        # the extractor rather than finished. That happened in two of three trial runs,
+        # both acting in good faith.
+        #
+        # So the scripts also stamp `# EXTRACTOR-FLAGS: N` -- a fact about what was found,
+        # which nobody editing the model has a reason to alter. Reporting the stamp
+        # alongside the live count keeps the original number visible however the comments
+        # are reworded, which is the property that was lost. It does not make the count
+        # impossible to falsify; it makes it durable.
+        stamp = None
+        for line in self.lines[:60]:
+            if line.startswith("# EXTRACTOR-FLAGS:"):
+                digits = line.split(":", 1)[1].strip()
+                if digits.isdigit():
+                    stamp = int(digits)
+                break
+        open_flags = [idx for idx, line in enumerate(self.lines, start=1)
+                      if OPEN_MARKER_RE.match(line.lstrip())]
+
+        if open_flags:
+            found = ("; the extractor originally found %d" % stamp) if stamp is not None else ""
+            self.warn(open_flags[0], "RM097",
+                      "%d item(s) the extractor could not read are still open%s "
+                      "(first at line %d)." % (len(open_flags), found, open_flags[0]),
+                      "Each one is a name, type or parameter that is NOT in this model, "
+                      "carrying its file:line and the source expression. Resolve it under "
+                      "SKILL.md 8e -- trace it, infer it from a citable basis, or ask -- and "
+                      "delete the comment ONLY once the thing it describes is actually in "
+                      "the model. If it stays unresolved, leave the marker: rewording it "
+                      "away makes a model with known holes look finished. "
+                      "'# DROPPED'/'# NOTE'/'# CAUTION' are the scripts' disclosures of "
+                      "things the DSL cannot express, not a worklist: leave them.")
+        elif stamp:
+            self.info(1, "RM097",
+                      "All %d item(s) the extractor flagged are closed in this file." % stamp,
+                      "Nothing is outstanding here. This is recorded so a reader can tell a "
+                      "finished model from one the extractor never had anything to say "
+                      "about -- the two look identical once the comments are gone.")
 
     # -- YAML composition ---------------------------------------------------------------
 

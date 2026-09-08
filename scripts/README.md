@@ -5,9 +5,12 @@ Work item **E1**, CoreSense x Humanoid (Fraunhofer IPA).
 A standalone Python checker for RosTooling model files. It accepts **`.ros`, `.ros2` and
 `.rossystem`**.
 
-It is no longer the *only* feedback available — Java 21 is installed and `tests/oracle/ask_oracle.py`
-drives the real language servers for `.ros`, `.ros2` and (since a `.rossystem` server was built
-locally) `.rossystem` too. The linter's role is now to give **fast, single-file, offline** feedback
+It is no longer the *only* feedback available — `tests/oracle/ask_oracle.py` drives the real
+language servers for `.ros`, `.ros2` and (since a `.rossystem` server was built locally)
+`.rossystem` too. **That needs a Java 21 runtime**: the jars are Java 21 bytecode and fail with
+`UnsupportedClassVersionError` on anything older, so check `java -version` and set `ROSMODEL_JAVA`
+if the default is older. Where no Java 21 is available the linter is the only check, and output
+must be described as linter-checked rather than oracle-validated. The linter's role is now to give **fast, single-file, offline** feedback
 in the edit loop, and to cover the checks the oracle cannot make (house style, rossdl
 compatibility, provenance sentinels). Where the two disagree, **the oracle wins** — every ERROR in
 this table has been confirmed against it.
@@ -278,7 +281,7 @@ in `--hook` mode) for a workspace whose references are heavily project-local. Se
 | `RM091` | WARNING | A `subSystems:` entry doesn't resolve, itself declares another `subSystems:` (nesting risk), or resolves but exposes zero `interfaces:` on any node | `.rossystem` |
 | `RM092` | WARNING | A local node and a node reachable via `subSystems:` resolve the same `from:` under different labels — likely the same real node modelled twice | `.rossystem` |
 | `RM094` | ERROR | Full-line comment at column 0 inside an indented block | `AbstractIndentationTokenSource` closes every open block; oracle case `19-neg-col0-comment`: `missing EOF at ''` |
-| `RM097` | WARNING | Unresolved `# FLAG` comment left by `extract_ros2_interfaces.py` / `extract_rossystem.py` | SKILL.md "Converting real source" + §8e, self-check 18 |
+| `RM097` | WARNING (INFO when all closed) | Items the extractors could not read that are still open — counts `# FLAG`/`# OPEN`/`# UNRESOLVED`, and reports them against the `# EXTRACTOR-FLAGS: N` stamp the scripts write, so the original count survives any rewording | SKILL.md "Converting real source" + §8e, self-check 18 |
 | `RM093` | ERROR | `subSystems:` written as a bracket list `[...]` or as a `- item` block sequence — the grammar takes neither (settled 2026-08-14: oracle cases `17-subsystems-multi` / `18-neg-subsystems-dash`, `mismatched input '-' expecting RULE_END`). N entries are N bare lines | `.rossystem` |
 
 `RM081`/`RM084` are WARNING, not ERROR, for the same reason `RM076` is: a genuinely
@@ -574,7 +577,7 @@ conservative for that reason.
 ## Test evidence
 
 Everything below was **executed**. *Amended 2026-08-14:* the Java blocker referred to here is
-long resolved — Java 21 is installed, `tests/oracle/ask_oracle.py` drives the real language
+long resolved — given a Java 21 runtime, `tests/oracle/ask_oracle.py` drives the real language
 servers, and all 24 checked-in cases run on this machine (see the prerequisites table at the top
 of this file, and `tests/oracle/RESULTS.md`). Read the sentence below as "not run against the
 oracle *at the time these counts were taken*"; every ERROR in the rule table has since been

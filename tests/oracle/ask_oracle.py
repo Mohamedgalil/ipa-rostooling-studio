@@ -242,6 +242,39 @@ def run_case(case_dir: Path, verbose=False):
     return result
 
 
+def _results_path():
+    """Where to write the run's verdict.
+
+    Default is tests/oracle/results.json, but NOT when that file has uncommitted changes.
+    This script is the only writer of that path and it overwrites unconditionally, which
+    has silently destroyed a user's in-progress edits three separate times -- each writer
+    meaning no harm and each noticing only afterwards. Careful operators are not a control;
+    refusing to write over unsaved work is. Pass --results PATH to force a location.
+    """
+    for i, a in enumerate(sys.argv):
+        if a == "--results" and i + 1 < len(sys.argv):
+            return Path(sys.argv[i + 1])
+        if a.startswith("--results="):
+            return Path(a.split("=", 1)[1])
+
+    default = HERE / "results.json"
+    try:
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--", str(default)],
+            cwd=str(HERE), capture_output=True, text=True, timeout=15).stdout.strip()
+    except Exception:
+        dirty = ""                      # not a git checkout, or git unavailable
+    if not dirty:
+        return default
+
+    alt = default.with_name("results.local.json")
+    print(f"NOTE: {default.name} has uncommitted changes, so it was left alone.\n"
+          f"      This run's verdict went to {alt.name} instead.\n"
+          f"      Commit or stash that file, or pass --results, to write it directly.",
+          file=sys.stderr)
+    return alt
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -297,7 +330,7 @@ def main():
             print(f"     ... {len(r['diagnostics']) - 14} more")
         print()
 
-    out = HERE / "results.json"
+    out = _results_path()
     out.write_text(json.dumps(results, indent=2), encoding="utf-8")
     print(f"full results: {out}")
     return 0

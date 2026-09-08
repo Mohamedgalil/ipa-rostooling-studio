@@ -917,6 +917,8 @@ def emit(sys_draft, from_file, from_file_abs, launch_files, models_dir, candidat
             % ", ".join(catalogued)))
     for item in sorted(set(sys_draft.dropped)):
         lines.append(wrap_comment("DROPPED (no DSL slot): %s" % item))
+    # See extract_ros2_interfaces.py's emit_package for why this stamp exists.
+    lines.append("# EXTRACTOR-FLAGS: %d" % len(sys_draft.flags))
     for flag in sys_draft.flags:
         lines.append(flag.as_comment(None))
 
