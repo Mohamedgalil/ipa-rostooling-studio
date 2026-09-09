@@ -25,6 +25,14 @@ def generate_launch_description():
         output="both",
     )
 
+    # No name= here, and probe_dual has TWO artifacts: the only thing that can pick one is
+    # the executable, which IS the artifact (SKILL.md rule 2a).
+    alpha = Node(
+        package="probe_dual",
+        executable="probe_alpha",
+        output="both",
+    )
+
     # A node that resolves against the vendored catalogue rather than this fixture's own source.
     rsp = Node(
         package="robot_state_publisher",
@@ -38,6 +46,7 @@ def generate_launch_description():
             DeclareLaunchArgument("use_sim_time", default_value="false"),
             bridge,
             pilot,
+            alpha,
             rsp,
         ]
     )

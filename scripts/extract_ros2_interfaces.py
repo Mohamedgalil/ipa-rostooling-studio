@@ -160,6 +160,8 @@ class PackageDraft:
         self.build_type = build_type
         self.nodes = OrderedDict()       # node name -> NodeDraft
         self.fallback = None             # NodeDraft for calls with no node class
+        self.fallbacks = []              # that bucket, split per build target (see below)
+        self.target_node_names = {}      # build target (or None) -> literal node name
         self.flags = []
         self.notes = []
         self.languages = set()
@@ -918,6 +920,54 @@ def cpp_callee(src, call):
     return None, []
 
 
+# `rclcpp::Node::make_shared("x")` and friends. Only the qualifier matters: a user class
+# called `make_shared` on itself is not a node factory.
+NODE_FACTORY_TAILS = ("Node::make_shared", "Node::make_unique",
+                      "LifecycleNode::make_shared", "LifecycleNode::make_unique")
+
+
+def cpp_collect_free_node_names(src, root):
+    """Literal node names for a Node constructed OUTSIDE a class -- typically in main().
+
+    `class X : public rclcpp::Node` with `: Node("x")` is cpp_collect_node_classes' job.
+    This covers the other common shape, the one every MoveIt-style demo uses:
+
+        auto node = rclcpp::Node::make_shared("ssi_demo_node", options);
+        auto node = std::make_shared<rclcpp::Node>("ssi_demo_node", options);
+
+    There is no class to hang the name on, so it used to be ignored and the artifact fell
+    back to the package name -- which a .rossystem's `from:` then inherited. The name is a
+    plain string literal sitting in the source, so leaving it unread broke this script's
+    one promise: everything literal is emitted.
+
+    Returns the distinct literals found, sorted so a run is reproducible.
+    """
+    out = set()
+    stack = [root]
+    while stack:
+        cur = stack.pop()
+        stack.extend(cur.children)
+        if cur.type != "call_expression":
+            continue
+        fn = cur.child_by_field_name("function")
+        if fn is None:
+            continue
+        qualified = ts_text(src, fn).replace(" ", "")
+        hit = any(qualified.endswith(tail) for tail in NODE_FACTORY_TAILS)
+        if not hit:
+            # std::make_shared<rclcpp::Node>(...) -- the type is a template argument.
+            fname, targs = cpp_callee(src, cur)
+            if fname in ("make_shared", "make_unique") and targs:
+                hit = targs[0].replace(" ", "").split("::")[-1] in ("Node", "LifecycleNode")
+        if not hit:
+            continue
+        args = cpp_args(cur)
+        lit = cpp_string_literal(src, args[0]) if args else None
+        if lit:
+            out.add(lit)
+    return sorted(out)
+
+
 def cpp_call_namespace(src, call):
     """'rclcpp_action' for rclcpp_action::create_server<...>(...), else ''."""
     fn = call.child_by_field_name("function")
@@ -1236,6 +1286,24 @@ def extract_cpp(pkg, paths, parser, resolver, report_root):
                 "literal in the constructor; artifact falls back to the package name" % cls,
                 trees[0][0], 1))
 
+    # A node built in main() belongs to the BUILD TARGET whose source declares it, not to
+    # the package: one add_executable() is one executable with one main().
+    seen = OrderedDict()          # build target -> (set of literal names, a file to cite)
+    for path, src, tree in trees:
+        key = pkg.targets.get(os.path.abspath(path))
+        for lit in cpp_collect_free_node_names(src, tree.root_node):
+            seen.setdefault(key, (set(), path))[0].add(lit)
+    for key, (names, path) in seen.items():
+        if len(names) == 1:
+            pkg.target_node_names[key] = next(iter(names))
+        else:
+            pkg.flags.append(Flag(
+                "node-name",
+                "build target %s constructs rclcpp::Node with more than one literal name "
+                "(%s), so which one this artifact runs under is not decidable from the "
+                "source; the artifact keeps the package name"
+                % (key or "(none)", ", ".join(sorted(names))), path, 1))
+
     found = False
     for path, src, tree in trees:
         found |= _cpp_walk(pkg, path, src, tree, aliases, named, resolver, report_root,
@@ -1445,11 +1513,68 @@ def emit_package(pkg, resolver, report_root, emit_qos):
     lines.append("  artifacts:")
 
     nodes = [n for n in pkg.nodes.values() if n.interfaces or n.params]
-    if pkg.fallback is not None and (pkg.fallback.interfaces or pkg.fallback.params):
-        nodes.append(pkg.fallback)
+    nodes.extend(pkg.fallbacks)
     for node in sorted(nodes, key=lambda n: artifact_name(n, pkg.targets)):
         lines.extend(emit_node(node, resolver, report_root, emit_qos, pkg.targets))
     return "\n".join(lines) + "\n"
+
+
+def resolve_fallback_artifacts(pkg):
+    """Split the "no node class" bucket per BUILD TARGET, and name each from the source.
+
+    Declarations that sit in no node class -- a call in main(), or on an injected
+    get_node() handle -- were all collected in one bucket per package. Two things went
+    wrong with that:
+
+      * `add_executable()` names an executable, and three of them are three processes with
+        three separate sets of interfaces. One bucket produced one artifact asserting that
+        one executable serves all of them -- a FALSE claim, presented as fact, with no flag
+        on it. Real case: `demo_node` carrying interfaces read from `demo_node.cpp`,
+        `demo_node_pilz_ompl.cpp` and `demo_node_structured.cpp`, three different binaries.
+      * `rclcpp::Node::make_shared("ssi_demo_node")` gives that bucket a real node name, and
+        with one bucket per package there was nowhere to put a second one.
+
+    Split ONLY when the declarations really do come from two or more different build
+    targets. A package with one target, or with none the CMakeLists names, keeps exactly
+    the shape it had -- which is every package this pair of scripts was developed against.
+
+    Declarations from a file that belongs to no build target (a header, a
+    generate_parameter_library YAML whose CMake target is a *_parameters helper rather than
+    the library it feeds) stay with the single bucket when there is one. When there are
+    several they are genuinely unattributable, and get their own bucket under the package
+    name rather than being folded into whichever target sorts first.
+    """
+    bucket = pkg.fallback
+    pkg.fallbacks = []
+    if bucket is None or not (bucket.interfaces or bucket.params):
+        return
+
+    def owner(path):
+        return pkg.targets.get(os.path.abspath(path))
+
+    groups = OrderedDict()        # build target (or None) -> [("i"|"p", declaration)]
+    for iface in bucket.interfaces.values():
+        groups.setdefault(owner(iface.file), []).append(("i", iface))
+    for param in bucket.params.values():
+        groups.setdefault(owner(param.file), []).append(("p", param))
+
+    targeted = [k for k in groups if k is not None]
+    if len(targeted) < 2:
+        name = pkg.target_node_names.get(targeted[0] if targeted else None)
+        if name:
+            bucket.name, bucket.confident = name, True
+        pkg.fallbacks = [bucket]
+        return
+
+    for key, items in groups.items():
+        name = pkg.target_node_names.get(key)
+        draft = NodeDraft(name or pkg.name, bool(name))
+        for kind, item in items:
+            if kind == "i":
+                draft.add_interface(item)
+            else:
+                draft.add_param(item)
+        pkg.fallbacks.append(draft)
 
 
 def artifact_name(node, targets):
@@ -1739,7 +1864,9 @@ def main(argv=None):
 
         if not got and not pkg.flags:
             continue
-        if pkg.fallback is not None and (pkg.fallback.interfaces or pkg.fallback.params):
+        # Everything is collected; decide now how many artifacts the bucket really is.
+        resolve_fallback_artifacts(pkg)
+        if any(not n.confident for n in pkg.fallbacks):
             pkg.notes.append(
                 "NOTE: no node name was found as a string literal in this package's "
                 "source (its ROS calls sit on a get_node() handle, an injected node, or "
@@ -1748,8 +1875,7 @@ def main(argv=None):
                 "the controller_manager config -- confirm it before using this model.")
 
         nodes = [n for n in pkg.nodes.values() if n.interfaces or n.params]
-        if pkg.fallback is not None and (pkg.fallback.interfaces or pkg.fallback.params):
-            nodes.append(pkg.fallback)
+        nodes.extend(pkg.fallbacks)
 
         out_path = None
         if nodes:

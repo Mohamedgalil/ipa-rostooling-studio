@@ -42,6 +42,10 @@ probe:
           value: true # from the launch file
         - "period_sec": "probe_pilot_node::period_sec"
           value: 0.25 # from the launch file
+    "probe_alpha":
+      from: "probe_dual.probe_alpha_node" # project-local, see probe_dual.ros2
+      interfaces:
+        - "/probe/alpha_pub": pub-> "probe_alpha::/probe/alpha"
     "robot_state_publisher":
       from: "robot_state_publisher.robot_state_publisher" # assets/rosmodelscatalog/common/robot_state_publisher.ros2
       interfaces:

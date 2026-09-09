@@ -25,8 +25,9 @@ The fixture is not the real robot
 The models this plugin was developed against come from a real driver tree that is not in this
 repo and cannot be committed to it, so a golden keyed to that tree would only run on one
 machine. The fixture reproduces the SHAPES that mattered there instead: a C++ package with
-`generate_parameter_library` parameters and a non-literal topic name, a Python `rclpy` package,
-a launch file mixing project-local nodes with one that resolves against the vendored catalogue.
+`generate_parameter_library` parameters and a non-literal topic name, a second C++ package with
+two executables that each name their node in `main()`, a Python `rclpy` package, and a launch
+file mixing project-local nodes with one that resolves against the vendored catalogue.
 Not covered, and worth knowing: `controllers.yaml` controller-instance resolution, `.msg`
 transcription (`--emit-msgs`), and `IncludeLaunchDescription` (which the extractor does not
 follow at all).
@@ -45,6 +46,12 @@ broke, not just print a diff:
    candidate names as evidence, and must emit NO declaration for it. Emitting the candidates
    would turn a visible unknown into an invisible one: the realistic failure is a plausible
    subset, not a nonsense name.
+3. Two `add_executable()` targets in one package must stay two artifacts. Merging them says
+   one binary serves both sets of interfaces -- a false claim stated as fact, with no flag on
+   it, which is worse than any flag.
+4. A node built in `main()` as `rclcpp::Node::make_shared("x")` must be named `x`. Missing a
+   literal breaks the one promise these scripts make, and a `.rossystem`'s `from:` inherits
+   the wrong name silently.
 
 Exit 0 iff every check passes.
 """
@@ -55,6 +62,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import OrderedDict
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(_HERE)
@@ -66,6 +74,7 @@ GOLDEN = os.path.join(ROOT, "tests", "fixtures", "extract", "golden")
 # Relative path under the run's output dir -> relative path under golden/.
 ARTEFACTS = [
     os.path.join("rosnodes", "probe_bridge.ros2"),
+    os.path.join("rosnodes", "probe_dual.ros2"),
     os.path.join("rosnodes", "probe_pilot.ros2"),
     "probe.rossystem",
 ]
@@ -175,6 +184,68 @@ def check_bug_classes(out, add):
                 "unknown into an invisible one." % want)
 
 
+def _artifacts_of(path):
+    """{artifact: {"node": name, "entries": [interface/parameter names]}} from a .ros2."""
+    out, artifact, block = OrderedDict(), None, None
+    for line in open(path, encoding="utf-8").read().splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip())
+        body = line.strip().split(" #")[0].rstrip()
+        if indent == 4 and body.endswith(":"):
+            artifact = body[:-1]
+            out[artifact] = {"node": None, "entries": []}
+            block = None
+        elif indent == 6 and artifact:
+            if body.startswith("node:"):
+                out[artifact]["node"] = body.split(":", 1)[1].strip()
+            elif body.endswith(":"):
+                block = body[:-1]
+        elif indent == 8 and artifact and block and body.endswith(":"):
+            out[artifact]["entries"].append(body[:-1].strip("'\""))
+    return out
+
+
+def check_artifact_attribution(out, add):
+    """Two executables stay two artifacts, each named by its own main()."""
+    path = os.path.join(out, "rosnodes", "probe_dual.ros2")
+    if not os.path.exists(path):
+        add("cannot check artifact attribution: probe_dual.ros2 was not produced")
+        return
+    arts = _artifacts_of(path)
+
+    # 3. the split.
+    if sorted(arts) != ["probe_alpha", "probe_beta"]:
+        add("SPLIT ARTIFACTS: probe_dual's CMakeLists declares two add_executable targets, "
+            "probe_alpha and probe_beta, so the model must carry two artifacts by those "
+            "names; got %s. One artifact here means the two binaries' interfaces were "
+            "merged, which asserts that one executable serves both -- stated as fact, with "
+            "no flag on it." % (sorted(arts) or "none"))
+        return
+    for art, other in (("probe_alpha", "/probe/beta"), ("probe_beta", "/probe/alpha")):
+        if other in arts[art]["entries"]:
+            add("SPLIT ARTIFACTS: %s carries %s, which is declared in the OTHER executable's "
+                "source. Interfaces must follow the build target that owns the source file "
+                "they were read from." % (art, other))
+    if "/probe/alpha" not in arts["probe_alpha"]["entries"]:
+        add("SPLIT ARTIFACTS: probe_alpha lost /probe/alpha, its own publisher")
+    if "/probe/beta" not in arts["probe_beta"]["entries"]:
+        add("SPLIT ARTIFACTS: probe_beta lost /probe/beta, its own subscriber")
+
+    # 4. the node names, one per factory spelling.
+    for art, want, how in (
+            ("probe_alpha", "probe_alpha_node", 'rclcpp::Node::make_shared("probe_alpha_node")'),
+            ("probe_beta", "probe_beta_node", 'std::make_shared<rclcpp::Node>("probe_beta_node")')):
+        got = arts[art]["node"]
+        if got == want:
+            continue
+        add("FREE NODE NAME: %s must be `node: %s` -- the source says %s in main(). Got "
+            "`node: %s`.%s" % (art, want, how, got,
+                               " That is the package name, i.e. the literal was not read at "
+                               "all, and a .rossystem's from: would inherit it."
+                               if got == "probe_dual" else ""))
+
+
 def main(argv):
     update = "--update" in argv[1:]
     findings = []
@@ -192,6 +263,7 @@ def main(argv):
         check_golden(out, update, add)
         if not update:
             check_bug_classes(out, add)
+            check_artifact_attribution(out, add)
     finally:
         shutil.rmtree(out, ignore_errors=True)
 
