@@ -114,7 +114,7 @@ try{
   body.resizing{cursor:col-resize;user-select:none;-webkit-user-select:none}
   body.resizing .canvas-wrap{pointer-events:none}
   @media (prefers-reduced-motion:reduce){ .resizer{transition:none} }
-  .rail h4{margin:0 0 .35rem;font-family:var(--mono);font-size:.64rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+  .rail h4{margin:0 0 .35rem;font-family:var(--mono);font-size:.72rem;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-2);font-weight:700}
   .rail .secbody{display:flex;flex-direction:column;gap:.4rem}
   body.mode-view .editonly{display:none}
   .railbtn{display:flex;align-items:center;gap:.45rem;font-size:.8rem;font-weight:600;color:var(--ink);background:var(--surface-2);border:1px solid var(--rule);border-radius:6px;padding:.45rem .55rem;cursor:pointer;text-align:left}
@@ -291,7 +291,8 @@ try{
   .canvas.lvl1 .ifaces{display:none}
   .canvas.lvl2 .iface .ity{display:none}
   .canvas.deps .node .ifaces{display:none}
-  .pkgbox{position:absolute;z-index:2;background:var(--surface-2);border:1.5px solid var(--ink-3);border-radius:9px;padding:.5rem .6rem;min-width:150px;font-size:.78rem}
+  .pkgbox{position:absolute;z-index:2;background:var(--surface-2);border:1.5px solid var(--ink-3);border-radius:9px;padding:.5rem .6rem;min-width:150px;font-size:.78rem;cursor:grab;user-select:none}
+  .pkgbox:active{cursor:grabbing}
   .pkgbox.res{border-color:var(--accent-2)}
   .pkgbox.unres{border-color:var(--warn)}
   .pkgbox .pt{font-weight:650}
@@ -306,7 +307,7 @@ try{
   .inspector{width:var(--insp-w,298px);flex-shrink:0;border-left:1px solid var(--rule);background:var(--surface);overflow-y:auto;padding:.85rem}
   .inspector.empty{display:flex;align-items:center;justify-content:center;color:var(--ink-3);font-size:.82rem;text-align:center;padding:2rem}
   .insec{margin-bottom:1rem}
-  .insec h4{margin:0;font-family:var(--mono);font-size:.64rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);border-top:1px solid var(--rule-soft)}
+  .insec h4{margin:0;font-family:var(--mono);font-size:.72rem;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-2);font-weight:700;border-top:1px solid var(--rule-soft)}
   .insec:first-child h4{border-top:none}
   .insec:first-child .sechead{padding-top:0}
   .sechead{display:flex;align-items:center;gap:.4rem;width:100%;background:none;border:none;cursor:pointer;color:inherit;font:inherit;letter-spacing:inherit;text-transform:inherit;padding:.6rem 0 .5rem;text-align:left}
@@ -1248,7 +1249,7 @@ var DATA = /*__DATA__*/null;
   //   collapsed (default)  one box; its ports are the labels the referenced file exposes
   //   framed               the internals, inside a labelled frame
   //   drill-in             that file alone, read-only, with a breadcrumb back
-  var drillRef=null, subPos={}, selSub=null;
+  var drillRef=null, subPos={}, selSub=null, pkgPos={};
   function subState(ref){
     var v=(project.view&&project.view.subsystems)||{};
     return v[ref]==="framed"?"framed":"collapsed";
@@ -1927,6 +1928,18 @@ var DATA = /*__DATA__*/null;
 
   // ---- deps (level 4): bipartite node -> package, resolved against the catalogue ----
   var pkgEls={};
+  // A fixed column (the old colX=980) overlapped whatever the node graph's own auto layout had
+  // already put there -- a wide or deeply-layered system runs well past x=980, so switching to
+  // Deps dropped the package boxes on top of the nodes rather than beside them. render() always
+  // draws the node/subsystem cards before calling renderDeps() (see render(), above), so this
+  // reads their REAL rendered extent -- collapsed boxes, framed members, everything already on
+  // the canvas -- rather than re-deriving it from project.nodes and getting collapsed/framed
+  // subsystems wrong a second way.
+  function depsColumnX(){
+    var els=canvas.querySelectorAll(".node"), maxRight=0;
+    [].slice.call(els).forEach(function(e){ maxRight=Math.max(maxRight,e.offsetLeft+e.offsetWidth); });
+    return Math.round(Math.max(600,maxRight+110));
+  }
   function renderDeps(){
     pkgEls={};
     var packages={}, order=[];
@@ -1937,12 +1950,17 @@ var DATA = /*__DATA__*/null;
       var key=n.pkg+"."+n.node;
       if(CATALOGUE[key]||n.backing==="cat") packages[p].resolved=true;
     });
-    var colX=980, y=80;
+    var colX=depsColumnX(), y=80;
     order.forEach(function(p){
       var pk=packages[p];
+      // pkgPos is a VIEW (same reasoning as subPos): a box dragged here is remembered for this
+      // session but never touches the model. Only a package with no remembered position yet
+      // gets the freshly computed default column, so a manual drag survives further renders.
+      var pos=pkgPos[p]; if(!pos){ pos={x:colX,y:y}; pkgPos[p]=pos; }
       var el=document.createElement("div");
       el.className="pkgbox "+(pk.resolved?"res":"unres");
-      el.style.left=colX+"px"; el.style.top=y+"px";
+      el.dataset.pkg=p;
+      el.style.left=pos.x+"px"; el.style.top=pos.y+"px";
       el.innerHTML='<div class="pt">'+esc(pk.name)+'</div><div class="ps">'+(pk.resolved?"in catalogue":"local / not in catalogue")+' · '+pk.nodes.length+' node(s)</div>';
       canvas.appendChild(el); pkgEls[p]=el; y+=90;
     });
@@ -3223,6 +3241,20 @@ var DATA = /*__DATA__*/null;
       // marked interactive.
       if(ev.target.closest(".port")||ev.target.closest("[data-inline]")
          ||ev.target.closest("input,textarea,select,button")) return;
+      // A deps-view package box is not a node either -- same reasoning as the subsystem box
+      // below, its position lives in pkgPos (a VIEW), never touches the model, and is not
+      // undoable. Checked first because .pkgbox carries no "node" class (see the .node,.pkgbox
+      // pairing everywhere else this view is touched) and so would otherwise fall through to
+      // "no drag target" below.
+      var pkgEl=ev.target.closest(".pkgbox");
+      if(pkgEl){
+        closeNodeIssuePopIfOpen();
+        var pname=pkgEl.dataset.pkg, pp=pkgPos[pname]||{x:pkgEl.offsetLeft,y:pkgEl.offsetTop};
+        pkgPos[pname]=pp;
+        dragState={pkg:pname,px:ev.clientX,py:ev.clientY,ox:pp.x,oy:pp.y,moved:0};
+        try{pkgEl.setPointerCapture(ev.pointerId);}catch(e){}
+        return;
+      }
       var el=ev.target.closest(".node");
       if(!el) return;
       closeNodeIssuePopIfOpen();   // about to drag -- see the comment on this function
@@ -3277,6 +3309,14 @@ var DATA = /*__DATA__*/null;
         drawEdges();
         return;
       }
+      if(dragState.pkg){
+        var pp=pkgPos[dragState.pkg];
+        pp.x=Math.max(0,dragState.ox+ddx); pp.y=Math.max(0,dragState.oy+ddy);
+        var pel=canvas.querySelector('.pkgbox[data-pkg="'+STUDIO.cssEsc(dragState.pkg)+'"]');
+        if(pel){ pel.style.left=pp.x+"px"; pel.style.top=pp.y+"px"; }
+        drawEdges();
+        return;
+      }
       if(dragState.group){
         dragState.group.forEach(function(g){
           g.node.x=Math.max(0,g.ox+ddx); g.node.y=Math.max(0,g.oy+ddy);
@@ -3295,13 +3335,20 @@ var DATA = /*__DATA__*/null;
     canvas.addEventListener("pointerup",function(ev){
       if(!dragState) return;
       var wasClick=dragState.moved<5, n=dragState.n, snap=dragState.snap;
-      var sref=dragState.sub; dragState=null;
+      var sref=dragState.sub, pref=dragState.pkg; dragState=null;
       if(sref){
         // a click on the box selects it and shows the system panel, where its view state and
         // its "open" button live; a drag just leaves it where it was dropped (no undo entry)
         if(wasClick){ selSub=sref; selNode=null; selEdge=null; multiSel=Object.create(null); render(); fillInspector();
                       revealInspector(); }
         else sizeCanvas();
+        return;
+      }
+      if(pref){
+        // no inspector of its own -- a package box is a read-only summary -- so a click is a
+        // no-op and only an actual drag (which already moved it live, above) needs the canvas
+        // re-measured for scrollbars/fitView.
+        if(!wasClick) sizeCanvas();
         return;
       }
       if(wasClick){
@@ -3938,6 +3985,10 @@ var DATA = /*__DATA__*/null;
       var p=pos[n.id];
       if(p){ n.x=p.x; n.y=p.y; }
     });
+    // The deps-view package column is derived from where the nodes just landed (depsColumnX);
+    // dropping any remembered drags here is the same call autoLayout already makes for every
+    // node position and every subsystem box -- "arrange everything" includes them too.
+    pkgPos={};
     render(); fitView();
   }
 
@@ -4322,6 +4373,15 @@ var DATA = /*__DATA__*/null;
     var known=definedTypeKeys(), ct=companionTypes();
     var files=Object.keys(ct).sort(), keys=Object.keys(project.types||{}).sort();
     var h='';
+    // A message TYPE is the shape of the data going over a wire (its field list); it is a
+    // different thing from a topic/service/action NAME, which just labels one wire carrying
+    // that shape. Most of the time nothing belongs here at all -- only define one when the
+    // interface uses a type this project itself introduces, not an existing ROS 2 one.
+    h+='<div class="hint">A type here is the DATA SHAPE a publisher/subscriber/service/action '
+      +'sends — its field list, like a struct. Only add one for a type your own nodes '
+      +'introduce; an existing ROS 2 type (<code>std_msgs/msg/String</code>, '
+      +'<code>sensor_msgs/msg/Image</code>, …) needs no entry here — it already has a .ros of '
+      +'its own, either in the vendored catalogue or in a companion file listed below.</div>';
     h+='<div class="roinfo">'+(files.length
         ? esc(files.map(function(p){return p+".ros";}).join(", "))
         : "no companion .ros — every referenced type resolves in the vendored catalogue")
@@ -4622,6 +4682,14 @@ var DATA = /*__DATA__*/null;
     h='';
     if(!pkgs.length) h+='<div class="roinfo">No hand-authored package yet — catalogue nodes '
       +'reference a vendored .ros2 and generate none.</div>';
+    // New to ROS 2, this field is the one most likely to sit empty with no clue why: it has
+    // no default, nothing derives it, and nothing in the model needs it to be filled in.
+    else h+='<div class="hint">fromGitRepo is a note for later, not something this tool reads '
+      +'back: the URL of the real repository this package\'s ROS 2 source code lives in (e.g. '
+      +'<code>https://github.com/ros2/examples</code>), so a person opening the generated '
+      +'.ros2 knows where to find the actual code behind it. It has no effect on validation or '
+      +'on how the system runs — leave it blank if you don\'t know it or this package has no '
+      +'real source yet.</div>';
     pkgs.forEach(function(p){
       // the package entry is derived from the nodes, so it may not exist yet -- and the .ros2
       // file header has nowhere else to hang.
@@ -4629,9 +4697,9 @@ var DATA = /*__DATA__*/null;
       var git=entry.fromGitRepo||"";
       h+='<div class="pkgrow"><div class="pn">'+esc(p)+'.ros2</div>'
         +(edit?'<input data-git="'+esc(p)+'" data-undo="1" value="'+esc(git)
-               +'" placeholder="fromGitRepo — https://github.com/org/repo/">'
+               +'" placeholder="not set — e.g. https://github.com/org/repo">'
                +cmtRows(entry,"pkg","pkg:"+p)
-              :'<div class="derived">'+esc(git||"(no fromGitRepo)")+'</div>')
+              :'<div class="derived">'+esc(git||"(not set — optional, see hint above)")+'</div>')
         +'</div>';
     });
     out+=sec("sys/packages","packages (.ros2)",h,pkgs.length?String(pkgs.length):"")+typesSection(edit)
