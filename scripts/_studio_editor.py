@@ -985,7 +985,13 @@ var DATA = /*__DATA__*/null;
   // generation/validation error) here at load, or replaced by a file-load report in
   // applyLoadedProject. Independent of the live lint severity that also feeds the chip --
   // buildStatus() takes the max of the two.
-  var opNotice=DATA.banner?{sev:"err",title:"Generation failed",html:'<pre>'+esc(DATA.banner)+'</pre>'}:null;
+  // The title and severity come from the companion now instead of being hard-coded to
+  // "Generation failed". They are not all failures: a real-server validation that could not RUN
+  // leaves the files written and the lint clean, and labelling that "Generation failed" is
+  // simply untrue -- a page that overstates one thing gets believed less about the next.
+  var opNotice=DATA.banner?{sev:(DATA.bannerSev==="warn"?"warn":"err"),
+                            title:DATA.bannerTitle||"Generation failed",
+                            html:'<pre>'+esc(DATA.banner)+'</pre>'}:null;
 
   // ---- datalists (offline autocomplete) ----
   // Message types are NOT a <datalist> here -- see makeTypeahead()/wireTypeahead() below. At
@@ -6924,7 +6930,11 @@ var DATA = /*__DATA__*/null;
   // arrival for: open the popover on load (page load has no interaction to lose) and pulse the
   // chip briefly so its location sticks -- dismissing it does NOT clear the red state, which
   // stays until the next render() replaces DATA.banner's condition.
-  if(opNotice&&opNotice.sev==="err"){
+  // Any companion banner opens on arrival, not just an error one. "Real-server validation did
+  // NOT run" is a WARNING -- the files are written and the lint is clean -- but it is precisely
+  // the message that must not be quiet, because the whole defect being fixed is that a
+  // half-validated run looked exactly like a fully validated one.
+  if(opNotice&&DATA.banner){
     var _sp2=document.getElementById("statusPop"), _sc2=document.getElementById("statusChip");
     if(_sp2&&_sp2.showPopover){
       try{ _sp2.showPopover(); }catch(e){}

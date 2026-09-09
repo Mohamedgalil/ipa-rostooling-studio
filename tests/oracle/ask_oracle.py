@@ -18,6 +18,8 @@ Requires Java 19+. Temurin 21 lives outside PATH on this machine, so JAVA is pin
 import json
 import os
 import queue
+import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -28,12 +30,97 @@ HERE = Path(__file__).resolve().parent
 PLUGIN = HERE.parent.parent
 CODE = PLUGIN.parent / "material" / "code"
 
-JAVA = Path(
-    os.environ.get(
-        "ROSMODEL_JAVA",
-        r"C:\Users\mae\AppData\Local\Programs\Eclipse Adoptium\jdk-21.0.11.10-hotspot\bin\java.exe",
-    )
-)
+# How the java binary is found, in order:
+#   1. ROSMODEL_JAVA, the documented override;
+#   2. whatever `java` is on PATH -- which is what .lsp.json has always done
+#      ("${ROSMODEL_JAVA:-java}") and what this file conspicuously did not, so on any machine
+#      that had a perfectly good JDK but had not set the variable, the oracle reported
+#      "FATAL: java not found at C:\Users\mae\..." -- a path from someone else's laptop;
+#   3. that original hard-coded Adoptium path, kept last so the machine it was written for
+#      keeps working even with an empty PATH.
+_JAVA_FALLBACK = r"C:\Users\mae\AppData\Local\Programs\Eclipse Adoptium\jdk-21.0.11.10-hotspot\bin\java.exe"
+
+
+def _resolve_java():
+    env = os.environ.get("ROSMODEL_JAVA", "").strip()
+    if env:
+        return Path(env)
+    found = shutil.which("java")
+    if found:
+        return Path(found)
+    return Path(_JAVA_FALLBACK)
+
+
+JAVA = _resolve_java()
+
+# The server jar is built for Java 21 (its manifest says Build-Jdk-Spec: 21) and the launcher
+# needs 19+. NOTHING in this repo checked that -- the requirement lived only in prose, in
+# SKILL.md and scripts/README.md -- so an older JVM passed the exists() test, started, and then
+# died inside the JVM with UnsupportedClassVersionError. What the caller saw was the 45-second
+# initialize wait timing out and NO_INITIALIZE_RESPONSE: a message about the LSP handshake for
+# what is really "your Java is too old", which is close to the least actionable way to say it.
+JAVA_MIN_MAJOR = 19
+
+
+def java_major(java_path):
+    """Major version of that java binary, or None if it cannot be determined.
+
+    `java -version` prints to STDERR ("openjdk version \"11.0.26\" ..." / "1.8.0_412" for 8),
+    which is why this reads stderr and not stdout.
+    """
+    try:
+        proc = subprocess.run([str(java_path), "-version"], capture_output=True, text=True,
+                              timeout=30)
+    except Exception:
+        return None
+    text = (proc.stderr or "") + (proc.stdout or "")
+    m = re.search(r'version\s+"(\d+)(?:\.(\d+))?', text)
+    if not m:
+        return None
+    major = int(m.group(1))
+    # 1.8 -> 8; anything from 9 on states its major directly.
+    if major == 1:
+        return int(m.group(2) or 0)
+    return major
+
+
+def preflight():
+    """(ok, reason). Can the real language server actually be asked, on this machine, now?
+
+    One implementation, used by main() for its own gate AND exposed as `--preflight` so
+    ros_studio.py can ask the question cheaply before committing to a 45-second wait. Two copies
+    of "where is java, where is the jar" would drift the moment either path moved.
+    """
+    if not JAVA.exists():
+        return False, ("java not found at %s\n"
+                       "  set ROSMODEL_JAVA to your Java %d+ binary, or put `java` on PATH"
+                       % (JAVA, JAVA_MIN_MAJOR))
+    major = java_major(JAVA)
+    if major is None:
+        return False, ("could not read a version from %s (`java -version` failed)\n"
+                       "  set ROSMODEL_JAVA to a working Java %d+ binary"
+                       % (JAVA, JAVA_MIN_MAJOR))
+    if major < JAVA_MIN_MAJOR:
+        return False, ("%s is Java %d, but the language server jar needs Java %d+\n"
+                       "  (the jar is built with Build-Jdk-Spec: 21; an older JVM loads it and "
+                       "throws UnsupportedClassVersionError, which surfaces only as a timed-out "
+                       "handshake)\n"
+                       "  set ROSMODEL_JAVA to a Java %d+ binary"
+                       % (JAVA, major, JAVA_MIN_MAJOR, JAVA_MIN_MAJOR))
+    if JAR_OVERRIDE:
+        if not Path(JAR_OVERRIDE).exists():
+            return False, "ROSMODEL_JAR points at %s, which does not exist" % JAR_OVERRIDE
+        return True, "java %d, jar %s (ROSMODEL_JAR)" % (major, JAR_OVERRIDE)
+    if ORACLE_MODE == "legacy":
+        for j in (JAR_LEGACY_ROS2, JAR_LEGACY_ROSSYSTEM):
+            if not j.exists():
+                return False, "legacy jar not found at %s" % j
+        return True, "java %d, legacy jars" % major
+    if not JAR_CURRENT.exists():
+        return False, ("language server jar not found at %s\n"
+                       "  build it per build/README.md, or set ROSMODEL_ORACLE=legacy to fall "
+                       "back to the 2024 jars" % JAR_CURRENT)
+    return True, "java %d, jar %s" % (major, JAR_CURRENT.name)
 # ── language server jars ──────────────────────────────────────────────────────
 #
 # CURRENT (default). Built from ipa-esa/RosTooling @ esa/main (3.1.0-SNAPSHOT), commit
@@ -281,23 +368,21 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     verbose = "-v" in sys.argv or "--verbose" in sys.argv
 
-    if not JAVA.exists():
-        print(f"FATAL: java not found at {JAVA}\n  set ROSMODEL_JAVA to override", file=sys.stderr)
+    # One gate for both callers. `--preflight` answers "could the oracle run?" without running
+    # it -- ros_studio.py asks that before committing to a 45-second initialize wait, and needs
+    # the REASON verbatim to put in front of the user rather than a bare exit code.
+    ok, reason = preflight()
+    if "--preflight" in sys.argv:
+        print(reason if ok else ("FATAL: " + reason), file=sys.stdout if ok else sys.stderr)
+        return 0 if ok else 3
+    if not ok:
+        print("FATAL: " + reason, file=sys.stderr)
         return 2
     if JAR_OVERRIDE:
         print(f"oracle ROSMODEL_JAR override -> {JAR_OVERRIDE}", file=sys.stderr)
     elif ORACLE_MODE == "legacy":
-        for j in (JAR_LEGACY_ROS2, JAR_LEGACY_ROSSYSTEM):
-            if not j.exists():
-                print(f"FATAL: legacy jar not found at {j}", file=sys.stderr)
-                return 2
         print("oracle mode: LEGACY (stale 2024 grammar — QoS fields will not parse)",
               file=sys.stderr)
-    elif not JAR_CURRENT.exists():
-        print(f"FATAL: current language server jar not found at {JAR_CURRENT}\n"
-              f"  build it per rostooling-plugin/build/README.md, or set "
-              f"ROSMODEL_ORACLE=legacy to fall back", file=sys.stderr)
-        return 2
 
     if "--all" in sys.argv or not args:
         dirs = sorted(d for d in (HERE / "cases").iterdir() if d.is_dir())

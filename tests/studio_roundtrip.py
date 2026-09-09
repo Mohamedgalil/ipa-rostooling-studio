@@ -241,7 +241,7 @@ def check_roundtrip(src, work):
     if code != 0:
         return False, ["init failed (exit %d):\n%s" % (code, out)]
     outdir = os.path.join(work, "generated")
-    code, out = run(["generate", proj, "--outdir", outdir])
+    code, out = run(["generate", proj, "--outdir", outdir, "--no-oracle"])
     if code != 0:
         return False, ["generate failed (exit %d):\n%s" % (code, out)]
 
@@ -311,7 +311,7 @@ def check_orphan_gate(src, work):
     if code != 0:
         return False, ["init failed on the mutated file (exit %d)" % code]
     outdir = os.path.join(work, "orphan-generated")
-    code, out = run(["generate", proj, "--outdir", outdir])
+    code, out = run(["generate", proj, "--outdir", outdir, "--no-oracle"])
     fails = []
     if code == 0:
         fails.append("generate ACCEPTED an unresolvable arrow target (expected exit 1)")
@@ -391,7 +391,7 @@ def check_fields(src, work):
     if code != 0:
         return False, ["init failed on the planted fixture (exit %d):\n%s" % (code, out)]
     outdir = os.path.join(work, "fields-generated")
-    code, out = run(["generate", proj, "--outdir", outdir])
+    code, out = run(["generate", proj, "--outdir", outdir, "--no-oracle"])
     if code != 0:
         return False, ["generate failed on the planted fixture (exit %d):\n%s" % (code, out)]
 
@@ -506,7 +506,7 @@ def check_comments(src, work):
     if code != 0:
         return False, ["init failed (exit %d):\n%s" % (code, out)]
     outdir = os.path.join(work, "comments-generated")
-    code, gen_out = run(["generate", proj, "--outdir", outdir])
+    code, gen_out = run(["generate", proj, "--outdir", outdir, "--no-oracle"])
     if code != 0:
         return False, ["generate failed (exit %d):\n%s" % (code, gen_out)]
 
@@ -642,7 +642,7 @@ def check_multifile(case, work):
     if code != 0:
         return False, ["init over the directory failed (exit %d):\n%s" % (code, out)]
     outdir = os.path.join(work, "merged-generated")
-    code, gen_out = run(["generate", proj, "--outdir", outdir])
+    code, gen_out = run(["generate", proj, "--outdir", outdir, "--no-oracle"])
     if code != 0:
         return False, ["generate failed on the merged project (exit %d):\n%s" % (code, gen_out)]
 
@@ -696,7 +696,7 @@ def check_wrap(work):
     proj = os.path.join(work, "wrapped.json")
     shutil.copyfile(src, proj)
     outdir = os.path.join(work, "generated")
-    code, gen_out = run(["generate", proj, "--outdir", outdir])
+    code, gen_out = run(["generate", proj, "--outdir", outdir, "--no-oracle"])
     if code != 0:
         return False, ["generate failed on the wrapped project (exit %d):\n%s" % (code, gen_out)]
 

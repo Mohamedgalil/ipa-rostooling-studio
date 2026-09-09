@@ -121,12 +121,103 @@ The subcommands form the authoring loop:
   RM050 on every endpoint the subsystem provides, and the real language server reports
   "Couldn't resolve reference to Node …" and then a *same-type* error on the connection two
   lines further down. Lint still covers only the files this project wrote; a staged file is
-  someone else's model. With `--oracle`, it stages catalogue dependencies (`collect_deps`)
-  and asks the **real** language server (`tests/oracle/ask_oracle.py`, needs Java). On a
-  generation/lint ERROR it re-renders the editor with the diagnostics injected onto the
-  offending nodes, next to the project as `<project>.error.html`, and exits non-zero.
-  `--diff` additionally prints the section below.
+  someone else's model. It then stages catalogue dependencies (`collect_deps`) and asks the
+  **real** language server — see **Validation** below. On a generation/lint ERROR it re-renders
+  the editor with the diagnostics injected onto the offending nodes, next to the project as
+  `<project>.error.html`, and exits non-zero. `--diff` additionally prints the section below.
 - **`diff project.json`** — *what changed since the seed*. See below.
+
+## Validation — two checkers, and one of them is the authority
+
+`generate` runs **two** checks, and it matters which is which:
+
+- **`rosmodel_lint`** (the RM rules) is deterministic, fast, offline, and a deliberate
+  **approximation** of the real Xtext validator. It cannot cover everything — that is stated
+  throughout `STATUS.md` and `scripts/README.md`, and it is the entire reason the oracle exists.
+- **the oracle** is the real language server jar (`tests/oracle/ask_oracle.py`). It is the
+  authority. It catches what the approximation cannot — an action server declared with a
+  *message* type rather than an action type being the standard example.
+
+**The oracle now runs by default.** It used to be opt-in behind `--oracle`, which meant most runs
+consulted only the approximation and *said nothing about not having asked the authority*: a clean
+run printed `0 error(s)` and exited 0. That is the root cause behind "the validation misses errors
+the jar would catch".
+
+| invocation | behaviour |
+|---|---|
+| `generate P` | asks the real server **if it can run**; if it cannot, says so loudly everywhere and still exits 0 (the files were written, the lint passed) |
+| `generate P --oracle` | *requires* the real server — failing to run it is an **error**, exit non-zero |
+| `generate P --no-oracle` | deliberate opt-out; RM rules only, and nothing is reported about the oracle |
+
+**A jar that cannot run is never silent.** Whether Java is missing, too old, or the jar was never
+built, the reason appears in three places: on stdout, on stderr, and — the part that matters,
+since "silent" was the complaint — **inside the Studio's own error surface**, as a
+`<project>.notice.html` whose banner the page opens automatically on load. It names the binary it
+found, why it is unusable, what that means (the results you *are* seeing are plugin-only and
+cannot catch everything), and how to fix it (`ROSMODEL_JAVA`, or build the jar). Never a bare
+stack trace, never nothing.
+
+That page is `.notice.html`, **not** `.error.html`: the generation succeeded and the lint was
+clean, so a file whose own name says "error" would misreport it — and would overwrite the genuine
+error page from a previous failing run. For the same reason the banner carries its own title and
+severity now instead of the page hard-coding "Generation failed"; a page that overstates one thing
+gets believed less about the next.
+
+**A version check, not just an existence check.** The jar is built with `Build-Jdk-Spec: 21` and
+the launcher needs Java 19+, but nothing in the repo ever checked that — the requirement lived
+only in prose. An older JVM passed the `exists()` test, started, and died inside the JVM with
+`UnsupportedClassVersionError`; what the caller saw was the 45-second initialize wait timing out
+as `NO_INITIALIZE_RESPONSE`, a message about the LSP handshake for what is really "your Java is
+too old". `ask_oracle.py --preflight` now parses `java -version` and says the true thing. It is
+also the single place that knows where java and the jar live — `ros_studio.py` asks it rather than
+re-deriving those paths, because two copies would drift the first time either moved.
+
+`ROSMODEL_JAVA` also falls back to whatever `java` is on **PATH** before the hard-coded Adoptium
+path it used to default to — which is what `.lsp.json` has always done, and why a machine with a
+perfectly good JDK could be told `java not found at C:\Users\mae\...`, a path from someone else's
+laptop.
+
+**Three ways the old code turned a broken oracle into a clean verdict**, all fixed, all pinned by
+`tests/oracle_gate.py`:
+
+1. `proc.returncode` was never checked, so `ask_oracle.py` could print an `ACCEPTED` line and
+   then die and still be read as a pass;
+2. the verdict was `"ACCEPTED" in out and "REJECTED" not in out` over stdout **plus stderr** — a
+   text search across a stream that also carries diagnostic *messages*, so a model whose own text
+   contained either word decided its own verdict;
+3. `ask_oracle.py` exits 0 even when every case failed to run, because `NO_INITIALIZE_RESPONSE`
+   and `MISSING_JAR` are per-case *statuses* — and a case that never received diagnostics still
+   printed `ACCEPTED — 0 error(s)`. A server that never answered was indistinguishable from a
+   model with nothing wrong with it.
+
+The verdict now comes from the structured `results.json` records — per-case `status` plus the
+actual diagnostics — and a status that is not `OK` is a failure, not a pass. Those results are
+written into the **output directory**, never `ask_oracle.py`'s default of `tests/oracle/results.json`,
+which is this repo's checked-in 19-case regression record: a `generate --oracle` run used to
+overwrite it with its own single case.
+
+**Oracle diagnostics reach the node cards**, not just the console. `oracle_diagnostics()` maps the
+records into the same `{"global", "byNode"}` shape the linter's findings already use, so they get
+the same warning badge, inspector section and Issues-rail entry. The mapping is honestly bounded,
+because a record carries `{file, line, severity, message}` and *no column* (`ask_oracle` discards
+`range.start.character`):
+
+- by **file**, the reliable half — `generate` writes `<pkg>.ros2` and `<pkg>.ros`, so the stem *is*
+  the package name and maps to that package's nodes with no string guessing;
+- by **message**, for `.rossystem` diagnostics, which name a node or interface when they are
+  reference errors (`Couldn't resolve reference to Node 'pkg.artifact'`) and name nothing at all
+  when they are parser errors (`mismatched input 'msgs:'`). Same substring scan the lint mapper
+  uses, with the same limits.
+
+Anything that maps to neither goes into the **banner**, not into `project.diagnostics.global` —
+that list is carried into the page but nothing renders it on the companion path, so a diagnostic
+left there alone would be invisible, which is the failure this whole feature exists to remove.
+
+`tests/oracle_gate.py` pins the whole failure path, and needs **no working jar** to do it — it
+points `ROSMODEL_JAVA` at a path that does not exist, which is reproducible anywhere. The
+test suites themselves pass `--no-oracle`: they check the emitter byte for byte, and leaving the
+oracle on would put minutes of language-server time into a parity run on any machine with a JDK,
+and fail those cases on a server verdict they are not about.
 
 ## `diff` — what changed since the seed
 

@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""oracle_gate.py -- what `generate` does when the real language server CANNOT run.
+
+The oracle is ON by default (scripts/ros_studio.py, cmd_generate) because rosmodel_lint's RM
+rules are a deliberate approximation of the Xtext validator and cannot catch everything it
+would. That makes "the oracle could not run" a state every user can reach -- no JDK, an old
+JDK, an unbuilt jar -- and the defect this file pins is that the state used to be QUIET:
+
+  * --oracle was opt-in, so a default `generate` never consulted the real server and said
+    nothing about not having done so. A clean run printed "0 error(s)" and exited 0.
+  * run_oracle() never checked the subprocess return code, and decided the verdict with
+    `"ACCEPTED" in out and "REJECTED" not in out` over stdout+stderr -- a text search over a
+    stream that also carries diagnostic messages.
+  * ask_oracle.py exits 0 even when every case failed to run, because NO_INITIALIZE_RESPONSE
+    and MISSING_JAR are per-case statuses. A server that never answered was indistinguishable
+    from a model with nothing wrong with it.
+
+None of that needs a working jar to test -- it needs a BROKEN one, which is reproducible
+anywhere by pointing ROSMODEL_JAVA at a path that does not exist. That is what this does, so
+the failure path is covered on machines that could never run the oracle at all (including the
+Linux sandbox this was written on, which has only Java 11 for a jar built with Java 21).
+
+  python3 tests/oracle_gate.py
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+STUDIO = os.path.join(ROOT, "scripts", "ros_studio.py")
+ASK = os.path.join(HERE, "oracle", "ask_oracle.py")
+FIXTURE = os.path.join(HERE, "fixtures", "params", "param_probe.rossystem")
+NO_JAVA = os.path.join(os.sep, "does", "not", "exist", "java")
+
+
+def run(args, env_extra=None):
+    env = dict(os.environ)
+    env.pop("ROSMODEL_JAVA", None)
+    if env_extra:
+        env.update(env_extra)
+    proc = subprocess.run([sys.executable] + args, cwd=ROOT, capture_output=True, text=True,
+                          env=env, timeout=600)
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+
+def main():
+    failures = []
+
+    def check(name, cond, detail=""):
+        print("%-4s %s" % ("PASS" if cond else "FAIL", name))
+        if not cond:
+            failures.append(name + ((" -- " + detail) if detail else ""))
+
+    work = tempfile.mkdtemp(prefix="oracle-gate-")
+    try:
+        proj = os.path.join(work, "p.json")
+        code, out = run([STUDIO, "init", FIXTURE, "--out", proj])
+        if code != 0:
+            print("could not seed the fixture:\n" + out)
+            return 1
+
+        broken = {"ROSMODEL_JAVA": NO_JAVA}
+
+        # ---- 1. the preflight names the problem, and does not merely fail ------------------
+        code, out = run([ASK, "--preflight"], broken)
+        check("preflight exits non-zero when java is missing", code != 0, "exit %d" % code)
+        check("preflight names the path it looked at", NO_JAVA in out, out.strip()[:200])
+        check("preflight says how to fix it", "ROSMODEL_JAVA" in out, out.strip()[:200])
+
+        # ---- 2. default generate: degrades LOUDLY, but still succeeds ----------------------
+        # The files were written and the lint passed; an absent JDK is not a failed generation.
+        # But it must not be silent, and it must not claim to have validated anything.
+        code, out = run([STUDIO, "generate", proj, "--outdir", os.path.join(work, "g1")], broken)
+        check("default generate still exits 0 when the oracle cannot run", code == 0,
+              "exit %d" % code)
+        check("default generate says the oracle did NOT run", "NOT RUN" in out, out[-400:])
+        check("default generate says lint alone is not enough",
+              "cannot catch everything" in out, out[-400:])
+        notice = os.path.splitext(proj)[0] + ".notice.html"
+        check("a notice page is written for the studio to show", os.path.isfile(notice))
+        if os.path.isfile(notice):
+            html = open(notice, encoding="utf-8").read()
+            check("the notice page carries the reason in its banner",
+                  "Real-server validation did NOT run" in html)
+            check("the notice page is titled as incomplete, NOT as a failed generation",
+                  '"bannerTitle": "Validation incomplete"' in html
+                  and '"bannerSev": "warn"' in html)
+        # ...and it is NOT written to <project>.error.html, which belongs to a real failure and
+        # would otherwise be overwritten by a run that generated perfectly well.
+        check("a clean-but-unvalidated run does not write .error.html",
+              not os.path.isfile(os.path.splitext(proj)[0] + ".error.html"))
+
+        # ---- 3. --oracle means "I require it": not running it is an ERROR ------------------
+        code, out = run([STUDIO, "generate", proj, "--outdir", os.path.join(work, "g2"),
+                         "--oracle"], broken)
+        check("--oracle exits non-zero when the oracle cannot run", code != 0, "exit %d" % code)
+        check("--oracle explains that it was requested and could not run",
+              "--oracle was requested" in out, out[-400:])
+
+        # ---- 4. --no-oracle is the deliberate opt-out, and is quiet ------------------------
+        # Clear the notice step 2 left behind, or "no notice was written" would be answered by
+        # the previous run's file rather than by this one.
+        if os.path.isfile(notice):
+            os.remove(notice)
+        code, out = run([STUDIO, "generate", proj, "--outdir", os.path.join(work, "g3"),
+                         "--no-oracle"], broken)
+        check("--no-oracle exits 0", code == 0, "exit %d" % code)
+        # Matched on the SECTION HEADER, not on the bare word "oracle": the output is full of
+        # paths, and this test's own temp directory is called oracle-gate-XXXX, which a naive
+        # substring check happily mistakes for the tool talking about the oracle.
+        check("--no-oracle prints no oracle section",
+              "--- oracle" not in out and "NOT RUN" not in out, out[-300:])
+        check("--no-oracle writes no notice page",
+              not os.path.isfile(os.path.splitext(proj)[0] + ".notice.html"))
+
+        # ---- 5. the checked-in regression record is never collateral damage ----------------
+        # ask_oracle.py defaults its results to tests/oracle/results.json, which is the 19-case
+        # verdict record committed to this repo. run_oracle now passes --results into the output
+        # directory; without that, every `generate --oracle` would overwrite it with one case.
+        results = os.path.join(HERE, "oracle", "results.json")
+        if os.path.isfile(results):
+            before = open(results, "rb").read()
+            run([STUDIO, "generate", proj, "--outdir", os.path.join(work, "g4"), "--oracle"],
+                broken)
+            check("generate --oracle does not overwrite tests/oracle/results.json",
+                  open(results, "rb").read() == before)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+    print("\n%d check(s) failed" % len(failures))
+    for f in failures:
+        print("  " + f)
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

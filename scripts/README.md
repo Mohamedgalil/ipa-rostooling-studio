@@ -10,7 +10,21 @@ language servers for `.ros`, `.ros2` and (since a `.rossystem` server was built 
 `.rossystem` too. **That needs a Java 21 runtime**: the jars are Java 21 bytecode and fail with
 `UnsupportedClassVersionError` on anything older, so check `java -version` and set `ROSMODEL_JAVA`
 if the default is older. Where no Java 21 is available the linter is the only check, and output
-must be described as linter-checked rather than oracle-validated. The linter's role is now to give **fast, single-file, offline** feedback
+must be described as linter-checked rather than oracle-validated.
+
+**You no longer have to check that by hand, and `ros_studio.py generate` no longer lets it pass
+quietly.** `ask_oracle.py --preflight` parses `java -version` and reports the real reason the
+oracle cannot run — *"…is Java 11, but the language server jar needs Java 19+"* — instead of
+starting a JVM that dies inside itself and surfacing 45 seconds later as a timed-out LSP
+handshake (`NO_INITIALIZE_RESPONSE`). `ROSMODEL_JAVA` now also falls back to `java` on **PATH**,
+as `.lsp.json` always did, before the hard-coded Adoptium path. `generate` runs the oracle **by
+default** when the preflight passes, `--no-oracle` opts out, `--oracle` makes it mandatory, and a
+jar that cannot run is reported on stdout, on stderr and in the Studio itself (a
+`<project>.notice.html` whose banner opens on load). `tests/oracle_gate.py` pins that whole failure
+path and needs no working jar to do it — it points `ROSMODEL_JAVA` at a nonexistent path, which is
+reproducible anywhere. See `commands/ros-studio.md` § *Validation* for the full rationale.
+
+The linter's role is now to give **fast, single-file, offline** feedback
 in the edit loop, and to cover the checks the oracle cannot make (house style, rossdl
 compatibility, provenance sentinels). Where the two disagree, **the oracle wins** — every ERROR in
 this table has been confirmed against it.

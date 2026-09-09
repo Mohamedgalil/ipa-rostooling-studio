@@ -718,7 +718,12 @@ function buildInputs(fixture, work) {
   var gen = path.join(work, "gen");
   runStudio(["init", fixture, "--out", proj]);
   runStudio(["render", proj, "--out", html]);
-  var out = runStudio(["generate", proj, "--outdir", gen]);
+  // --no-oracle: these cases test the EMITTER against the Python emitter, byte for byte.
+  // Real-server validation is a different question, it is slow (a JVM start and an LSP
+  // handshake per call), and now that `generate` runs it by DEFAULT, leaving it on here
+  // would put minutes of language-server time into a parity run on any machine that has a
+  // JDK -- and would fail these cases on a server verdict they are not about.
+  var out = runStudio(["generate", proj, "--outdir", gen, "--no-oracle"]);
   return { project: proj, html: html, expect: generated(gen, fixture), fixture: fixture,
            wrote: { ros2: wroteExt(out, "ros2"), ros: wroteExt(out, "ros"),
                     rossystem: wroteExt(out, "rossystem") } };
@@ -735,7 +740,12 @@ function permutedCase(base, work) {
   var proj = path.join(work, "p-permuted.json");
   var gen = path.join(work, "gen-permuted");
   fs.writeFileSync(proj, JSON.stringify(project, null, 2), "utf8");
-  var out = runStudio(["generate", proj, "--outdir", gen]);
+  // --no-oracle: these cases test the EMITTER against the Python emitter, byte for byte.
+  // Real-server validation is a different question, it is slow (a JVM start and an LSP
+  // handshake per call), and now that `generate` runs it by DEFAULT, leaving it on here
+  // would put minutes of language-server time into a parity run on any machine that has a
+  // JDK -- and would fail these cases on a server verdict they are not about.
+  var out = runStudio(["generate", proj, "--outdir", gen, "--no-oracle"]);
   return { project: proj, html: base.html, expect: generated(gen, base.fixture),
            wrote: { ros2: wroteExt(out, "ros2"), ros: wroteExt(out, "ros"),
                     rossystem: wroteExt(out, "rossystem") } };

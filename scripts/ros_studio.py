@@ -3018,29 +3018,152 @@ def run_lint(paths):
     return errs, warns, infos, findings
 
 
+def _ask_oracle_path():
+    return os.path.join(os.path.dirname(_HERE), "tests", "oracle", "ask_oracle.py")
+
+
+def oracle_preflight():
+    """(available, reason). Can the real language server be asked on this machine?
+
+    Delegates to ask_oracle.py --preflight rather than re-deriving where java and the jar live:
+    two copies of that would drift the first time either moved, and this repo has the scar
+    tissue to prove it. Cheap -- it runs `java -version` and stats a file, no JVM start.
+    """
+    ask = _ask_oracle_path()
+    if not os.path.isfile(ask):
+        return False, "ask_oracle.py not found at %s" % ask
+    python = os.environ.get("ROSMODEL_PYTHON", sys.executable)
+    try:
+        proc = subprocess.run([python, ask, "--preflight"], capture_output=True, text=True,
+                              timeout=60)
+    except Exception as exc:
+        return False, "could not run ask_oracle.py --preflight: %s" % exc
+    text = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    text = text[len("FATAL: "):] if text.startswith("FATAL: ") else text
+    return proc.returncode == 0, text
+
+
 def run_oracle(outdir, model_paths):
-    """Stage catalogue deps then ask the real language server. Returns (ok, text)."""
+    """Stage catalogue deps then ask the real language server. Returns (ok, text, records).
+
+    Three things this used to get wrong, all of which made a broken oracle look like a clean
+    one -- which is the whole complaint: "if the jar is not runnable I want a clear error;
+    I have silent failures!"
+
+      1. proc.returncode was never checked. ask_oracle.py could print an ACCEPTED line and then
+         die, and the substring test below would still call it a pass.
+      2. The verdict was `"ACCEPTED" in out and "REJECTED" not in out` over stdout+stderr. That
+         is a text search over a stream that also carries diagnostic MESSAGES and a stderr tail,
+         so a model whose own text contained either word decided its own verdict.
+      3. ask_oracle.py returns 0 even when every case failed to run: NO_INITIALIZE_RESPONSE and
+         MISSING_JAR are per-case *statuses*, and a case that never got a diagnostic back still
+         printed "ACCEPTED — 0 error(s)". A server that timed out was indistinguishable from a
+         model with nothing wrong with it.
+
+    So the verdict now comes from the structured results.json -- per-case `status` plus the
+    actual diagnostic records -- and a status that is not OK is a failure, not a silent pass.
+    """
     try:
         import collect_deps
     except Exception as exc:
-        return False, "collect_deps unavailable: %s" % exc
-    oracle_dir = os.path.join(os.path.dirname(_HERE), "tests", "oracle")
-    ask = os.path.join(oracle_dir, "ask_oracle.py")
+        return False, "collect_deps unavailable: %s" % exc, []
+    ask = _ask_oracle_path()
     if not os.path.isfile(ask):
-        return False, "ask_oracle.py not found at %s" % ask
+        return False, "ask_oracle.py not found at %s" % ask, []
     try:
         collect_deps.collect(model_paths, outdir)
     except Exception as exc:
-        return False, "dep staging failed: %s" % exc
+        return False, "dep staging failed: %s" % exc, []
     python = os.environ.get("ROSMODEL_PYTHON", sys.executable)
+    # --results into the OUTPUT directory, never the default. ask_oracle.py defaults to
+    # tests/oracle/results.json, which is the checked-in 19-case regression record: a
+    # `generate --oracle` run would quietly overwrite it with this project's single case, and
+    # its own guard against that only triggers when the file already has uncommitted changes.
+    res = os.path.join(outdir, "oracle_results.json")
     try:
-        proc = subprocess.run([python, ask, outdir], capture_output=True, text=True,
-                              timeout=300)
+        proc = subprocess.run([python, ask, outdir, "--results", res],
+                              capture_output=True, text=True, timeout=300)
     except Exception as exc:
-        return False, "oracle invocation failed: %s" % exc
+        return False, "oracle invocation failed: %s" % exc, []
     out = proc.stdout + ("\n" + proc.stderr if proc.stderr else "")
-    ok = "ACCEPTED" in out and "REJECTED" not in out
-    return ok, out
+
+    records = None
+    try:
+        with open(res, "r", encoding="utf-8") as handle:
+            records = json.load(handle)
+    except Exception:
+        records = None
+
+    if proc.returncode != 0:
+        return False, out + ("\n\noracle process exited %d." % proc.returncode), []
+    if not records:
+        return False, out + ("\n\noracle wrote no results to %s -- it did not get far enough to "
+                             "judge anything, so this run has NOT been validated by the real "
+                             "language server." % res), []
+    bad = [r for r in records if r.get("status") != "OK"]
+    if bad:
+        detail = "; ".join("%s: %s" % (r.get("case", "?"), r.get("status", "?")) for r in bad)
+        return False, out + ("\n\noracle could not validate %d case(s) -- %s. A case that never "
+                             "received diagnostics is NOT a clean model; it is a server that did "
+                             "not answer." % (len(bad), detail)), []
+    errs = [d for r in records for d in r.get("diagnostics", []) if d.get("severity") == "ERROR"]
+    diags = [d for r in records for d in r.get("diagnostics", [])]
+    return not errs, out, diags
+
+
+def oracle_diagnostics(records, project):
+    """Oracle diagnostic records -> the same {"global", "byNode"} shape the linter's findings
+    already use, so they land on the node cards instead of staying on the console.
+
+    Mapping, honestly bounded. A diagnostic carries {file, line, severity, message} -- and `file`
+    is a BASENAME with no column, because ask_oracle drops range.start.character. Two routes:
+
+      * the FILE. generate writes `<pkg>.ros2`, `<pkg>.ros` and `<system>.rossystem`, so for the
+        first two the stem IS the package name and maps to that package's nodes with no string
+        guessing. This is the reliable half.
+      * the MESSAGE, for `.rossystem` diagnostics, which name a node or an interface when they
+        are reference errors ("Couldn't resolve reference to Node 'pkg.artifact'") and name
+        nothing at all when they are parser errors ("mismatched input 'msgs:'"). Same substring
+        scan the lint mapper uses, and it inherits the same limits.
+
+    Anything that maps to neither goes to `global`, and the caller puts those in the BANNER --
+    project["diagnostics"]["global"] is carried into the page but nothing renders it, so a
+    diagnostic left there alone would be invisible. Losing an unmapped ERROR silently is exactly
+    the failure this feature exists to remove.
+    """
+    by_node = {}
+    unmatched = []
+    labels = {n["label"]: n["id"] for n in project["nodes"] if n.get("label")}
+    pkgs = {}
+    for n in project["nodes"]:
+        if n.get("pkg"):
+            pkgs.setdefault(n["pkg"], []).append(n["id"])
+    for d in records:
+        sev = d.get("severity")
+        if sev not in ("ERROR", "WARNING"):
+            continue
+        fname = os.path.basename(d.get("file") or "")
+        stem, ext = os.path.splitext(fname)
+        msg = "oracle %s %s:%s %s" % (sev, fname, d.get("line"), (d.get("message") or "").strip())
+        hits = []
+        if ext in (".ros2", ".ros") and stem in pkgs:
+            hits = pkgs[stem]
+        if not hits:
+            for lbl, nid_ in sorted(labels.items(), key=lambda kv: -len(kv[0])):
+                if lbl and lbl in (d.get("message") or ""):
+                    hits = [nid_]
+                    break
+        if not hits:
+            for pkg, ids in pkgs.items():
+                if pkg and pkg in (d.get("message") or ""):
+                    hits = ids
+                    break
+        if hits:
+            for nid_ in hits:
+                by_node.setdefault(nid_, []).append(msg)
+        else:
+            unmatched.append(msg)
+    return {"global": unmatched, "byNode": by_node}
 
 
 # ========================================================================================
@@ -3142,7 +3265,8 @@ def load_autocomplete():
 # Editor HTML
 # ========================================================================================
 
-def render_editor(project, diagnostics=None, banner=None):
+def render_editor(project, diagnostics=None, banner=None, banner_title=None,
+                  banner_sev=None):
     ac = load_autocomplete()
     if diagnostics:
         project = dict(project)
@@ -3205,6 +3329,12 @@ def render_editor(project, diagnostics=None, banner=None):
             "nameKeywords": sorted(L.ROS_FIELD_NAME_KEYWORDS),
         },
         "banner": banner,
+        # Not every banner is a failed generation. An oracle that could not RUN leaves the
+        # generated files valid and the lint clean -- calling that "Generation failed" in the
+        # status chip is simply untrue, and a page that overstates one thing gets believed less
+        # about the next. The companion says which kind it is; the page stops guessing.
+        "bannerTitle": banner_title,
+        "bannerSev": banner_sev,
         "acWarnings": ac["warnings"],
     }
     data = json.dumps(payload, ensure_ascii=False)
@@ -3418,16 +3548,94 @@ def cmd_generate(args):
         for n in notes:
             print("\n  note: %s" % n)
 
-    if args.oracle:
-        print("\n--- oracle (real language server) ---")
-        # a staged subSystems: target is walked too -- it can carry catalogue references of its
-        # own that collect_deps still has to vendor in before the server sees the directory.
-        ok, text = run_oracle(outdir, written + staged)
-        print(text)
-        if not ok:
-            print("oracle did NOT return a clean ACCEPTED.", file=sys.stderr)
-            return 1
+    # ---- the real language server ---------------------------------------------------------
+    # This used to be opt-in, and that was the root cause behind "the validation misses errors
+    # the jar would catch". rosmodel_lint's RM rules are a deliberate, documented APPROXIMATION
+    # of the Xtext validator -- the oracle exists precisely BECAUSE they cannot cover everything
+    # (an action server typed with a message rather than an action being exactly that shape of
+    # gap) -- yet a plain `generate` consulted only the approximation and said nothing about it.
+    # A clean run printed "0 error(s)" and exited 0 having never asked the authority.
+    #
+    # So it is now ON by default whenever it can actually run, `--no-oracle` opts out, and the
+    # one case that must never be quiet -- it cannot run -- is reported in three places at once.
+    want_oracle = args.oracle is not False
+    required = args.oracle is True          # --oracle was passed explicitly: "I require this"
+    oracle_note = None
+    if want_oracle:
+        available, why = oracle_preflight()
+        if available:
+            print("\n--- oracle (real language server) ---")
+            print("  %s" % why)
+            # a staged subSystems: target is walked too -- it can carry catalogue references of
+            # its own that collect_deps still has to vendor in before the server sees it.
+            ok, text, records = run_oracle(outdir, written + staged)
+            print(text)
+            odiag = oracle_diagnostics(records, project)
+            if not ok:
+                n_err = sum(len(v) for v in odiag["byNode"].values()) + len(odiag["global"])
+                banner = ("The real language server REJECTED this model.\n\n"
+                          "These are errors rosmodel_lint's RM rules cannot all catch — the "
+                          "deterministic rules are an approximation of the Xtext validator, "
+                          "which is why the oracle exists.\n\n"
+                          + "\n".join(odiag["global"]))
+                err_html = _write_error_html(project, args.project, banner, diagnostics=odiag,
+                                             title="Rejected by the language server", sev="err")
+                print("\nERROR: the real language server rejected this model (%d diagnostic(s)); "
+                      "re-rendered editor -> %s" % (n_err, err_html), file=sys.stderr)
+                return 1
+        else:
+            # NOT silent, and not a bare stack trace. The user's words were "if the jar is not
+            # runnable I want a clear error in the studio"; the console alone is not the studio,
+            # so this also goes into the page's own error surface via `banner`, which
+            # buildStatus() turns red and which the page auto-opens on load.
+            oracle_note = (
+                "Real-server validation did NOT run.\n\n%s\n\n"
+                "What that means: the results below come only from rosmodel_lint's RM rules, "
+                "which are a deliberate approximation of the real Xtext validator and cannot "
+                "catch everything it would — an action server declared with a message type "
+                "rather than an action type is the standard example.\n\n"
+                "How to fix it: set ROSMODEL_JAVA to a Java 19+ binary, or build the language "
+                "server jar per build/README.md. Re-run `generate` afterwards.\n\n"
+                "To silence this deliberately, pass --no-oracle." % why)
+            print("\n--- oracle (real language server) ---")
+            print("  NOT RUN: %s" % why.replace("\n", "\n  "))
+            print("  Lint results above are plugin-only and cannot catch everything the real "
+                  "validator would.", file=sys.stderr)
+            if required:
+                # --oracle was asked for by name. Refusing to run it is then a failure, not a
+                # degradation to be shrugged off.
+                print("\nERROR: --oracle was requested but the real language server could not "
+                      "be run.", file=sys.stderr)
+                _write_error_html(project, args.project, oracle_note,
+                                  title="Validation could not run", sev="err")
+                return 1
+
+    # A jar that could not run is a warning, not a failed generation: the files ARE written and
+    # the lint DID pass. But the page must say so, or "validated" silently means "half
+    # validated" -- so the editor is re-rendered with the notice even on an otherwise clean run.
+    if oracle_note:
+        note_html = _write_error_html(project, args.project, oracle_note,
+                                      title="Validation incomplete", sev="warn",
+                                      suffix=".notice.html")
+        print("\nNOTE: re-rendered the editor carrying this notice -> %s" % note_html)
     return 0
+
+
+def _write_error_html(project, project_path, banner, diagnostics=None,
+                      title=None, sev=None, suffix=".error.html"):
+    """Re-render the editor beside the project with a banner it will show on load.
+
+    `suffix` exists because not every one of these is an error. A run whose files were written
+    and whose lint was clean, but which could not reach the real language server, is a NOTICE --
+    writing that to `<project>.error.html` would be a file whose own name misreports it, and
+    would also overwrite the genuine error page from a previous failing run.
+    """
+    html, _ = render_editor(project, diagnostics=diagnostics, banner=banner,
+                            banner_title=title, banner_sev=sev)
+    path = os.path.splitext(os.path.abspath(project_path))[0] + suffix
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(html)
+    return path
 
 
 def _generated_facts(project):
@@ -3559,7 +3767,19 @@ def main(argv=None):
     p_gen = sub.add_parser("generate", help="emit files, lint, optionally ask the oracle")
     p_gen.add_argument("project")
     p_gen.add_argument("--outdir", default=None)
-    p_gen.add_argument("--oracle", action="store_true")
+    # Tri-state on purpose, and the default is None rather than True/False:
+    #   None   -> run the oracle if it can run, warn loudly (everywhere) if it cannot
+    #   True   -> --oracle, "I require it": failing to run it is an ERROR
+    #   False  -> --no-oracle, "do not ask", and nothing is reported
+    # store_true's default of False could not express "try, but do not fail the build over a
+    # missing JDK", which is the behaviour that makes default-on safe to ship.
+    p_gen.add_argument("--oracle", dest="oracle", action="store_true", default=None,
+                       help="require the real language server; fail if it cannot be run "
+                            "(it is already attempted by default when Java and the jar "
+                            "are available)")
+    p_gen.add_argument("--no-oracle", dest="oracle", action="store_false",
+                       help="skip real-server validation entirely and report only "
+                            "rosmodel_lint's deterministic RM rules")
     p_gen.add_argument("--diff", action="store_true",
                        help="also print the model-level diff against the seed source")
     p_gen.set_defaults(func=cmd_generate)
