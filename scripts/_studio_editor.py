@@ -2331,6 +2331,12 @@ var DATA = /*__DATA__*/null;
     pkgEls={};
     var packages={}, order=[];
     project.nodes.forEach(function(n){
+      // The per-system filter has to reach THIS view too. Hiding a system removed its node card
+      // here but left its package box standing (and a dep edge pointing at it), so the Deps
+      // level answered "show me only these systems" with a box for a system that was not being
+      // shown. A package whose every node is hidden contributes nothing and is skipped; one that
+      // still has a visible node keeps its box, with a count that matches what is on screen.
+      if(originHidden(n)) return;
       var p=n.pkg||"(local)";
       if(!packages[p]){packages[p]={name:p,nodes:[],resolved:false};order.push(p);}
       packages[p].nodes.push(n);
