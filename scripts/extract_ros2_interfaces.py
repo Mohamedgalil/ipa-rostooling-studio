@@ -426,26 +426,41 @@ def emit_ros_type(typ, pkg, path, lineno, flags):
 
 def emit_ros_package(pkg, specs, report_root, flags):
     """specs: {kind: {SpecName: path}} for one package -> the .ros file text."""
+    # Body first: parsing is what discovers the losses, and they belong in the header of
+    # the file itself. Printing them only to stderr means the record dies with the
+    # terminal, leaving a file that silently differs from the .msg it came from --
+    # exactly the drop SKILL.md's self-check 12 exists to prevent.
+    body, mine = [], []
+    for kind, block in (("msg", "msgs"), ("srv", "srvs"), ("action", "actions")):
+        entries = specs.get(kind) or {}
+        if not entries:
+            continue
+        body.append("  %s:" % block)
+        for name in sorted(entries):
+            sections = parse_msg_file(entries[name], pkg, kind, mine)
+            body.append("    %s" % name)           # level 2, no trailing ':'
+            for idx, keyword in enumerate(MSG_SECTIONS[kind]):
+                body.append("      %s" % keyword)   # level 3
+                for field in (sections[idx] if idx < len(sections) else []):
+                    body.append("        %s" % field)  # level 4
+    flags.extend(mine)
+
     lines = ["# GENERATED -- scripts/extract_ros2_interfaces.py",
              "# Transcribed from the package's own .msg/.srv/.action files."]
     for kind in ("msg", "srv", "action"):
         for name in sorted(specs.get(kind, {})):
             rel = os.path.relpath(specs[kind][name], report_root)
             lines.append("#   %s" % rel.replace(os.sep, "/"))
+    if mine:
+        lines.append("#")
+        lines.append(wrap_comment(
+            "DROPPED (%d) -- the .ros grammar cannot express these, so they are in the .msg "
+            "above but not in this file:" % len(mine)))
+        for flag in mine:
+            rel = os.path.relpath(flag.file, report_root).replace(os.sep, "/")
+            lines.append(wrap_comment("%s  [%s:%d]" % (flag.reason, rel, flag.line), "  "))
     lines.append("%s:" % pkg)
-    for kind, block in (("msg", "msgs"), ("srv", "srvs"), ("action", "actions")):
-        entries = specs.get(kind) or {}
-        if not entries:
-            continue
-        lines.append("  %s:" % block)
-        for name in sorted(entries):
-            sections = parse_msg_file(entries[name], pkg, kind, flags)
-            lines.append("    %s" % name)          # level 2, no trailing ':'
-            for idx, keyword in enumerate(MSG_SECTIONS[kind]):
-                lines.append("      %s" % keyword)  # level 3
-                for field in (sections[idx] if idx < len(sections) else []):
-                    lines.append("        %s" % field)  # level 4
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines + body) + "\n"
 
 
 def referenced_closure(resolver, referenced):
