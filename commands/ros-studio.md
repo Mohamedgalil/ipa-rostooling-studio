@@ -1,6 +1,6 @@
 ---
 description: Author RosTooling models in an interactive self-contained editor, then deterministically generate .ros2/.rossystem/.ros and validate them against the real language server, via scripts/ros_studio.py.
-argument-hint: "init [file.rossystem | dir ...] | render project.json [--open] | generate project.json [--oracle] | diff project.json"
+argument-hint: "init [file.rossystem | dir ...] | render project.json [--open] | generate project.json [--oracle | --no-oracle] | diff project.json"
 allowed-tools: Bash, Read, Glob
 ---
 
