@@ -415,12 +415,81 @@ written (the `.ros2` artifact comments, and every node a catalogued `subSystems:
 Loading replaces the current project, so it asks first when there are unsaved changes, and the
 load itself is undoable.
 
+## The saved visualization
+
+`project.json` used to record only *part* of what a reader had arranged: node `x`/`y`, and
+`project.view.subsystems`. Everything else was a plain JS variable that died with the tab — the
+subsystem box positions (`subPos`), the Deps view's package boxes (`pkgPos`), the abstraction
+level, the Edit/View mode, the **Show kinds** filter, **auto sides**, the camera. So a layout
+built over ten minutes survived a reload only by accident, and **Auto layout** — which clears
+`subPos`/`pkgPos` by design — threw the rest away with no way back.
+
+All of it now lives under `project["view"]` and round-trips:
+
+| key | what it holds |
+|---|---|
+| `subsystems` | collapsed / framed, per `subSystems:` reference (unchanged) |
+| `subPos` · `pkgPos` | where the subsystem and package boxes were dragged to |
+| `level` · `mode` | which of System │ Interfaces │ Full │ Deps, and Edit vs View |
+| `hiddenKinds` | the **Show kinds** filter, including the `param` pseudo-kind |
+| `autoSides` | the port-side toggle |
+| `camera` | `k`/`tx`/`ty` — where the reader was standing |
+
+Two lines are drawn deliberately, because "restore everything always" is the wrong answer twice:
+
+- **Layout is undoable; preferences are not.** `Ctrl+Z` after **Auto layout** restores `subPos`
+  and `pkgPos` along with the node positions it already restored — that is the complaint this
+  fixes. It does *not* rewind the level, mode or filter you happen to be looking through, because
+  a view was never an edit (the same line `secOpen` already draws for collapsed sections).
+- **The camera is saved but only restored by an explicit load.** A `project.json` carrying one
+  opens exactly where it was saved; one carrying none still gets the fit-on-open pass, so a
+  freshly seeded project is unaffected.
+
+`autoSides` and `hiddenKinds` remain localStorage preferences *as well*, and the project's value
+wins when a project carries one — so a filter follows you between projects, but a saved
+arrangement is still the arrangement you saved.
+
+**None of it can reach an emitted byte.** Both fact trees build from an allow-list of model keys
+rather than by deleting presentation ones, so a key added here is excluded by construction. That
+is asserted rather than argued: `tests/studio_parity.js`'s `compareViewStates()` now emits under a
+*populated* view — a non-default level, View mode, a filter hiding two kinds, `autoSides` on, a
+camera far from the origin, positions for boxes that may not exist — for **every** fixture rather
+than only the ones with a `subSystems:` block, byte-compares the `.rossystem`, and checks that
+neither `projectFacts()` nor the companion's `project_facts()` grew any of the keys. A project
+with a populated `view` and one without must produce identical `--facts` output, or `diff` would
+report dragging a box as a model change.
+
 ## The commit hand-off
 
-Inside the editor, **Commit** opens a modal that downloads the `project.json` (a Blob via a
-`<a download>`, which works on `file://`) with a pre-selected `<textarea>` copy fallback. The
-user saves it, returns, and says "done"; you then run `generate` on that file to produce and
-validate the real files.
+Inside the editor, **Commit** opens a modal with two ways out.
+
+**Save all files** downloads what `generate` would emit — the `<system>.rossystem`, every
+`<pkg>.ros2`, every companion `<pkg>.ros`, and the `project.json` — as one browser download each.
+This is the direct path the manual round-trip existed to work around, and it is safe in the
+specific sense that matters here: the page is still a `file://` document with no network and no
+filesystem API, nothing is overwritten, and the browser's own download UI is the confirmation
+step. (A burst of programmatic downloads is what makes a browser stop honouring them, so they are
+staggered; Chrome asks once to allow multiple downloads.)
+
+It rests on a property this repo already proves rather than on a new emitter: `tests/studio_parity.js`
+holds `genSystem()`/`genRos2()`/`genRos()` to the Python emitter's **bytes** for every fixture, so
+the previews are the generated files, not an approximation. That test now also pins the
+**manifest** — the filenames and the file *set*, not just the content keyed by package — because
+`genSystem()` being byte-perfect does not make `<system>.rossystem` the right name to save it
+under, and a wrong name is a file the user hands back to `generate` as a different model.
+
+Two things Save all deliberately does **not** do, and the modal says so:
+
+- it does not lint and it does not ask the language server — `generate` is still the path to the
+  **verdict**, and only it can re-render the editor with diagnostics on the offending nodes;
+- it cannot produce a staged project-local `subSystems:` target. Staging is copying someone
+  else's file off a disk this page cannot read. That is why the parity check compares Save all's
+  manifest against the files `generate` reported *writing* rather than against its output
+  directory, which also holds what it *staged*.
+
+**project.json only** is the original hand-off, unchanged: a Blob via an `<a download>` (which
+works on `file://`) with a pre-selected `<textarea>` copy fallback. The user saves it, returns,
+and says "done"; you then run `generate` on that file to produce and validate the real files.
 
 Because that hand-off is manual, the page keeps the session safe on its own:
 

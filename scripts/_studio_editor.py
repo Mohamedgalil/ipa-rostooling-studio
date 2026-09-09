@@ -659,11 +659,13 @@ try{
   <div class="modal">
     <h3>Commit &mdash; hand off to the Python companion <button class="close" data-close>&#10005;</button></h3>
     <div class="body">
-      <div class="gennote">Download (or copy) this project.json, then run <b>generate</b> in the companion. The previews below are indicative; the deterministic files come from the Python emitter, which also validates against the real language server.</div>
+      <div class="gennote"><b>Save all</b> downloads the real generated files &mdash; the <code>.rossystem</code>, every <code>.ros2</code>, every companion <code>.ros</code>, and the <code>project.json</code> &mdash; straight from this page. The previews below are not approximations: <code>tests/studio_parity.js</code> holds them to the Python emitter byte for byte. What it cannot do is <b>validate</b>: run <b>generate</b> in the companion for <code>rosmodel_lint</code> and the real language server, and to stage a project-local <code>subSystems:</code> target.</div>
       <div class="modalbtns">
-        <button class="tbtn primary" id="dlJson">&#8681; Download project.json</button>
+        <button class="tbtn primary" id="saveAll">&#8681; Save all files</button>
+        <button class="tbtn" id="dlJson">&#8681; project.json only</button>
         <button class="tbtn" id="selJson">Select copy text</button>
       </div>
+      <div class="gennote" id="saveAllNote" style="display:none"></div>
       <div class="tabs" id="genTabs"></div>
       <pre class="gen" id="genOut"></pre>
       <textarea class="copybox" id="copyBox" spellcheck="false" readonly></textarea>
@@ -903,12 +905,28 @@ var DATA = /*__DATA__*/null;
   // wired further down where the checkboxes are built, is the mitigation.
   var HIDDEN_KINDS_KEY="rosStudio.hiddenKinds";
   var hiddenKinds=(function(){ try{ return JSON.parse(localStorage.getItem(HIDDEN_KINDS_KEY)||"[]"); }catch(e){ return []; } })();
-  function saveHiddenKinds(){
+  function hiddenKindList(){
     var out=[];
     KINDS.forEach(function(k){ if(!kindShown[k]) out.push(k); });
     if(!paramShown) out.push("param");
-    try{ localStorage.setItem(HIDDEN_KINDS_KEY,JSON.stringify(out)); }catch(e){}
+    return out;
+  }
+  function saveHiddenKinds(){
+    try{ localStorage.setItem(HIDDEN_KINDS_KEY,JSON.stringify(hiddenKindList())); }catch(e){}
     updateFilterIndicator();
+  }
+  // The other direction, for a project.json that carries a saved filter: set the state, put the
+  // checkboxes back in step with it (they are built once, with `checked` baked in, so nothing
+  // else would re-tick them), and persist it as the running preference.
+  function setHiddenKinds(list){
+    var hid={}; (list||[]).forEach(function(k){ hid[k]=1; });
+    KINDS.forEach(function(k){ kindShown[k]=!hid[k]; });
+    paramShown=!hid["param"];
+    var fb=document.getElementById("filterBox");
+    if(fb) [].slice.call(fb.querySelectorAll("input[data-k]")).forEach(function(cb){
+      cb.checked=(cb.dataset.k==="param")?paramShown:!!kindShown[cb.dataset.k];
+    });
+    saveHiddenKinds();
   }
   var kindShown={}; KINDS.forEach(function(k){kindShown[k]=hiddenKinds.indexOf(k)<0;});
   // `param` is a pseudo-kind: it has its own filter toggle but no port and no edge, because a
@@ -1028,7 +1046,10 @@ var DATA = /*__DATA__*/null;
   var undoStack=[], redoStack=[], lastTag=null, lastTagAt=0;
   var dirty=false;
 
-  function snapshot(){ return JSON.stringify(project); }
+  // syncViewState() first, so every serialised copy -- undo entry, autosave, downloaded
+  // project.json -- carries the arrangement that was on screen when it was taken. Without it the
+  // view keys would only ever be as fresh as the last time something happened to write them.
+  function snapshot(){ syncViewState(); return JSON.stringify(project); }
   function pushSnapshot(s){
     undoStack.push(s);
     if(undoStack.length>UNDO_CAP) undoStack.shift();   // cap: a long session must not grow memory
@@ -1071,7 +1092,12 @@ var DATA = /*__DATA__*/null;
       (n.params||[]).forEach(function(p){bump(p.id);}); });
     project.connections.forEach(function(c){ bump(c.id); });
   }
-  function applyState(json){
+  // `full` distinguishes the two callers. Undo/redo (full falsy) restores only the LAYOUT half of
+  // the view -- the subsystem and package box positions Auto layout clears -- so Ctrl+Z genuinely
+  // puts the arrangement back, while the level/mode/filter you happen to be looking through does
+  // not lurch backwards every time you undo an unrelated edit. The autosave prompt (full true) is
+  // a different project arriving, so it restores the whole visualization.
+  function applyState(json,full){
     project=JSON.parse(json);
     project.nodes=project.nodes||[]; project.connections=project.connections||[];
     project.packages=project.packages||{}; project.system=project.system||{};
@@ -1082,6 +1108,7 @@ var DATA = /*__DATA__*/null;
     // diagnostic reappearing, permanently, on the wrong card.
     DIAG=(project.diagnostics&&project.diagnostics.byNode)||{};
     syncUid();
+    if(full) restoreViewState(); else restoreViewLayout();
     document.getElementById("sysname").value=(project.system&&project.system.name)||"system";
     if(selNode&&!nodeById(selNode)) selNode=null;   // it may have been deleted in this state
     Object.keys(multiSel).forEach(function(id){ if(!nodeById(id)) delete multiSel[id]; });
@@ -1149,6 +1176,7 @@ var DATA = /*__DATA__*/null;
     saveTimer=null;
     if(!storage) return;
     try{
+      syncViewState();
       storage.setItem(SAVE_KEY,JSON.stringify({at:Date.now(),
         system:(project.system&&project.system.name)||"",project:project}));
       savedAt=Date.now();
@@ -1258,6 +1286,58 @@ var DATA = /*__DATA__*/null;
     project.view=project.view||{};
     project.view.subsystems=project.view.subsystems||{};
     project.view.subsystems[ref]=st;
+  }
+  // ---- the whole visualization, not just the subsystem states ------------------------------
+  // Everything a reader arranged used to be split three ways: node x/y in project.json, the
+  // subsystem states in project.view, and EVERYTHING ELSE -- the subsystem box positions, the
+  // Deps package-box positions, the abstraction level, the edit/view mode, the kind filter, auto
+  // sides, the camera -- in plain JS variables that died with the tab. So "I built this exact
+  // picture" survived a reload only by accident, and Auto layout (which clears subPos/pkgPos)
+  // threw the rest away with no way back.
+  //
+  // The fix is not to move these into the MODEL -- they are views, and the invariant is that no
+  // view can change an emitted byte. They go under project["view"], which both fact trees
+  // exclude by construction: _project_facts()/projectFacts() build from an allow-list of model
+  // keys, so a key added here can never enter the diff or the emitter. tests/studio_parity.js's
+  // compareViewStates() asserts that rather than trusting it, by emitting under populated view
+  // states and byte-comparing.
+  //
+  // `subsystems` is deliberately NOT written by syncViewState(): subState() reads it live out of
+  // project.view, so it is already current, and re-writing it here would fight that reader.
+  function syncViewState(){
+    project.view=project.view||{};
+    var v=project.view;
+    v.subPos=subPos; v.pkgPos=pkgPos;
+    v.level=level; v.mode=mode; v.autoSides=autoSides;
+    v.hiddenKinds=hiddenKindList();
+    // The camera is the one piece that is arguably NOT part of "the picture I built" -- it is
+    // where you were standing, not what you arranged. It is saved anyway (a reader who zoomed
+    // into one corner of a 40-node system and saved wants that corner back) but restored only
+    // by an explicit load, and a project.json carrying none still gets the fit-on-open pass.
+    v.camera={k:view.k,tx:view.tx,ty:view.ty};
+  }
+  // Layout-ish view state only: the positions Auto layout destroys. Undo/redo restores THESE, so
+  // "Auto layout ate my arrangement" is a Ctrl+Z away, while the level/mode/filter you happened
+  // to be on does not lurch backwards every time you undo an unrelated edit. That line -- layout
+  // is undoable, preferences are not -- is the same one secOpen already draws.
+  function restoreViewLayout(){
+    var v=project.view||{};
+    subPos=v.subPos||{}; pkgPos=v.pkgPos||{};
+  }
+  // The full restore, for the paths where a genuinely different project arrives: Open, drop, and
+  // the autosave prompt. A project.json saved before this existed carries none of these keys, so
+  // every one falls back to what the page already had.
+  function restoreViewState(){
+    var v=project.view||{};
+    restoreViewLayout();
+    if(typeof v.level==="number"&&v.level>=1&&v.level<=4){ level=v.level; setLevelButtons(); }
+    if(v.mode==="edit"||v.mode==="view") setMode(v.mode);
+    if(typeof v.autoSides==="boolean") setAutoSides(v.autoSides);
+    if(Array.isArray(v.hiddenKinds)) setHiddenKinds(v.hiddenKinds);
+    if(v.camera&&typeof v.camera.k==="number"){
+      view.k=clampZ(v.camera.k); view.tx=v.camera.tx||0; view.ty=v.camera.ty||0; applyView();
+    }
+    return !!(v.camera&&typeof v.camera.k==="number");
   }
   function subEntry(ref){
     var l=project.subSystems||[];
@@ -2816,6 +2896,10 @@ var DATA = /*__DATA__*/null;
     project=next;
     DIAG=(project.diagnostics&&project.diagnostics.byNode)||{};   // this is a different project now
     selNode=null; selEdge=null; multiSel=Object.create(null);
+    // The whole point of saving the view: a project.json comes back looking the way it was
+    // saved. Returns whether it carried a camera, so the fitView() below is skipped when the
+    // file already says where the reader was standing.
+    var hadCamera=restoreViewState();
     if(project.system&&project.system.name)
       document.getElementById("sysname").value=project.system.name;
     fillNsList();
@@ -2827,7 +2911,8 @@ var DATA = /*__DATA__*/null;
       opNotice={sev:"ok",title:"Loaded "+sourceName,html:"Edit, then <b>Commit</b> to hand the "
         +"project.json back to the Python companion for generation and validation."};
     }
-    sizeCanvas(); render(); fillInspector(); fitView();   // render() -> runIssues() -> buildStatus() picks up opNotice
+    sizeCanvas(); render(); fillInspector();   // render() -> runIssues() -> buildStatus() picks up opNotice
+    if(!hadCamera) fitView();                  // no saved camera: fall back to framing the system
     return true;
   }
 
@@ -6242,6 +6327,7 @@ var DATA = /*__DATA__*/null;
 
   function genProjectJson(){
     project.system=project.system||{}; project.system.name=document.getElementById("sysname").value;
+    syncViewState();     // what leaves the page has to carry the arrangement that is on screen
     return JSON.stringify(project,null,2);
   }
   var commitScrim=document.getElementById("commitScrim");
@@ -6273,13 +6359,69 @@ var DATA = /*__DATA__*/null;
     else out=genProjectJson();
     document.getElementById("genOut").textContent=out;
   }
-  document.getElementById("dlJson").onclick=function(){
-    var blob=new Blob([genProjectJson()],{type:"application/json"});
+  // The one download primitive. A Blob behind an <a download> is the ONLY write this page has:
+  // it is a file:// document with no network and no filesystem API, which is deliberate and
+  // load-bearing, and it is also why nothing here can overwrite anything -- the browser's own
+  // download UI is the confirmation step, and the user picks where the bytes land.
+  function dlBlob(name,text,type){
+    var blob=new Blob([text],{type:type||"text/plain"});
     var url=URL.createObjectURL(blob), a=document.createElement("a");
-    a.href=url; a.download=(document.getElementById("sysname").value||"project")+".project.json";
+    a.href=url; a.download=name;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(function(){URL.revokeObjectURL(url);},1000);
+  }
+  document.getElementById("dlJson").onclick=function(){
+    dlBlob((document.getElementById("sysname").value||"project")+".project.json",
+           genProjectJson(),"application/json");
     clearDirty();     // the project has left the page; the beforeunload guard stands down
+  };
+  // ---- Save all: the real generated files, without the manual Python round-trip -------------
+  // The hand-off used to be: download project.json, leave the page, run `generate`, come back.
+  // That is three steps and a context switch to obtain files the page can already produce
+  // EXACTLY -- tests/studio_parity.js holds genSystem()/genRos2()/genRos() to the Python
+  // emitter's bytes for every fixture, so "the browser's preview" and "what generate writes"
+  // are the same string, not an approximation of it.
+  //
+  // So this writes them out directly: one browser download per file, the same Blob mechanism as
+  // project.json, staggered because a burst of programmatic downloads is what makes a browser
+  // stop honouring them (Chrome prompts once for "allow multiple downloads"; the stagger keeps
+  // that to a single prompt rather than one per file).
+  //
+  // What this deliberately does NOT do, and the note in the modal says so: it does not lint, it
+  // does not run the real language server, and it cannot stage a project-local `subSystems:`
+  // target -- that file belongs to someone else's model and lives on a disk this page cannot
+  // read. Save all is the fast path to the bytes; `generate` is still the path to the VERDICT.
+  // The MODEL files, exactly the set and the names `generate` writes into generated/: one
+  // <system>.rossystem, one <pkg>.ros2 per hand-authored package, one <pkg>.ros per package
+  // whose types this project had to invent. Kept as a pure function -- no DOM beyond the system
+  // name, no downloads -- so tests/studio_parity.js can call it and hold the whole manifest,
+  // filenames included, against what the companion actually wrote. The naming is the part a
+  // byte comparison of the previews could never catch: genSystem() being right does not make
+  // "<system>.rossystem" the right thing to call it.
+  function generatedFiles(){
+    var sys=(document.getElementById("sysname").value||"system");
+    var files=[[sys+".rossystem",genSystem(),"text/plain"]];
+    handPkgNodes().order.forEach(function(p){ files.push([p+".ros2",genRos2(p),"text/plain"]); });
+    Object.keys(companionTypes()).sort().forEach(function(p){ files.push([p+".ros",genRos(p),"text/plain"]); });
+    return files;
+  }
+  function saveAllFiles(){
+    var sys=(document.getElementById("sysname").value||"system");
+    var files=generatedFiles();
+    // last, so that if the browser does cut the burst short the model itself is not the casualty
+    files.push([sys+".project.json",genProjectJson(),"application/json"]);
+    files.forEach(function(f,i){ setTimeout(function(){ dlBlob(f[0],f[1],f[2]); },i*180); });
+    clearDirty();     // everything has left the page
+    return files.map(function(f){ return f[0]; });
+  }
+  document.getElementById("saveAll").onclick=function(){
+    var names=saveAllFiles();
+    var note=document.getElementById("saveAllNote");
+    if(note) note.style.display="";
+    if(note) note.innerHTML="Saved <b>"+names.length+" file(s)</b>: "+names.map(esc).join(" &middot; ")
+      +'<br><span style="color:var(--ink-3)">Your browser may ask once to allow multiple '
+      +'downloads. These are the same bytes <code>generate</code> writes &mdash; but only '
+      +'<code>generate</code> lints them and asks the real language server.</span>';
   };
   document.getElementById("selJson").onclick=function(){var t=document.getElementById("copyBox");t.focus();t.select();
     // copy-to-clipboard is the other hand-off route to the companion, so it counts as committed
@@ -6287,15 +6429,21 @@ var DATA = /*__DATA__*/null;
 
   // ============================ mode / level ============================
   var modeSeg=document.getElementById("modeSeg"), levelSeg=document.getElementById("levelSeg");
-  modeSeg.querySelectorAll("button").forEach(function(b){b.onclick=function(){
-    mode=b.dataset.mode;
-    modeSeg.querySelectorAll("button").forEach(function(x){x.classList.toggle("on",x===b);});
+  // Factored out of the click handler so restoreViewState() can reach it: a saved project.json
+  // that was in View mode has to come back in View mode, and re-toggling the body classes by
+  // hand in two places is exactly how the two drift.
+  function setMode(m){
+    mode=m;
+    modeSeg.querySelectorAll("button").forEach(function(x){x.classList.toggle("on",x.dataset.mode===m);});
     // classList, NOT `className=`. A wholesale assignment here wiped every other class on
     // <body> -- which since the responsive layer moved onto `narrow`/`tiny`/`drawer-*` meant
     // that tapping View or Edit on a phone destroyed the layout and dropped the page back into
     // the desktop three-column form, mid-session, with a drawer possibly open.
     document.body.classList.toggle("mode-edit",mode==="edit");
     document.body.classList.toggle("mode-view",mode!=="edit");
+  }
+  modeSeg.querySelectorAll("button").forEach(function(b){b.onclick=function(){
+    setMode(b.dataset.mode);
     selEdge=null; render(); fillInspector();
   };});
   levelSeg.querySelectorAll("button").forEach(function(b){b.onclick=function(){level=+b.dataset.lvl;setLevelButtons();render();};});
@@ -6320,15 +6468,24 @@ var DATA = /*__DATA__*/null;
 
   // ============================ canvas controls ============================
   document.getElementById("autoLayout").onclick=autoLayout;
+  // A VIEW preference. It rides in project["view"] now (so a saved arrangement comes back with
+  // the port sides it was arranged with) and STILL in localStorage (so it stays a running
+  // preference for a project that carries none). It never touches undo and never enters a fact
+  // tree. The project's saved value wins on an explicit load; localStorage seeds the rest.
+  function setAutoSides(b){
+    autoSides=!!b;
+    var box=document.getElementById("autoSides");
+    if(box) box.checked=autoSides;
+    try{ localStorage.setItem("rosStudio.autoSides",autoSides?"1":"0"); }catch(e){}
+  }
   (function(){
     var box=document.getElementById("autoSides");
     if(!box) return;
-    // a VIEW preference, not model content: it never enters project.json and never touches undo
-    try{ autoSides=localStorage.getItem("rosStudio.autoSides")==="1"; }catch(e){}
-    box.checked=autoSides;
+    var pref=false;
+    try{ pref=localStorage.getItem("rosStudio.autoSides")==="1"; }catch(e){}
+    autoSides=pref; box.checked=autoSides;
     box.onchange=function(){
-      autoSides=box.checked;
-      try{ localStorage.setItem("rosStudio.autoSides",autoSides?"1":"0"); }catch(e){}
+      setAutoSides(box.checked);
       render();          // ports move, and drawEdges reads their rendered positions
     };
   })();
@@ -6428,7 +6585,7 @@ var DATA = /*__DATA__*/null;
     var scrim=document.getElementById("restoreScrim"); scrim.classList.add("on");
     document.getElementById("doRestore").onclick=function(){
       pushSnapshot(snapshot());          // the seeded project stays one Ctrl+Z away
-      applyState(JSON.stringify(saved.project));
+      applyState(JSON.stringify(saved.project),true);   // a whole session coming back, view and all
       scrim.classList.remove("on");
     };
     document.getElementById("doDiscard").onclick=function(){
@@ -6441,8 +6598,13 @@ var DATA = /*__DATA__*/null;
   // is a VIEW, not model data. Place them once before the first paint, or they all stack at the
   // default corner. render() is called twice on purpose: the first pass is what gives
   // clusterLayout() rendered cards to MEASURE (nodeBox reads offsetWidth/offsetHeight).
+  // A project.json that was rendered back into a page carries the arrangement it was saved with,
+  // so apply it BEFORE the first paint -- level and the kind filter both change what render()
+  // even draws, and re-laying-out first would just discard the positions on the way past.
+  var bootCamera=restoreViewState();
+  var bootSubPos=Object.keys(subPos).length>0;
   render();
-  relayoutSubs();
+  if(!bootSubPos) relayoutSubs();   // saved box positions are the author's; do not re-place them
   render();
   fillInspector();      // the idle inspector is the SYSTEM panel (fromFile, fromGitRepo), not
   updateHistoryUI();    // a placeholder, so it has to be painted before anything is selected
@@ -6450,6 +6612,7 @@ var DATA = /*__DATA__*/null;
   // project blown up to fill the viewport looks like a rendering bug, and the author's mental
   // model of "actual size" is the one the drag handles work in.
   (function(){
+    if(bootCamera) return;      // the project says where the reader was standing; respect it
     var b=contentBox(), pad=44, W=canvasWrap.clientWidth, H=canvasWrap.clientHeight;
     if(W<=0||H<=0) return;
     if(b.w+2*pad<=W&&b.h+2*pad<=H){ view.k=1; view.tx=pad-b.x; view.ty=pad-b.y; applyView(); }
