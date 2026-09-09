@@ -536,6 +536,26 @@ function checkPageInvariants(htmlPath) {
     problems.push("the page assigns document.body.className wholesale, which wipes the "
       + "responsive (`narrow`/`tiny`) and drawer classes -- use classList.toggle");
 
+  // ---- the guided tutorial's progress is the READER's, not the model's -------------------
+  // Which step of the walkthrough you are on, and whether you finished it, is a fact about the
+  // person reading -- not about the system being authored. It lives under its own localStorage
+  // key and never enters `project` at all, which is a stronger guarantee than a project.view
+  // slot would be: a view key is only excluded because both fact trees are built from an
+  // allow-list and someone remembered not to add it, whereas a key that is never written onto
+  // the project cannot leak into an emitted byte, into `diff`, or into a project.json handed to
+  // a colleague, by any route.
+  //
+  // That is cheap to state and cheap to break with one "while I am here" edit, so it is pinned
+  // both ways: the key has to still be there, and nothing may start writing the state onto the
+  // project instead.
+  if (!/rosStudio\.tour/.test(script))
+    problems.push("the tutorial's own localStorage key is gone -- its progress has to live "
+      + "outside `project`, or a saved project starts carrying who read what");
+  if (/project\s*(?:\.\s*view\s*)?(?:\.\s*tour\b|\[\s*["']tour["']\s*\])/.test(script))
+    problems.push("tutorial state is being written onto `project` -- progress through the "
+      + "walkthrough belongs to the reader, and a project.view slot would then have to be kept "
+      + "out of both fact trees by hand, forever");
+
   // The stylesheet and the code must not judge "is this narrow?" independently. They did once,
   // via @media (max-width:...) on one side and matchMedia on the other, and disagreed on a real
   // phone: the toolbar buttons appeared while the panels stayed in column flow.

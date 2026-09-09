@@ -486,6 +486,62 @@ try{
   .ctxmenu button{display:block;width:100%;text-align:left;padding:.4rem .6rem;font-family:inherit;
     font-size:.78rem;background:none;border:none;border-radius:4px;color:var(--ink);cursor:pointer}
   .ctxmenu button:hover{background:var(--surface-2)}
+
+  /* ================================ the guided tutorial ================================
+     A coach mark, not a slide deck. The whole point of the walkthrough is that the reader
+     drives the REAL editor -- adds the real catalogue node, drags the real wire -- while this
+     panel follows and reacts. So there is deliberately NO scrim behind it and nothing here ever
+     swallows a click: .tourhalo is pointer-events:none, because an overlay that ringed a button
+     and then ate the click aimed at it would be strictly worse than no tutorial at all.
+
+     Positioned exactly the way .typeahead-box already is -- position:fixed, parented to
+     document.body, placed from the anchor's getBoundingClientRect() and clamped to the viewport
+     -- so it floats free of the canvas's zoom/pan transform (three steps point at ports on a
+     card inside it) and free of the inspector's overflow:auto clipping. A second positioning
+     scheme would have drifted from that one the first time either was fixed.
+
+     z-index sits ABOVE .scrim (50): three steps point at controls inside the Commit modal, and
+     one at the catalogue modal's search box. It stays below nothing -- toasts (95) are bottom
+     centre and never collide with an anchored card. */
+  .tourhalo{position:fixed;z-index:94;pointer-events:none;border:2px solid var(--accent);
+    border-radius:8px;box-shadow:0 0 0 3px var(--accent-wash)}
+  .tourhalo.pulse{animation:tourring 1.8s ease-out infinite}
+  @keyframes tourring{0%{box-shadow:0 0 0 3px var(--accent-wash)}
+                      70%{box-shadow:0 0 0 11px transparent}
+                      100%{box-shadow:0 0 0 3px transparent}}
+  /* The page kills every transition under reduced motion already (bottom of this stylesheet);
+     an animation is not a transition, so the ring has to be turned off by name. It degrades to
+     the static border+wash above, which is the part that actually carries the meaning. */
+  @media (prefers-reduced-motion:reduce){.tourhalo.pulse{animation:none}}
+  .tourcard{position:fixed;z-index:96;width:min(350px,calc(100vw - 1.5rem));background:var(--surface);
+    color:var(--ink);border:1px solid var(--accent);border-radius:10px;box-shadow:var(--shadow-lift);
+    padding:.65rem .8rem .55rem;font-size:.78rem;line-height:1.5}
+  .tourcard:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .tourcard .thead{display:flex;align-items:baseline;gap:.45rem;margin-bottom:.15rem}
+  .tourcard .tstep{font-family:var(--mono);font-size:.6rem;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);flex:none}
+  .tourcard h5{margin:0;font-family:var(--display);font-size:.95rem;line-height:1.3;flex:1}
+  .tourcard .tclose{flex:none;background:none;border:none;color:var(--ink-3);font-size:1rem;line-height:1;cursor:pointer;padding:0 .1rem}
+  .tourcard .tclose:hover{color:var(--ink)}
+  .tourcard .tclose:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  .tourcard .tbody{color:var(--ink-2)}
+  .tourcard .tbody p{margin:.4rem 0}
+  .tourcard .tbody code{font-family:var(--mono);font-size:.92em;background:var(--surface-2);border-radius:3px;padding:0 .2em}
+  .tourcard .twait{margin-top:.5rem;font-family:var(--mono);font-size:.68rem;line-height:1.4;
+    color:var(--warn);background:var(--warn-wash);border-radius:5px;padding:.3rem .45rem}
+  .tourcard .twait.done{color:var(--accent-2);background:var(--accent-wash)}
+  .tourcard .tfoot{display:flex;align-items:center;gap:.35rem;margin-top:.55rem;padding-top:.5rem;border-top:1px solid var(--rule-soft)}
+  .tourcard .tfoot .grow{flex:1}
+  .tourcard .tfoot button{font-family:inherit;font-size:.72rem;padding:.3rem .55rem;border-radius:5px;
+    cursor:pointer;border:1px solid var(--rule);background:var(--surface-2);color:var(--ink-2)}
+  .tourcard .tfoot button.go{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  .tourcard .tfoot button:disabled{opacity:.42;cursor:default}
+  .tourcard .tfoot button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  .tourbar{display:flex;gap:2px;margin-top:.5rem}
+  /* Colour is never the only channel here either: the bar repeats what "STEP 7 OF 15" already
+     says in words, for the same reason the Source systems legend counts its rows. */
+  .tourbar i{flex:1;height:3px;border-radius:2px;background:var(--rule)}
+  .tourbar i.on{background:var(--accent)}
+
   /* ================================ small screens ================================
      The desktop layout is three columns: a 190px rail, the canvas, a 298px inspector. That is
      ~490px of chrome before any graph, so on a phone there was nothing left to draw on.
@@ -558,6 +614,14 @@ try{
   body.narrow .findbar input{width:9ch}
   body.narrow .viewbar{bottom:.5rem;left:.5rem;right:.5rem}
   body.narrow .modal{width:96vw;max-height:90vh}
+  /* A card that tracks an anchor needs room beside it, and on a phone there is none: anything
+     placed under a topbar button covers half the canvas and anything placed under a rail button
+     is inside a drawer. So it stops following and docks to the bottom edge, where it can never
+     sit on top of the control the step is asking you to press. !important because tourPlace()
+     writes top/left INLINE while tracking: it stops writing them once docked, but the ones from
+     before the viewport narrowed are still on the element and would otherwise win. */
+  body.narrow .tourcard{left:.5rem!important;right:.5rem!important;top:auto!important;
+                        bottom:.5rem!important;width:auto!important;max-height:46vh;overflow-y:auto}
   /* At true phone width the wordmark is the one thing on the bar that does no work. */
   body.tiny .brand{display:none}
   body.tiny #levelSeg button{font-size:.7rem;padding:.34rem .45rem}
@@ -602,6 +666,10 @@ try{
   </div>
   <div class="spacer"></div>
   <span class="savestate" id="saveState"></span>
+  <!-- In the topbar, not the rail: the rail collapses into a "Tools" drawer on a narrow screen
+       and its sections are individually collapsible, so the one entry point a first-time reader
+       has to be able to find is the one place that is always visible. -->
+  <button class="tbtn" id="tourBtn" title="A guided walkthrough that builds a small, real TurtleBot 3 system in this editor">&#9873; Tutorial</button>
   <button class="tbtn" id="reset">Reset layout</button>
   <button class="tbtn" id="theme">&#9680; Theme</button>
   <button class="tbtn" id="openBtn" title="Open a project.json, or a .rossystem with its .ros2/.ros files -- REPLACES the current project. To add systems to what's already on the canvas, use Import instead.">&#8679; Open</button>
@@ -7099,6 +7167,375 @@ var DATA = /*__DATA__*/null;
       project.connections=project.connections.filter(function(c){return c.from.n!==selNode&&c.to.n!==selNode;});
       project.nodes=project.nodes.filter(function(x){return x.id!==selNode;});selNode=null;multiSel=Object.create(null);render();fillInspector();}
   });
+  // ============================ the guided tutorial ============================
+  // Somebody who has never opened this page is looking at a blank canvas, four abstraction
+  // levels, a rail of filters and a Commit button, and nothing on screen says which of those is
+  // the first move. The README explains it; the README is not in the page, and a reader who has
+  // to leave the tool to learn the tool mostly does not come back.
+  //
+  // So this walks them through building one real system, in this editor, with their own hands:
+  // tb3_teleop -- a keyboard teleop node driving a TurtleBot 3 base over /cmd_vel. Both nodes
+  // are vendored catalogue entries (assets/rosmodelscatalog/robots/turtlebot3/), so every
+  // interface name and every message type below is the one the real .ros2 file declares, not a
+  // placeholder. It is the smallest thing in the catalogue that is genuinely a SYSTEM: two
+  // nodes, one wire, one type that has to match on both ends.
+  //
+  // Deliberately NOT the catalogued `turtlebot` composition, which is the obvious candidate --
+  // 3 nodes, 7 interfaces and, as the table in commands/ros-studio.md records, ZERO internal
+  // connections. A first tutorial whose worked example cannot demonstrate wiring would teach
+  // the one thing this editor exists for by not doing it.
+  //
+  // Three rules this thing keeps, all of which are the reason it is written the way it is:
+  //
+  //   1. It never edits the model. Every "done" test below READS project and nothing more; the
+  //      only things it does on the reader's behalf are opening a collapsed rail section, a
+  //      drawer, or centring the camera on a card -- all views. So there is no undo entry, no
+  //      dirty flag, and no way for a walkthrough to appear in a diff.
+  //   2. Its own state is not the project's. Which step you are on and whether you finished
+  //      live under one localStorage key. It is a fact about the READER, not the model: a
+  //      project.json handed to a colleague must not carry "Mae got as far as step 4", and the
+  //      only way to guarantee that is for the state never to enter `project` at all -- which
+  //      is a stronger guarantee than a project.view slot that both fact trees have to keep
+  //      remembering to exclude. tests/studio_parity.js pins both halves of that.
+  //   3. It never takes a click. No scrim, nothing modal, and the halo is pointer-events:none,
+  //      because on most steps the click it is pointing at is the point of the step.
+  var TOUR_KEY="rosStudio.tour";
+  function tourLoad(){ try{ return JSON.parse(localStorage.getItem(TOUR_KEY)||"{}")||{}; }catch(e){ return {}; } }
+  function tourStore(patch){
+    var st=tourLoad(); Object.keys(patch).forEach(function(k){ st[k]=patch[k]; });
+    try{ localStorage.setItem(TOUR_KEY,JSON.stringify(st)); }catch(e){}   // full/blocked storage: the tour just stops remembering
+  }
+  // The two nodes the walkthrough is about, by the `from:` halves the .rossystem will spell.
+  // Looked up by package rather than by label so a reader who renames a card (which they are
+  // encouraged to do -- the label is the instance name) does not fall out of the walkthrough.
+  var TOUR_TELEOP="turtlebot3_teleop", TOUR_BASE="turtlebot3_node";
+  function tourNode(pkg){
+    for(var i=0;i<project.nodes.length;i++) if(project.nodes[i].pkg===pkg) return project.nodes[i];
+    return null;
+  }
+  function tourIface(n,name){
+    if(!n) return null;
+    for(var i=0;i<n.ifaces.length;i++) if(n.ifaces[i].name===name) return n.ifaces[i];
+    return null;
+  }
+  function tourNodeEl(pkg){
+    var n=tourNode(pkg); return n?canvas.querySelector('.node[data-n="'+STUDIO.cssEsc(n.id)+'"]'):null;
+  }
+  function tourPortEl(pkg,ifname){
+    var n=tourNode(pkg), f=tourIface(n,ifname);
+    if(!n||!f) return null;
+    return canvas.querySelector('.port[data-n="'+STUDIO.cssEsc(n.id)+'"][data-i="'+STUDIO.cssEsc(f.id)+'"]');
+  }
+  function tourScrimOn(id){ var s=document.getElementById(id); return !!(s&&s.classList.contains("on")); }
+  // Auto layout is the one step whose result is not a durable model fact you can test for -- it
+  // rewrites x/y that were already there, so "did it run?" cannot be answered by reading the
+  // project. A capture-phase listener on document, live only while the tour is open, records
+  // the click without any of the handlers it observes knowing this exists.
+  var tourSaw={};
+  function tourWatchClicks(ev){
+    var t=ev.target&&ev.target.closest?ev.target.closest("button"):null;
+    if(t&&t.id) tourSaw[t.id]=true;
+  }
+  function tourReachRail(){ expandSec("rail/add"); if(isNarrow()) openDrawer("l"); }
+  function tourReachCanvas(pkg){ closeDrawers(); var n=tourNode(pkg); if(n) centreOn(n.id); }
+  function tourReachInspector(){ if(isNarrow()) openDrawer("r"); }
+
+  // Each step: what it is called, what it says, what it points at, and -- for a "do" step --
+  // what has to become true in the real model before Next lights up. `wait` is the promise the
+  // step makes about that test, in the reader's words; a step with no `done` is a read step and
+  // Next is live immediately.
+  var TOUR=[
+  {id:"intro",title:"Build a real TurtleBot 3 system",
+   body:["This walkthrough builds <code>tb3_teleop</code>: a keyboard teleop node driving a TurtleBot 3 base over <code>/cmd_vel</code>. Two nodes, one wire, and the real generated files at the end.",
+         "Nothing here is invented for the tutorial. Both nodes are vendored catalogue entries, so every interface name and message type you are about to see is the one the real <code>.ros2</code> file declares.",
+         "You drive — this panel follows and reacts to what you actually do. It never edits your model, and it never takes a click away from the thing it is pointing at."]},
+
+  {id:"name",title:"Name the system",anchor:function(){return document.getElementById("sysname");},
+   wait:"waiting for a system name",
+   done:function(){ var v=((project.system&&project.system.name)||"").trim();
+                    return v.length>0&&v!==tourEntryName; },
+   enter:function(){ tourEntryName=((project.system&&project.system.name)||"").trim(); },
+   body:["This is not a label. <code>generate</code> writes <code>&lt;name&gt;.rossystem</code> and the <code>RosSystem</code> declaration inside it, so the name here is the filename you will hand back to the companion.",
+         "Type <code>tb3_teleop</code>."]},
+
+  {id:"catopen",title:"Reuse a node instead of retyping it",anchor:function(){return document.getElementById("addCat");},
+   enter:tourReachRail,
+   wait:"waiting for the catalogue to open",
+   done:function(){ return tourScrimOn("catScrim"); },
+   body:["<b>From catalogue…</b> lists the artifacts vendored under <code>assets/rosmodelscatalog/</code> — real <code>.ros2</code> files, not stubs.",
+         "Instantiating one copies its interface names <i>and</i> their message types. That second half is the part you would otherwise get wrong: a topic name is easy to remember, <code>geometry_msgs/msg/Twist</code> is not.",
+         "Click it."]},
+
+  {id:"teleop",title:"Add the keyboard teleop",anchor:function(){return document.getElementById("catSearch");},
+   wait:"waiting for turtlebot3_teleop on the canvas",
+   done:function(){ return !!tourNode(TOUR_TELEOP); },
+   body:["Search <code>turtlebot3_teleop</code> and press <b>instantiate</b>. It publishes exactly one thing: <code>cmd_vel</code>, typed <code>geometry_msgs/msg/Twist</code>.",
+         "It arrives with every interface <b>unexposed</b>, on purpose. A catalogue node can declare dozens, and exposing all of them would write dozens of unwired lines into your <code>.rossystem</code>. They surface as you wire them."]},
+
+  {id:"readcard",title:"What the card is telling you",anchor:function(){return tourNodeEl(TOUR_TELEOP);},
+   enter:function(){ tourReachCanvas(TOUR_TELEOP); },
+   body:["<code>from: \"turtlebot3_teleop.teleop_keyboard\"</code> is the exact string the <code>.rossystem</code> will spell — the package, then the artifact inside it.",
+         "The <b>catalogue</b> badge means this project does not own that <code>.ros2</code> and will not rewrite it; its names and types are greyed out in the inspector for the same reason.",
+         "The coloured dot on the right is the port, and its colour is the interaction <i>kind</i> — <code>pub</code> here. That is a different axis from the per-source colour the rail's <b>Source systems</b> legend uses once a project has been merged from more than one file: a card can carry both, and they never compete for the same pixel."]},
+
+  {id:"base",title:"Add the robot",anchor:function(){return document.getElementById("addCat");},
+   enter:tourReachRail,
+   wait:"waiting for turtlebot3_node on the canvas",
+   done:function(){ return !!tourNode(TOUR_BASE); },
+   body:["Open the catalogue again and instantiate <code>turtlebot3_node</code>.",
+         "It subscribes <code>cmd_vel</code> (the same <code>geometry_msgs/msg/Twist</code>) and publishes <code>odom</code> (<code>nav_msgs/msg/Odometry</code>) and <code>tf</code> (<code>tf2_msgs/msg/TFMessage</code>)."]},
+
+  {id:"wire",title:"Draw the wire",anchor:function(){return tourPortEl(TOUR_TELEOP,"cmd_vel")||tourNodeEl(TOUR_TELEOP);},
+   enter:function(){ tourReachCanvas(TOUR_TELEOP); },
+   wait:"waiting for a connection between the two nodes",
+   done:function(){
+     var a=tourNode(TOUR_TELEOP), b=tourNode(TOUR_BASE);
+     if(!a||!b) return false;
+     return project.connections.some(function(c){
+       return (c.from.n===a.id&&c.to.n===b.id)||(c.from.n===b.id&&c.to.n===a.id); });
+   },
+   body:["Drag from this <code>pub</code> dot onto <code>turtlebot3_node</code>'s <code>cmd_vel</code> <code>sub</code> dot. Letting go anywhere on the target row counts — the dot is a 12px target and the row is not.",
+         "The drop is refused unless the kinds are complementary <i>and</i> the types match. Both ends are <code>geometry_msgs/msg/Twist</code>, so this one is legal; try dropping it on <code>odom</code> instead and nothing happens.",
+         "Wiring also exposes both ends. A <code>connections:</code> endpoint is a bare label resolved file-wide, so an endpoint that was not exposed would name something the file never declares.",
+         "File-wide is also why both ends being called <code>cmd_vel</code> is not a problem: the emitter will write them as <code>cmd_vel_pub</code> and <code>cmd_vel_sub</code> rather than declare one key twice, which is RM009. You will see those names in the preview at the end."]},
+
+  {id:"expose",title:"Expose something you did not wire",
+   anchor:function(){
+     var b=tourNode(TOUR_BASE), f=tourIface(b,"odom");
+     return (f&&document.querySelector('#inspector input[data-exp="'+STUDIO.cssEsc(f.id)+'"]'))||tourNodeEl(TOUR_BASE);
+   },
+   enter:function(){ tourReachCanvas(TOUR_BASE); },
+   wait:"waiting for odom to be exposed",
+   done:function(){ var f=tourIface(tourNode(TOUR_BASE),"odom"); return !!(f&&f.exposed); },
+   body:["Select the <code>turtlebot3_node</code> card, find <code>odom</code> under <b>interfaces</b> in the inspector, and tick <b>expose</b>.",
+         "Connectivity is not the test for whether an interface belongs in the <code>.rossystem</code>. A model may declare one for documentation and deliberately leave it unwired — which is why <code>exposed</code> is stored per interface instead of being derived from the connection list, and why a round-trip does not quietly delete the ones you meant to keep."]},
+
+  {id:"issues",title:"What the rail has been telling you",anchor:function(){return document.querySelector('.rail .insec.issues');},
+   enter:function(){ expandSec("rail/issues"); if(isNarrow()) openDrawer("l"); },
+   body:["Your system is complete now, so this is worth reading. The <b>Issues</b> rail is a third thing, next to the two checkers you will meet at the end: it is the instant, in-page subset, re-run on every edit, and every row is clickable — it selects and centres whatever it is about, and in Edit mode focuses the exact field.",
+         "It should be showing one warning: <b>RM053</b>, no <code>fromFile:</code>. Nothing has told this model which launch file it came from, which is simply what a hand-built system looks like; the 3.1.0 server accepts one without it. Set it in the <b>Project</b> tab of the inspector if you want it gone."]},
+
+  {id:"layout",title:"Let the layout follow the wiring",anchor:function(){return document.getElementById("autoLayout");},
+   enter:function(){ closeDrawers(); },
+   wait:"waiting for Auto layout",
+   done:function(){ return !!tourSaw.autoLayout; },
+   body:["<b>Auto layout</b> is a layered pass that follows connection direction: sources left, sinks right, four barycentre sweeps to cut crossings, isolated nodes in a trailing column. Node sizes are measured off the rendered cards, because a node's height is its interface count.",
+         "Node <code>x</code>/<code>y</code> are model data, so this is a normal undoable edit — <code>Ctrl+Z</code> puts the old arrangement back, including the subsystem and package boxes the pass clears."]},
+
+  {id:"levels",title:"Four ways to look at one model",anchor:function(){return document.getElementById("levelSeg");},
+   body:["<b>Full</b> is what you have been editing. <b>Interfaces</b> drops the types, <b>System</b> drops the interface rows entirely, and <b>Deps</b> redraws the model as nodes against the packages they come from. Try them — <code>1</code>–<code>4</code> are the shortcuts.",
+         "Everything you arrange — the level, Edit vs View, the kind filter, box positions, even where the camera is standing — is saved into <code>project.json</code> under <code>project.view</code>, so a picture you spent ten minutes building survives a reload.",
+         "None of it can reach an emitted byte. Both fact trees are built from an allow-list of model keys, so a view key is excluded by construction rather than by being deleted, and <code>tests/studio_parity.js</code> re-emits under a deliberately populated view to prove it."]},
+
+  {id:"commit",title:"See the files before you write them",anchor:function(){return document.getElementById("commit");},
+   enter:function(){ closeDrawers(); },
+   wait:"waiting for the Commit modal",
+   done:function(){ return tourScrimOn("commitScrim"); },
+   body:["Open <b>Commit</b>. The <code>.rossystem</code> / <code>.ros2</code> / <code>.ros</code> tabs are not an approximation of what the companion would emit: <code>tests/studio_parity.js</code> holds all three to the Python emitter byte for byte, for every fixture in the repo.",
+         "The fourth tab, <b>changed since the seed</b>, is the same model-level report <code>ros_studio.py diff</code> prints in a terminal — computed live in the page as you edit."]},
+
+  {id:"saveall",title:"Save all files",anchor:function(){return document.getElementById("saveAll");},
+   body:["<b>Save all files</b> downloads the whole set — the <code>.rossystem</code>, every <code>.ros2</code>, every companion <code>.ros</code>, and the <code>project.json</code> — as one browser download each. This page is a <code>file://</code> document with no network and no filesystem API, so nothing is overwritten and the browser's own download UI is the confirmation step.",
+         "Two things it deliberately does not do, and the modal says so: it does not lint, and it cannot stage a project-local <code>subSystems:</code> target — staging means copying someone else's file off a disk this page cannot read."]},
+
+  {id:"verdict",title:"Only generate gives you a verdict",anchor:function(){return document.getElementById("genTabs");},
+   body:["Run <code>ros_studio.py generate project.json</code> on what you just saved. It emits the files, runs <code>rosmodel_lint</code>, and — by default, not opt-in — asks the real Xtext language server.",
+         "The server is the authority and the linter is a deliberate approximation of it: the standard example of what only the server catches is an action server declared with a <i>message</i> type instead of an action type.",
+         "If the jar cannot run, you are told on stdout, on stderr, and in a <code>.notice.html</code> banner this page opens on load — naming the binary it found, why it is unusable and how to fix it. A half-validated run is never allowed to look like a clean one."]},
+
+  {id:"fromsrc",title:"When you have source, not a model",anchor:function(){return document.getElementById("fromSrc");},
+   enter:tourReachRail,
+   body:["<b>From ROS 2 source…</b> is the other way in. This page cannot spawn a process, so it does not pretend to import a repository: you give it the source tree and the launch file, and it writes the exact, correctly ordered, correctly flagged extractor commands for you to run in a terminal — or to paste to Claude Code.",
+         "It exists to get four things right that are easy to get wrong by hand. The worst of them: step 1's <code>-o</code> and step 2's <code>--models</code> have to be the same directory, and a wrong path there fails <i>silently</i> — there are simply no local models, so every launch node quietly resolves against the catalogue or is skipped."]},
+
+  {id:"done",title:"That's the loop",
+   body:["You built <code>tb3_teleop</code> out of two catalogued TurtleBot 3 nodes, wired the real <code>/cmd_vel</code> topic between them with the type checked on both ends, exposed one interface you deliberately left unwired, and previewed the exact bytes <code>generate</code> will write.",
+         "From here: <b>Import</b> adds another <code>.rossystem</code> to this canvas, and the rail grows a <b>Source systems</b> legend that colours, counts and filters by where each node came from — at the <b>System</b> level each source becomes one box. Right-click a selection to wrap it into a <code>subSystems:</code> reference of its own.",
+         "Reopen this walkthrough any time from <b>Tutorial</b> in the toolbar."]}
+  ];
+
+  var tourIdx=-1, tourEl=null, tourHalo=null, tourRaf=null, tourTimer=null,
+      tourEntryName=null, tourWasDone=null;
+
+  function tourBuild(){
+    if(tourEl) return;
+    tourEl=document.createElement("div");
+    tourEl.className="tourcard";
+    tourEl.id="tourCard";
+    tourEl.setAttribute("role","region");
+    tourEl.setAttribute("aria-label","Tutorial");
+    tourEl.tabIndex=-1;
+    // The live region is the INNER wrapper, built once and refilled per step. An aria-live
+    // element that is itself replaced announces nothing -- the announcement comes from a
+    // mutation inside a region that was already there when the screen reader started watching.
+    tourEl.innerHTML='<div class="tlive" aria-live="polite"></div>'
+      +'<div class="tourbar" aria-hidden="true"></div>'
+      +'<div class="tfoot">'
+      +'<button type="button" id="tourBack">&#8592; Back</button>'
+      +'<button type="button" id="tourSkip">Skip</button>'
+      +'<span class="grow"></span>'
+      +'<button type="button" class="go" id="tourNext">Next &#8594;</button></div>';
+    document.body.appendChild(tourEl);
+    tourHalo=document.createElement("div");
+    tourHalo.className="tourhalo pulse";
+    document.body.appendChild(tourHalo);
+    document.getElementById("tourBack").onclick=function(){ tourGo(tourIdx-1); };
+    document.getElementById("tourNext").onclick=function(){ tourGo(tourIdx+1); };
+    // Skip is not decoration. Every "done" test above is a guess about what the reader meant,
+    // and a walkthrough that can wedge on a guess is a walkthrough people close.
+    document.getElementById("tourSkip").onclick=function(){ tourGo(tourIdx+1); };
+  }
+
+  function tourGo(i){
+    if(i<0) return;
+    if(i>=TOUR.length){ tourStore({step:0,done:true,dismissed:true}); tourClose(); return; }
+    tourIdx=i; tourWasDone=null;
+    tourStore({step:i});
+    var st=TOUR[i];
+    if(st.enter){ try{ st.enter(); }catch(e){} }
+    var live=tourEl.querySelector(".tlive");
+    live.innerHTML='<div class="thead"><span class="tstep">step '+(i+1)+' of '+TOUR.length+'</span>'
+      +'<h5>'+st.title+'</h5>'
+      +'<button type="button" class="tclose" id="tourClose" aria-label="Close the tutorial">&#10005;</button></div>'
+      +'<div class="tbody">'+st.body.map(function(p){return "<p>"+p+"</p>";}).join("")+'</div>'
+      +(st.done?'<div class="twait" id="tourWait"></div>':'');
+    document.getElementById("tourClose").onclick=function(){ tourStore({dismissed:true}); tourClose(); };
+    var bar=tourEl.querySelector(".tourbar");
+    bar.innerHTML=TOUR.map(function(_,j){return '<i'+(j<=i?' class="on"':'')+'></i>';}).join("");
+    document.getElementById("tourBack").disabled=(i===0);
+    document.getElementById("tourSkip").hidden=!st.done;
+    var next=document.getElementById("tourNext");
+    next.textContent=(i===TOUR.length-1)?"Finish":"Next →";
+    tourCheck(true);
+    tourPlace();
+  }
+
+  // Re-run this step's promise against the live model. Only touches the DOM when the answer
+  // CHANGED -- this runs five times a second and rewriting the footer each time would fight
+  // anything focused inside it.
+  function tourCheck(force){
+    var st=TOUR[tourIdx]; if(!st) return;
+    var next=document.getElementById("tourNext");
+    if(!st.done){ if(force){ next.disabled=false; } return; }
+    var ok=false;
+    try{ ok=!!st.done(); }catch(e){ ok=false; }
+    if(!force&&ok===tourWasDone) return;
+    tourWasDone=ok;
+    next.disabled=!ok;
+    var w=document.getElementById("tourWait");
+    if(w){ w.className="twait"+(ok?" done":""); w.textContent=ok?"done ✓":(st.wait||"waiting…"); }
+  }
+
+  // Track the anchor every frame rather than on a timer: on the steps that point at a card on
+  // the canvas the reader can drag it, and a ring that lags a drag by a fifth of a second reads
+  // as a rendering bug. The DOM write is skipped whenever nothing moved.
+  var tourLastBox="";
+  function tourPlace(){
+    var st=TOUR[tourIdx]; if(!st||!tourEl) return;
+    var el=null;
+    try{ el=st.anchor?st.anchor():null; }catch(e){ el=null; }
+    var r=null;
+    if(el&&el.getBoundingClientRect){
+      var b=el.getBoundingClientRect();
+      // Zero-sized means the anchor is inside a collapsed section or a closed drawer, and
+      // off-viewport means it scrolled away. Either way there is nothing honest to point at,
+      // so the ring is hidden and the card falls back to centre rather than ringing a corner.
+      if(b.width>0&&b.height>0&&b.bottom>0&&b.right>0&&b.top<window.innerHeight&&b.left<window.innerWidth) r=b;
+    }
+    var key=r?[Math.round(r.left),Math.round(r.top),Math.round(r.width),Math.round(r.height),
+               window.innerWidth,window.innerHeight,tourEl.offsetHeight].join(","):"none";
+    if(key===tourLastBox) return;
+    tourLastBox=key;
+    if(r){
+      tourHalo.hidden=false;
+      tourHalo.style.left=(r.left-4)+"px"; tourHalo.style.top=(r.top-4)+"px";
+      tourHalo.style.width=(r.width+8)+"px"; tourHalo.style.height=(r.height+8)+"px";
+    } else tourHalo.hidden=true;
+    // Docked (phone): the stylesheet owns left/top/bottom with !important, so writing them here
+    // would just be dead inline styles that come back the moment the class stops applying.
+    if(isNarrow()) return;
+    var w=tourEl.offsetWidth, h=tourEl.offsetHeight, M=10;
+    var left, top;
+    if(r){
+      left=r.left;
+      top=r.bottom+M;
+      if(top+h>window.innerHeight-M) top=r.top-h-M;      // no room below: flip above
+      if(top<M){                                          // no room either way: sit beside it
+        top=Math.max(M,Math.min(r.top,window.innerHeight-h-M));
+        left=(r.right+M+w<window.innerWidth-M)?(r.right+M):(r.left-w-M);
+      }
+    } else {
+      left=(window.innerWidth-w)/2; top=(window.innerHeight-h)/2;
+    }
+    tourEl.style.left=Math.max(M,Math.min(left,window.innerWidth-w-M))+"px";
+    tourEl.style.top=Math.max(M,Math.min(top,window.innerHeight-h-M))+"px";
+  }
+
+  // TWO clocks, and the split is not cosmetic. Positioning is about painting, so it rides
+  // requestAnimationFrame -- the steps that ring a port on a card let the reader drag that card,
+  // and a ring lagging the drag by a fifth of a second reads as a rendering bug.
+  //
+  // "Has this step been done yet?" is about the MODEL, and rAF is throttled to a standstill
+  // whenever the browser decides this tab is not painting -- occluded, backgrounded, in a
+  // window that lost focus. Measured here: one frame in half a second. A walkthrough whose
+  // "waiting for a connection" never turned into "done" because the reader had another window
+  // in front is exactly the kind of failure that reads as the tutorial being broken. So the
+  // check gets a plain interval, which browsers merely SLOW in the background rather than stop.
+  // The interval also re-places the card, as a 4Hz floor for when rAF is asleep.
+  function tourLoop(){
+    if(tourIdx<0){ tourRaf=null; return; }
+    tourPlace();
+    tourRaf=requestAnimationFrame(tourLoop);
+  }
+  function tourTick(){
+    if(tourIdx<0) return;
+    tourPlace(); tourCheck(false);
+  }
+
+  function tourStart(i){
+    tourBuild();
+    tourSaw={}; tourLastBox="";
+    // A fresh run clears `done`, or a second pass through could never be resumed: the reopen
+    // rule below reads `done` as "there is no run in progress", and leaving it set from the
+    // FIRST time through meant closing halfway through the second always restarted from step 1.
+    tourStore({done:false});
+    document.addEventListener("click",tourWatchClicks,true);
+    // Unhidden BEFORE the first tourGo: tourGo places the card off its own offsetHeight, and a
+    // re-open measures 0 for a card still carrying [hidden] from the last close.
+    tourEl.hidden=false; tourHalo.hidden=false;
+    tourGo(i);
+    // Focus the card ONCE, on open, and never again on a step change: most steps ask for a
+    // click or a keystroke somewhere else on the page, and a panel that grabbed focus back
+    // every time it advanced would make its own walkthrough impossible to follow. Step changes
+    // are announced through the aria-live region instead.
+    tourEl.focus();
+    if(tourRaf===null) tourRaf=requestAnimationFrame(tourLoop);
+    if(tourTimer===null) tourTimer=setInterval(tourTick,250);
+    document.getElementById("tourBtn").setAttribute("aria-expanded","true");
+  }
+  function tourClose(){
+    tourIdx=-1;
+    document.removeEventListener("click",tourWatchClicks,true);
+    if(tourRaf!==null){ cancelAnimationFrame(tourRaf); tourRaf=null; }
+    if(tourTimer!==null){ clearInterval(tourTimer); tourTimer=null; }
+    if(tourEl) tourEl.hidden=true;
+    if(tourHalo) tourHalo.hidden=true;
+    var b=document.getElementById("tourBtn");
+    if(b){ b.setAttribute("aria-expanded","false"); b.focus(); }
+  }
+  (function(){
+    var b=document.getElementById("tourBtn");
+    b.setAttribute("aria-expanded","false");
+    b.onclick=function(){
+      if(tourIdx>=0){ tourStore({dismissed:true}); tourClose(); return; }
+      var st=tourLoad();
+      // Reopening resumes where you stopped, unless you finished -- in which case asking for it
+      // again means you want it again, from the top.
+      var at=(!st.done&&typeof st.step==="number"&&st.step>0&&st.step<TOUR.length)?st.step:0;
+      tourStart(at);
+    };
+  })();
+
   addEventListener("beforeunload",function(e){
     if(!dirty) return;                  // clean since the last Commit: never nag
     // The autosave is debounced by 800ms, so a close landing inside that window would drop the
@@ -7180,6 +7617,23 @@ var DATA = /*__DATA__*/null;
       if(_sc2){ _sc2.classList.add("pulse"); setTimeout(function(){ _sc2.classList.remove("pulse"); },2600); }
     }
   }
+  // The tutorial offers itself exactly once, and only in the one situation where there is
+  // nothing to interrupt: a BLANK canvas, on a page that has nothing more urgent to say. A
+  // walkthrough that opened over someone's forty-node system, or on top of the companion's
+  // "real-server validation did NOT run" banner, would be the second thing competing for
+  // attention at the moment the first one matters -- and the reason that banner opens on load
+  // at all is that page load has no interaction to lose. It cannot have two owners.
+  //
+  // Closing it (the ✕, or reaching the end) records `dismissed`, so this is a one-shot offer
+  // and never a thing that reappears. The Tutorial button in the toolbar is the way back.
+  (function(){
+    var tst=tourLoad();
+    if(tst.done||tst.dismissed) return;
+    if(DATA.banner) return;                                 // the companion has the floor
+    if(document.querySelector(".scrim.on")) return;          // the autosave restore prompt is up
+    if((project.nodes||[]).length) return;                   // not a first look; leave real work alone
+    tourStart(0);
+  })();
 })();
 </script>
 </body>

@@ -18,6 +18,9 @@ The page has no network access (it opens as a local `file://`), and every file t
 writes is generated deterministically from `rosmodel_lint`'s own grammar vocabulary, so the
 emitter and the checker can never disagree.
 
+A first-time user has a guided walkthrough in the page itself — **Tutorial** in the topbar; see
+**The guided tutorial** below.
+
 ## How to run it
 
 Shell out to the script, passing the user's arguments straight through, using the same Python
@@ -721,6 +724,79 @@ Because that hand-off is manual, the page keeps the session safe on its own:
 
 If the user reports the page asking to restore something unexpected, that is a previous session's
 autosave for the same system name — "Discard and use the seeded project" clears it.
+
+## The guided tutorial
+
+Everything above is true and none of it is in the page. Someone opening `ros-studio.html` for
+the first time sees a blank canvas, four abstraction levels, a rail of filters and a **Commit**
+button, and nothing on screen says which of those is the first move. **Tutorial** in the topbar
+is a sixteen-step walkthrough that answers that by having them *build* something.
+
+**It is a coach mark, not a slide deck.** There is no scrim and nothing is modal: the reader
+drives the real editor and the panel follows. Each step rings the actual element it is about —
+`#addCat`, a `.port` on a real card, the `expose` checkbox in the inspector, `#autoLayout`,
+`#commit` — with a ring that is `pointer-events:none`, because on most steps the click it is
+pointing at *is* the step. Ten of the sixteen are **do** steps that wait on a real change to
+`project` (a node with that `pkg` exists; a connection joins those two nodes; that interface's
+`exposed` is true) rather than on a Next button, and every one of them also offers **Skip** —
+a completion test is a guess about what the reader meant, and a walkthrough that can wedge on a
+guess is one people close. Positioning reuses `makeTypeahead`'s scheme (`position:fixed` on
+`document.body`, placed from `getBoundingClientRect()`, clamped to the viewport) so it floats
+free of the canvas's zoom/pan transform and the inspector's `overflow:auto`; a second scheme
+would have drifted from that one the first time either was fixed.
+
+**The worked example is `tb3_teleop`**: `turtlebot3_teleop.teleop_keyboard` publishing `cmd_vel`
+into `turtlebot3_node.turtlebot3_node`'s `cmd_vel`, both `geometry_msgs/msg/Twist`. Both nodes
+are catalogue entries (`assets/rosmodelscatalog/robots/turtlebot3/turtlebot3_teleop.ros2` and
+`assets/rosmodelscatalog/robots/turtlebot3/robot/turtlebot3_node.ros2`), so every interface name
+and message type the walkthrough puts on screen is one the vendored `.ros2` really declares.
+
+Deliberately **not** the catalogued `turtlebot` composition, which is the obvious candidate and
+the wrong one: per the table under **What a subsystem view can show you today** it has 3 nodes,
+7 interfaces and **zero** internal connections. A first tutorial whose example cannot
+demonstrate wiring would teach the one thing this editor exists for by not doing it.
+
+The sixteen steps run: name the system → open the catalogue → instantiate the teleop → read what
+the card is saying → instantiate the base → **drag the wire** → **expose `odom` without wiring
+it** → read the Issues rail → **Auto layout** → the four levels and `project.view` → **Commit** →
+**Save all files** → what only `generate` can tell you → **From ROS 2 source…** → done. The copy
+is the same material as this file, in the same voice, at step granularity — the `exposed`-is-not-
+connectivity split, why a catalogue node arrives fully unexposed, why the drop is refused unless
+kinds *and* types agree, why both ends being called `cmd_vel` comes out as `cmd_vel_pub` /
+`cmd_vel_sub` rather than as RM009, and why the oracle runs by default.
+
+**It offers itself exactly once**, and only on a blank canvas with no companion banner and no
+autosave-restore prompt up — page load is the one moment with no interaction to lose, and that
+moment already has an owner when either of those is showing. Closing it records the offer as
+made; the topbar button is the way back, resuming where you stopped.
+
+**Its state is not the model's.** Which step you are on and whether you finished live under one
+`localStorage` key (`rosStudio.tour`) and never enter `project` at all. That is a stronger
+guarantee than a `project.view` slot: a view key is excluded from the fact trees only because
+they are built from an allow-list and nobody added it, whereas state that is never written onto
+the project cannot reach an emitted byte, `diff`, or a `project.json` handed to a colleague by
+any route. The walkthrough reads `project` and never writes it — the only things it does on the
+reader's behalf are opening a collapsed rail section, a drawer, or centring the camera, all
+views. `tests/studio_parity.js`'s `checkPageInvariants` pins both halves: the key must still
+exist, and nothing may start writing the state onto `project`.
+
+Two implementation notes worth keeping:
+
+- **Two clocks, and the split is not cosmetic.** The ring rides `requestAnimationFrame`, because
+  the steps that point at a port let you drag the card under it and a ring lagging a drag reads
+  as a rendering bug. "Has this step been done yet?" rides a plain 250 ms interval instead,
+  because rAF is throttled to a standstill whenever the browser decides the tab is not painting
+  — measured at one frame per half-second in a window that had lost focus. Driving the model
+  check off rAF meant "waiting for a connection" never turned into "done" for a reader with
+  another window in front, which reads as the tutorial being broken.
+- **Reduced motion and keyboard**, on the same terms as the rest of the page. The stylesheet's
+  blanket `prefers-reduced-motion` rule kills transitions but not *animations*, so the ring's
+  pulse is turned off by name and degrades to the static border and wash that carry the actual
+  meaning. The card is a `role="region"` with an inner `aria-live="polite"` wrapper that is
+  built once and refilled per step — a live region that is itself replaced announces nothing —
+  and it takes focus once on open and never again on a step change, since most steps ask for a
+  click somewhere else. On a narrow viewport it stops following and docks to the bottom edge,
+  where it cannot cover the control it is asking you to press.
 
 ## Reporting back
 
