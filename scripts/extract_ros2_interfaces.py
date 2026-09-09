@@ -72,6 +72,18 @@ SKIP_DIRS = {
 }
 
 
+# Cheap prefilter: skip a file only when it cannot possibly contain a declaration we read.
+# It must name EVERY call we look for. An earlier version tested only for "rclcpp" or
+# "create_publisher", which silently skipped whole files -- three of moveit_ros_move_group's
+# capability sources call create_service<> and never write the token "rclcpp" at all, so four
+# real service servers vanished with no file, no flag and no line in the --json record. A
+# prefilter that drops a declaration is worse than no prefilter.
+INTERESTING_TOKENS = (
+    "create_publisher", "create_subscription", "create_service", "create_client",
+    "create_server", "declare_parameter", "declare_parameters", "auto_declare",
+    "ActionServer", "ActionClient", "rclcpp", "rclpy", "create_node",
+)
+
 NOTE_EMPTY_LIST = ("source default is an empty list; the DSL list production needs at least "
                    "one element, so no default: is emitted")
 
@@ -682,7 +694,7 @@ def extract_python(pkg, path, resolver, report_root):
         pkg.flags.append(Flag("parse", "python file did not parse: %s" % exc.msg, path,
                               exc.lineno or 1))
         return False
-    if "rclpy" not in text and "create_publisher" not in text and "create_subscription" not in text:
+    if not any(tok in text for tok in INTERESTING_TOKENS):
         return False
 
     imports = py_imports(tree)
@@ -1279,7 +1291,7 @@ def extract_cpp(pkg, paths, parser, resolver, report_root):
                 src = fh.read()
         except OSError:
             continue
-        if b"rclcpp" not in src and b"create_publisher" not in src:
+        if not any(tok.encode() in src for tok in INTERESTING_TOKENS):
             continue
         tree = parser.parse(src)
         trees.append((path, src, tree))
