@@ -119,6 +119,42 @@ def main():
         check("--no-oracle writes no notice page",
               not os.path.isfile(os.path.splitext(proj)[0] + ".notice.html"))
 
+        # ---- 4b. a JVM that starts but never answers is caught, and only ONE case is judged --
+        # A stub `java` that reports 21 and then exits passes the preflight and gets as far as
+        # actually launching the server, so this exercises the RUNTIME detection rather than the
+        # preflight: ask_oracle returns exit 0 with a per-case NO_INITIALIZE_RESPONSE, and the
+        # old substring verdict had no way to tell that from a clean model.
+        #
+        # It also pins an argument-passing bug found by running this: ask_oracle.main() collects
+        # case directories as `[a for a in sys.argv[1:] if not a.startswith("-")]`, so passing
+        # `--results PATH` as two tokens hands it the PATH as a second case, which it reports as
+        # NO_FILES. Hence `--results=PATH`, and hence this assertion on the case COUNT.
+        stub = os.path.join(work, "fakejava")
+        with open(stub, "w", encoding="utf-8") as handle:
+            handle.write('#!/bin/sh\necho \'openjdk version "21.0.11" 2024-04-16\' >&2\n')
+        os.chmod(stub, 0o755)
+        if os.name != "nt":
+            code, out = run([STUDIO, "generate", proj, "--outdir", os.path.join(work, "g5")],
+                            {"ROSMODEL_JAVA": stub})
+            # The stub exits immediately, so which failure lands is a RACE: ask_oracle either
+            # times out waiting for initialize (per-case NO_INITIALIZE_RESPONSE, its own exit 0)
+            # or dies writing to the closed pipe (BrokenPipeError, exit 1). Both used to be read
+            # as a pass -- the first because a per-case status is not an exit code, the second
+            # because the return code was never checked. Asserting on the invariant that covers
+            # both, rather than on whichever one wins today.
+            check("a server that never answers never yields a clean verdict", code != 0,
+                  "exit %d" % code)
+            check("and it says specifically what went wrong",
+                  ("could not validate" in out) or ("oracle process exited" in out), out[-300:])
+            # A crash returns no diagnostics; blaming the MODEL for that would be the same
+            # misreport in a new place.
+            check("a non-answering server is not reported as REJECTING the model",
+                  "rejected this model" not in out, out[-300:])
+            # The --results value must not be swept up as a second case directory.
+            check("only the real case is judged, not the --results path too",
+                  "NO_FILES" not in out
+                  and "could not validate 2 case(s)" not in out, out[-300:])
+
         # ---- 5. the checked-in regression record is never collateral damage ----------------
         # ask_oracle.py defaults its results to tests/oracle/results.json, which is the 19-case
         # verdict record committed to this repo. run_oracle now passes --results into the output

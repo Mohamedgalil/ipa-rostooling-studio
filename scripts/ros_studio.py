@@ -3079,9 +3079,17 @@ def run_oracle(outdir, model_paths):
     # tests/oracle/results.json, which is the checked-in 19-case regression record: a
     # `generate --oracle` run would quietly overwrite it with this project's single case, and
     # its own guard against that only triggers when the file already has uncommitted changes.
+    #
+    # `--results=PATH`, ONE token, not `--results PATH`. ask_oracle.main() collects its case
+    # directories as `[a for a in sys.argv[1:] if not a.startswith("-")]`, so a separate value
+    # does not start with a dash and is swept up as a second CASE -- which it then reports as
+    # `STATUS: NO_FILES`, turning every run into a spurious "could not validate 2 case(s)".
+    # Its _results_path() accepts both spellings; only the joined one is invisible to that
+    # filter. (Found by running it: the failure is silent in the sense that matters -- the
+    # oracle still ran correctly, it just also judged a JSON file.)
     res = os.path.join(outdir, "oracle_results.json")
     try:
-        proc = subprocess.run([python, ask, outdir, "--results", res],
+        proc = subprocess.run([python, ask, outdir, "--results=" + res],
                               capture_output=True, text=True, timeout=300)
     except Exception as exc:
         return False, "oracle invocation failed: %s" % exc, []
@@ -3573,15 +3581,31 @@ def cmd_generate(args):
             odiag = oracle_diagnostics(records, project)
             if not ok:
                 n_err = sum(len(v) for v in odiag["byNode"].values()) + len(odiag["global"])
-                banner = ("The real language server REJECTED this model.\n\n"
-                          "These are errors rosmodel_lint's RM rules cannot all catch — the "
-                          "deterministic rules are an approximation of the Xtext validator, "
-                          "which is why the oracle exists.\n\n"
-                          + "\n".join(odiag["global"]))
+                # "Rejected" and "could not finish" are DIFFERENT ANSWERS and must not share a
+                # message. A server that crashed or never answered produces no diagnostics, and
+                # announcing "REJECTED this model (0 diagnostic(s))" for it would be the same
+                # class of misreport this whole change exists to remove -- blaming the model for
+                # a broken tool, with nothing to act on.
+                if n_err:
+                    banner = ("The real language server REJECTED this model.\n\n"
+                              "These are errors rosmodel_lint's RM rules cannot all catch — the "
+                              "deterministic rules are an approximation of the Xtext validator, "
+                              "which is why the oracle exists.\n\n"
+                              + "\n".join(odiag["global"]))
+                    title, msg = ("Rejected by the language server",
+                                  "the real language server rejected this model "
+                                  "(%d diagnostic(s))" % n_err)
+                else:
+                    banner = ("Real-server validation started but did not complete, so this "
+                              "model has NOT been validated.\n\nIt returned no diagnostics — "
+                              "this is a broken or unanswering server, not a verdict on your "
+                              "model.\n\n%s" % text)
+                    title, msg = ("Validation did not complete",
+                                  "the real language server did not complete "
+                                  "(no diagnostics returned)")
                 err_html = _write_error_html(project, args.project, banner, diagnostics=odiag,
-                                             title="Rejected by the language server", sev="err")
-                print("\nERROR: the real language server rejected this model (%d diagnostic(s)); "
-                      "re-rendered editor -> %s" % (n_err, err_html), file=sys.stderr)
+                                             title=title, sev="err")
+                print("\nERROR: %s; re-rendered editor -> %s" % (msg, err_html), file=sys.stderr)
                 return 1
         else:
             # NOT silent, and not a bare stack trace. The user's words were "if the jar is not
