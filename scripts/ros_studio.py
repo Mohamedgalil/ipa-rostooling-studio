@@ -23,13 +23,25 @@ language-server oracle (opt-in).
         (message/service/action types, package names, node catalogue) embedded so
         autocomplete works offline.
 
-    ros_studio.py generate project.json [--outdir DIR] [--oracle] [--diff]
+    ros_studio.py generate project.json [--outdir DIR] [--oracle|--no-oracle] [--diff]
         Deterministically emit .ros2 / .rossystem / companion .ros (reusing rosmodel_lint's
-        vocabulary), then run rosmodel_lint over the result. With --oracle, stage catalogue
-        dependencies (collect_deps) and run the real language server (ask_oracle). On a
-        generation/lint ERROR, re-render the editor with the diagnostics injected onto the
-        offending nodes (written next to the project as <project>.error.html). With --diff,
-        also print the model-level diff against the seed source (see below).
+        vocabulary), then run rosmodel_lint over the result.
+
+        The real language server is then asked BY DEFAULT whenever it can run: catalogue
+        dependencies are staged (collect_deps) and ask_oracle drives the jar. rosmodel_lint's
+        RM rules are a deliberate approximation of the Xtext validator, so a run that consulted
+        only them has not been fully checked -- and used to say nothing about that. If the jar
+        or a Java 19+ runtime is missing, the reason is reported on stdout, on stderr, AND in
+        the editor's own error surface (<project>.notice.html, whose banner opens on load);
+        the run still exits 0, because the files were written and the lint passed.
+
+        --oracle REQUIRES the real server: not being able to run it is an error.
+        --no-oracle skips it entirely and reports nothing about it.
+
+        On a generation/lint ERROR, or a rejection by the real server, re-render the editor with
+        the diagnostics injected onto the offending nodes (written next to the project as
+        <project>.error.html). With --diff, also print the model-level diff against the seed
+        source (see below).
 
     ros_studio.py diff project.json [--against FILE.rossystem] [--json]
         What changed since the seed. Compares the GENERATED model against the .rossystem the
@@ -3607,6 +3619,23 @@ def cmd_generate(args):
                                              title=title, sev="err")
                 print("\nERROR: %s; re-rendered editor -> %s" % (msg, err_html), file=sys.stderr)
                 return 1
+            # ACCEPTED, but the server may still have said something. Oracle WARNINGs were
+            # computed and then dropped on the floor here -- odiag was only ever consumed on the
+            # rejection path -- so a run the server accepted *with warnings* left them in the
+            # console and nowhere else. That is the same "the console is not the studio" gap the
+            # jar-failure notice exists to close, one branch over.
+            n_warn = sum(len(v) for v in odiag["byNode"].values()) + len(odiag["global"])
+            if n_warn:
+                note = _write_error_html(
+                    project, args.project,
+                    "The real language server ACCEPTED this model, with %d warning(s).\n\n"
+                    "They are on the flagged nodes. Warnings are not errors — nothing is "
+                    "blocked — but they come from the authority, not from the approximate "
+                    "RM rules, so they are worth reading.\n\n%s"
+                    % (n_warn, "\n".join(odiag["global"])),
+                    diagnostics=odiag, title="Accepted, with warnings", sev="warn",
+                    suffix=".notice.html")
+                print("\nNOTE: %d oracle warning(s); re-rendered editor -> %s" % (n_warn, note))
         else:
             # NOT silent, and not a bare stack trace. The user's words were "if the jar is not
             # runnable I want a clear error in the studio"; the console alone is not the studio,

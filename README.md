@@ -243,8 +243,14 @@ py scripts/ros_studio.py init path/to/models/ --out project.json --name combined
 py scripts/ros_studio.py render project.json --out ros-studio.html
 
 # author in the browser, hit Commit (downloads project.json), then generate + validate:
-py scripts/ros_studio.py generate project.json --outdir generated            # emits + rosmodel_lint
-py scripts/ros_studio.py generate project.json --outdir generated --oracle    # + real language server
+py scripts/ros_studio.py generate project.json --outdir generated              # emits, lints, and asks
+                                                                               # the real language server
+                                                                               # when Java 19+ and the jar
+                                                                               # are available -- and says
+                                                                               # loudly when they are not
+py scripts/ros_studio.py generate project.json --outdir generated --oracle     # REQUIRE the real server:
+                                                                               # fail if it cannot be run
+py scripts/ros_studio.py generate project.json --outdir generated --no-oracle  # RM rules only, no report
 ```
 
 Because Commit is a manual download, the page also holds the session itself: every mutating action

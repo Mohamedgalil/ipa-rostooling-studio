@@ -160,12 +160,20 @@ def main():
         # verdict record committed to this repo. run_oracle now passes --results into the output
         # directory; without that, every `generate --oracle` would overwrite it with one case.
         results = os.path.join(HERE, "oracle", "results.json")
-        if os.path.isfile(results):
+        if os.path.isfile(results) and os.name != "nt":
             before = open(results, "rb").read()
+            # Under the STUB java, not the broken one. With ROSMODEL_JAVA pointing at a path that
+            # does not exist the run stops at oracle_preflight() and never reaches run_oracle(),
+            # so ask_oracle.py and _results_path() never execute and the file is trivially
+            # unchanged -- a check that passes for the wrong reason and pins nothing. The stub
+            # passes the preflight, so the results file really is written, into the output
+            # directory, which is the property under test.
             run([STUDIO, "generate", proj, "--outdir", os.path.join(work, "g4"), "--oracle"],
-                broken)
+                {"ROSMODEL_JAVA": stub})
             check("generate --oracle does not overwrite tests/oracle/results.json",
                   open(results, "rb").read() == before)
+            check("it writes its results into the output directory instead",
+                  os.path.isfile(os.path.join(work, "g4", "oracle_results.json")))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

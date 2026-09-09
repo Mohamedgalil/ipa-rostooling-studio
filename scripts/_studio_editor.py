@@ -1413,6 +1413,16 @@ var DATA = /*__DATA__*/null;
     // by an explicit load, and a project.json carrying none still gets the fit-on-open pass.
     v.camera={k:view.k,tx:view.tx,ty:view.ty};
   }
+  // A view changed, so the autosave is now stale even though the MODEL did not change.
+  //
+  // markDirty() is deliberately not called: a view is not an edit, so it must not arm the
+  // unsaved-work guard or push an undo entry. But scheduleSave() was reached ONLY through
+  // markDirty(), which meant project.view in the autosave was only ever as fresh as the last
+  // content edit -- arrange three containers, switch to View, hide a system, close the tab, and
+  // the restore prompt offered the arrangement from before any of it. The whole visualization
+  // round-tripped through an explicit Commit and not through the mechanism the page actually
+  // relies on to keep a session safe.
+  function noteViewChange(){ scheduleSave(); }
   // Layout-ish view state only: the positions Auto layout destroys. Undo/redo restores THESE, so
   // "Auto layout ate my arrangement" is a Ctrl+Z away, while the level/mode/filter you happened
   // to be on does not lurch backwards every time you undo an unrelated edit. That line -- layout
@@ -1773,12 +1783,21 @@ var DATA = /*__DATA__*/null;
   }
   // First-appearance order, not sorted: the colour a system gets should not shuffle because a
   // later import happens to sort before it, and node order is stable across a save/load.
+  // Memoised per render pass. originList() walks every node, and originHidden()/isBoxedByOrigin()/
+  // originIdx()/multiOrigin() all call it -- render() once per node, renderNode() twice more, and
+  // drawEdges() twice per CONNECTION, which made the whole paint O(N^2 + E*N) on exactly the
+  // merged projects this feature exists for. The cache is dropped by render() (and by anything
+  // that changes the node set), so it can never outlive the picture it describes.
+  var _originCache=null;
+  function invalidateOrigins(){ _originCache=null; }
   function originList(){
+    if(_originCache) return _originCache;
     var seen={}, out=[];
     project.nodes.forEach(function(n){
       var o=originOf(n);
       if(o&&!seen[o]){ seen[o]=1; out.push(o); }
     });
+    _originCache=out;
     return out;
   }
   function multiOrigin(){ return originList().length>1; }
@@ -1829,7 +1848,11 @@ var DATA = /*__DATA__*/null;
     if(!sec||!box) return;
     var list=originList();
     sec.hidden=list.length<2;
-    if(sec.hidden){ box.innerHTML=""; return; }
+    // Clear the cache key with the rows. Leaving it set meant a project that dropped to one
+    // system and came back to the SAME two (undo, or re-opening the same file) rebuilt an
+    // identical signature, matched the early return below, and un-hid a section whose rows had
+    // been emptied -- a legend with no entries, permanently, since this is its only writer.
+    if(sec.hidden){ box.innerHTML=""; box.dataset.sig=""; return; }
     var sig=list.map(function(s){ return s+":"+(originShown(s)?1:0)+":"+originMembers(s).length; }).join("|");
     if(box.dataset.sig===sig) return;      // nothing changed; leave the DOM (and focus) alone
     box.dataset.sig=sig;
@@ -1845,7 +1868,7 @@ var DATA = /*__DATA__*/null;
         // A view, not an edit: no pushUndo, exactly like the kind filter.
         setOriginShown(sys,e.target.checked);
         if(selNode&&originHidden(nodeById(selNode))){ selNode=null; fillInspector(); }
-        render();
+        noteViewChange(); render();
       };
       box.appendChild(l);
     });
@@ -2054,6 +2077,7 @@ var DATA = /*__DATA__*/null;
     // are removed and rebuilt from scratch on every render() (next line), which is exactly what
     // keeps that icon from ever going stale -- there is no incremental patch to get wrong, only
     // a fresh paint against whatever runIssues() just computed.
+    invalidateOrigins();   // the node set may have changed since the last paint
     runIssues();
     syncSystemFilter();    // Import can add a source system between renders
     canvas.className="canvas "+(level===4?"deps":"lvl"+level);
@@ -2090,11 +2114,11 @@ var DATA = /*__DATA__*/null;
   function wireSubToggles(){
     canvas.querySelectorAll("[data-expand]").forEach(function(x){
       x.onclick=function(ev){ ev.stopPropagation();
-        setSubState(x.dataset.expand,"framed"); relayoutSubs(); render(); fillInspector(); };
+        setSubState(x.dataset.expand,"framed"); relayoutSubs(); noteViewChange(); render(); fillInspector(); };
     });
     canvas.querySelectorAll("[data-collapse]").forEach(function(x){
       x.onclick=function(ev){ ev.stopPropagation();
-        setSubState(x.dataset.collapse,"collapsed"); relayoutSubs(); render(); fillInspector(); };
+        setSubState(x.dataset.collapse,"collapsed"); relayoutSubs(); noteViewChange(); render(); fillInspector(); };
     });
     canvas.querySelectorAll("[data-drill]").forEach(function(x){
       x.onclick=function(ev){ ev.stopPropagation(); openDrill(x.dataset.drill); };
@@ -2405,6 +2429,15 @@ var DATA = /*__DATA__*/null;
       if(originHidden(nodeById(c.from.n))||originHidden(nodeById(c.to.n))) continue;
       var s=portCenter(c.from.n,c.from.i), t=portCenter(c.to.n,c.to.i);
       if(!s||!t) continue;
+      // Both endpoints resolved to the SAME point. That happens whenever a connection is
+      // internal to whatever is standing in for both of its nodes -- most often a connection
+      // between two nodes of one source system while the System level is showing that system as
+      // one container, which for a merged project is the majority of connections. Drawing it
+      // gives a zero-length path that still carries an arrowhead marker, so the box collects a
+      // little pile of arrowheads pointing at its own centre. An edge wholly inside a collapsed
+      // unit is not visible at this level of abstraction; that is what collapsing MEANS, and the
+      // honest drawing of it is no line at all.
+      if(Math.abs(s.x-t.x)<0.5&&Math.abs(s.y-t.y)<0.5) continue;
       var path=document.createElementNS(NS,"path");
       path.setAttribute("class","edge "+edgeKindPair(c)+(selEdge===c.id?" sel":""));
       path.setAttribute("d",STUDIO.bezier(s.x,s.y,t.x,t.y));
@@ -3777,6 +3810,7 @@ var DATA = /*__DATA__*/null;
         // Like the package box: no inspector of its own (the nodes it stands for each have one,
         // and they are one level down), so a click is a no-op and only a real drag needs the
         // canvas re-measured.
+        if(!wasClick) noteViewChange();
         if(!wasClick) sizeCanvas();
         return;
       }
@@ -3785,14 +3819,14 @@ var DATA = /*__DATA__*/null;
         // its "open" button live; a drag just leaves it where it was dropped (no undo entry)
         if(wasClick){ selSub=sref; selNode=null; selEdge=null; multiSel=Object.create(null); render(); fillInspector();
                       revealInspector(); }
-        else sizeCanvas();
+        else { noteViewChange(); sizeCanvas(); }
         return;
       }
       if(pref){
         // no inspector of its own -- a package box is a read-only summary -- so a click is a
         // no-op and only an actual drag (which already moved it live, above) needs the canvas
         // re-measured for scrollbars/fitView.
-        if(!wasClick) sizeCanvas();
+        if(!wasClick){ noteViewChange(); sizeCanvas(); }
         return;
       }
       if(wasClick){
@@ -4429,16 +4463,22 @@ var DATA = /*__DATA__*/null;
     // clusterLayout() degenerates to layeredPositions() when nothing is framed: with no
     // cluster, every unit is a plain node and the parent pass IS the flat pass.
     var r=clusterLayout(), pos=r.nodes;
-    Object.keys(r.boxes).forEach(function(ref){ subPos[ref]=r.boxes[ref]; });
+    // pushUndo() FIRST. snapshot() calls syncViewState(), which reads the LIVE subPos/pkgPos --
+    // so anything overwritten before this line is what gets recorded as the "before" state, and
+    // undo restores the new positions onto themselves. Writing subPos above this call made
+    // Ctrl+Z a no-op for exactly the boxes Auto layout had just moved, which is the half of
+    // "Auto layout ate my arrangement" that survived the first attempt at fixing it.
     pushUndo();          // node x/y live in project.json, so a layout is an undoable EDIT
+    Object.keys(r.boxes).forEach(function(ref){ subPos[ref]=r.boxes[ref]; });
     project.nodes.forEach(function(n){
       var p=pos[n.id];
       if(p){ n.x=p.x; n.y=p.y; }
     });
     // The deps-view package column is derived from where the nodes just landed (depsColumnX);
     // dropping any remembered drags here is the same call autoLayout already makes for every
-    // node position and every subsystem box -- "arrange everything" includes them too.
-    pkgPos={};
+    // node position and every subsystem box -- "arrange everything" includes them too. Same for
+    // the System level's origin containers, which placeOriginBoxes() then re-lays in a row.
+    pkgPos={}; sysPos={};
     render(); fitView();
   }
 
@@ -4919,7 +4959,7 @@ var DATA = /*__DATA__*/null;
     inspector.querySelectorAll("[data-subview]").forEach(function(x){x.onchange=function(){
       // NOT pushUndo(): a view is not an edit to the model. Undo restores what the file will
       // say, and folding a presentation toggle into that history would make Ctrl-Z unusable.
-      setSubState(x.dataset.subview,x.value); relayoutSubs(); render(); fillSystemInspector();};});
+      setSubState(x.dataset.subview,x.value); relayoutSubs(); noteViewChange(); render(); fillSystemInspector();};});
     inspector.querySelectorAll("[data-subopen]").forEach(function(x){x.onclick=function(){
       openDrill(x.dataset.subopen);};});
     // ---- what a wrapped subsystem exposes ---------------------------------------------------
@@ -5520,7 +5560,7 @@ var DATA = /*__DATA__*/null;
     KINDS.forEach(function(k){
       var l=document.createElement("label");
       l.innerHTML='<input type="checkbox" '+(kindShown[k]?"checked ":"")+'data-k="'+k+'"><span class="sw" style="background:var('+KCOL[k]+')"></span>'+k;
-      l.querySelector("input").onchange=function(e){kindShown[k]=e.target.checked;saveHiddenKinds();render();};
+      l.querySelector("input").onchange=function(e){kindShown[k]=e.target.checked;saveHiddenKinds();noteViewChange();render();};
       fb.appendChild(l);
     });
     // `param` toggles a BAND, not ports: it hides no edge, because a parameter is not an
@@ -5528,7 +5568,7 @@ var DATA = /*__DATA__*/null;
     // card and reading the wiring is easier without them.
     var pl=document.createElement("label");
     pl.innerHTML='<input type="checkbox" '+(paramShown?"checked ":"")+'data-k="param"><span class="sw" style="background:var(--k-param)"></span>param';
-    pl.querySelector("input").onchange=function(e){paramShown=e.target.checked;saveHiddenKinds();render();};
+    pl.querySelector("input").onchange=function(e){paramShown=e.target.checked;saveHiddenKinds();noteViewChange();render();};
     fb.appendChild(pl);
     updateFilterIndicator();
     var lg=document.getElementById("legend");
@@ -6775,8 +6815,14 @@ var DATA = /*__DATA__*/null;
     var files=generatedFiles();
     // last, so that if the browser does cut the burst short the model itself is not the casualty
     files.push([sys+".project.json",genProjectJson(),"application/json"]);
-    files.forEach(function(f,i){ setTimeout(function(){ dlBlob(f[0],f[1],f[2]); },i*180); });
-    clearDirty();     // everything has left the page
+    files.forEach(function(f,i){ setTimeout(function(){
+      dlBlob(f[0],f[1],f[2]);
+      // Only once the LAST file has actually been handed over. clearDirty() used to run
+      // synchronously, before the staggered sequence had started -- so if the browser cut the
+      // burst short (the exact failure the stagger exists to mitigate) the unsaved-work guard
+      // had already stood down on files that never left the page.
+      if(i===files.length-1) clearDirty();
+    },i*180); });
     return files.map(function(f){ return f[0]; });
   }
   document.getElementById("saveAll").onclick=function(){
@@ -6810,7 +6856,10 @@ var DATA = /*__DATA__*/null;
     // is still the placeholder is left BARE and unquoted -- quoting it would make it look like a
     // real answer, and the whole point is that the shell should fail loudly on it.
     s=String(s==null?"":s).trim();
-    if(!s) return SRC_PH;
+    // An empty value, or one that is ALREADY the placeholder (a stem that could not be derived
+    // because no launch file was given), comes out bare. Quoting it would both hide it from the
+    // highlighter, which matches the raw token, and dress it up as a real answer.
+    if(!s||s===SRC_PH) return SRC_PH;
     if(/^[A-Za-z0-9_@%+=:,.\/-]+$/.test(s)) return s;
     return "'"+s.replace(/'/g,"'\\''")+"'";
   }
@@ -6823,11 +6872,24 @@ var DATA = /*__DATA__*/null;
     var missing=[];
     if(!repo) missing.push("the source tree");
     if(!launch) missing.push("the launch file");
+    // The system name is optional to the TOOL (--system-name defaults to the launch file's
+    // stem) but NOT to this panel: step 2's -o and step 3's input are both required paths that
+    // have to be spelled concretely, and nothing derives them. Deriving the stem here from the
+    // first launch file's basename is what the field's hint promises, so do exactly that rather
+    // than emitting a <system> placeholder the status line then failed to mention -- a command
+    // block containing an unfilled token while the panel reports nothing missing is the one
+    // outcome worse than asking for the value.
+    var stem=name;
+    if(!stem&&launch){
+      var first=launch.split(/\s+/)[0].replace(/\\/g,"/");
+      stem=(first.split("/").pop()||"").replace(/\.(launch\.)?(py|xml|yaml|yml)$/i,"")
+             .replace(/\.launch$/i,"");
+    }
+    if(!stem) stem="<FILL-IN>";
 
     var O=shq(out);
     // Several launch files are accepted (nargs="+"); split on whitespace and quote each.
     var launches=launch?launch.split(/\s+/).map(shq).join(" "):SRC_PH;
-    var stem=name||"<system>";
     // PY/PLUGIN follow the spelling every other doc in this repo uses. CLAUDE_PLUGIN_ROOT is set
     // when the plugin is installed; inside the repo it is not, and the paths are simply
     // scripts/... -- which SKILL.md says in as many words, so the note below says it too.
@@ -6845,14 +6907,14 @@ var DATA = /*__DATA__*/null;
     var two=PY+" "+P+'/extract_rossystem.py" '+launches+" \\";
     l.push(two);
     l.push("    --models "+O+"/rosnodes \\");
-    l.push("    -o "+O+"/"+(name?shq(name):stem)+".rossystem \\");
+    l.push("    -o "+O+"/"+shq(stem)+".rossystem \\");
     l.push("    --workspace "+shq(repo)+" \\");
     if(name) l.push("    --system-name "+shq(name)+" \\");
     if(ctrl) l.push("    --controllers-file "+shq(ctrl)+" \\");
     l.push("    --json "+O+"/system_record.json");
     l.push("");
     l.push("# 3. that .rossystem -> project.json (sibling .ros2/.ros are picked up automatically)");
-    l.push(PY+" "+P+'/ros_studio.py" init '+O+"/"+(name?shq(name):stem)+".rossystem \\");
+    l.push(PY+" "+P+'/ros_studio.py" init '+O+"/"+shq(stem)+".rossystem \\");
     l.push("    --out "+O+"/project.json");
     return {text:l.join("\n"), missing:missing, stem:stem, out:out};
   }
@@ -6863,10 +6925,9 @@ var DATA = /*__DATA__*/null;
     // Highlight every placeholder so an unfilled field is impossible to copy by accident
     // without noticing. Done by re-walking the text, not by building HTML above, so the COPIED
     // string and the DISPLAYED string can never diverge.
-    if(r.text.indexOf(SRC_PH)>=0||r.stem==="<system>"){
+    if(r.text.indexOf(SRC_PH)>=0){
       box.innerHTML=box.innerHTML
-        .replace(/&lt;FILL-IN&gt;/g,'<span class="ph">&lt;FILL-IN&gt;</span>')
-        .replace(/&lt;system&gt;/g,'<span class="ph">&lt;system&gt;</span>');
+        .replace(/&lt;FILL-IN&gt;/g,'<span class="ph">&lt;FILL-IN&gt;</span>');
     }
     var st=document.getElementById("srcState");
     st.className="srcstate"+(r.missing.length?" bad":"");
@@ -6929,9 +6990,9 @@ var DATA = /*__DATA__*/null;
   }
   modeSeg.querySelectorAll("button").forEach(function(b){b.onclick=function(){
     setMode(b.dataset.mode);
-    selEdge=null; render(); fillInspector();
+    selEdge=null; noteViewChange(); render(); fillInspector();
   };});
-  levelSeg.querySelectorAll("button").forEach(function(b){b.onclick=function(){level=+b.dataset.lvl;setLevelButtons();render();};});
+  levelSeg.querySelectorAll("button").forEach(function(b){b.onclick=function(){level=+b.dataset.lvl;setLevelButtons();noteViewChange();render();};});
   function setLevelButtons(){levelSeg.querySelectorAll("button").forEach(function(x){x.classList.toggle("on",+x.dataset.lvl===level);});}
 
   // ============================ collapsible sections ============================
@@ -6971,6 +7032,7 @@ var DATA = /*__DATA__*/null;
     autoSides=pref; box.checked=autoSides;
     box.onchange=function(){
       setAutoSides(box.checked);
+      noteViewChange();
       render();          // ports move, and drawEdges reads their rendered positions
     };
   })();
