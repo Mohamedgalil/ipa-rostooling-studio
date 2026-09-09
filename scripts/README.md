@@ -225,6 +225,7 @@ accepts both `'` and `"`, so the difference vanishes at parse time.
 | `RM044` | WARNING | Zero-corpus-support construct (`dependencies:`, `ns:`, `namespace:`) | profile §3 |
 | `RM045` | WARNING | `Struct` / `List` / `Base64` parameter type | grammar-subset §5.4, profile §3 |
 | `RM046` | INFO | `Array [` with a space before the bracket | profile rule 17 |
+| `RM095` | WARNING (`.ros2`) / ERROR (`.rossystem`) | Parameter value is a quoted string shaped like `[...]`/`{...}` instead of a real list | `CheckParameterValue` (validator-rules §2.6), added 2026-09-03 (**silent corruption**) |
 
 ### `.rossystem` structure
 
@@ -241,13 +242,15 @@ accepts both `'` and `"`, so the difference vanishes at parse time.
 | `RM058` | ERROR | Duplicate interface local name **within one node** | profile rule 28 |
 | `RM059` | WARNING | Top-level block order | profile rule 25 |
 | `RM060` | ERROR | Connection is not a 2-element list | `RosSystem.xtext:126-127`, validator-rules §3.4 |
-| `RM061` | WARNING | `subSystems:` used | profile §3, validator-rules §3.5 |
+| `RM061` | INFO | `subSystems:` used — demoted from WARNING 2026-09-03; the reuse checks RM090-RM093 apply, but presence alone is not a defect and must not be read as a reason to omit a requested subsystem (SKILL.md §8d) | profile §3, validator-rules §3.5 |
 | `RM062` | WARNING | `/` in a `.rossystem` node name | rossdl launch generation |
 | `RM063` | WARNING | `processes:` used | profile §3 |
 | `RM064` | INFO | Connected interfaces have differing trailing names | `MatchPortMsgs` (S5), advisory only |
 | `RM065` | WARNING | Connection endpoint name is owned by several nodes | profile rule 28 |
 | `RM066` | INFO | `fromFile:` contains the `TODO` placeholder sentinel | rossystem-syntax §2 derivation ladder (exercised by `tests/oracle/cases/tb3-fresh/`) |
 | `RM067` | INFO | Uppercase in a `.rossystem` node **label** | house style only — no validator |
+| `RM096` | WARNING | Non-sentinel `fromFile:` with no `# caller-supplied` / `# on disk:` provenance comment on the same line (files under `assets/rosmodelscatalog/` exempt) | SKILL.md rule 5, added 2026-09-03 |
+| `RM097` | WARNING (INFO when all closed) | Items the extractors could not read that are still open — counts `# FLAG`/`# OPEN`/`# UNRESOLVED`, and reports them against the `# EXTRACTOR-FLAGS: N` stamp the scripts write, so the original count survives any rewording | SKILL.md "Converting real source" + §8e, self-check 18 |
 
 `RM051` enforces the only three legal pairings, with `from` always the server/publisher side:
 
@@ -281,7 +284,6 @@ in `--hook` mode) for a workspace whose references are heavily project-local. Se
 | `RM091` | WARNING | A `subSystems:` entry doesn't resolve, itself declares another `subSystems:` (nesting risk), or resolves but exposes zero `interfaces:` on any node | `.rossystem` |
 | `RM092` | WARNING | A local node and a node reachable via `subSystems:` resolve the same `from:` under different labels — likely the same real node modelled twice | `.rossystem` |
 | `RM094` | ERROR | Full-line comment at column 0 inside an indented block | `AbstractIndentationTokenSource` closes every open block; oracle case `19-neg-col0-comment`: `missing EOF at ''` |
-| `RM097` | WARNING (INFO when all closed) | Items the extractors could not read that are still open — counts `# FLAG`/`# OPEN`/`# UNRESOLVED`, and reports them against the `# EXTRACTOR-FLAGS: N` stamp the scripts write, so the original count survives any rewording | SKILL.md "Converting real source" + §8e, self-check 18 |
 | `RM093` | ERROR | `subSystems:` written as a bracket list `[...]` or as a `- item` block sequence — the grammar takes neither (settled 2026-08-14: oracle cases `17-subsystems-multi` / `18-neg-subsystems-dash`, `mismatched input '-' expecting RULE_END`). N entries are N bare lines | `.rossystem` |
 
 `RM081`/`RM084` are WARNING, not ERROR, for the same reason `RM076` is: a genuinely
@@ -612,10 +614,19 @@ the script appears in this README and vice versa, with no orphans in either dire
 > `examples/turtlebot3_navigation.rossystem` — 0 new errors, 0 crashes, `--no-catalogue` confirmed
 > to suppress RM090-RM092 (RM093 is a pure grammar check and fires regardless).
 
+> *Amended 2026-09-03.* Two new rules, `RM095` and `RM096`, close gaps a live validation round
+> found: a quoted string shaped like a list (`value: "['a', 'b']"`) passed through where the
+> declared or requested type was a real list, and a confident, non-sentinel `fromFile:` path with
+> no stated provenance. `RM061` (`subSystems:` used) is demoted from WARNING to INFO in the same
+> pass — its old wording ("every corpus example is low-quality") had become a third nudge, beside
+> §8d and self-check 15, toward omitting a subsystem the caller actually asked to reuse; presence
+> alone was never itself a defect. Neither corpus count below (336-file or catalogued) has been
+> re-run against these two additions; the whole-corpus figures that follow predate them.
+
 ### Whole-corpus run — 336 files, 0 crashes
 
-**Re-measured 2026-08-14** against the current script. It emits **83** distinct ids -- RM000-RM097
-plus the `RM002B` and `RM008T` variants -- which is **82 rules**<!--@count:rules-->, RM000 being the internal
+**Re-measured 2026-08-14** against the current script. It emits **85** distinct ids -- RM000-RM097
+plus the `RM002B` and `RM008T` variants -- which is **84 rules**<!--@count:rules-->, RM000 being the internal
 read/parse failure rather than a rule. (RM094, the column-0 comment check, and the RM090/RM033
 severity corrections landed after this sweep and change none of its counts: no corpus file
 exhibits any of the three.) This supersedes the

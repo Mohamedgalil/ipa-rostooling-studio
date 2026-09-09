@@ -13,3 +13,6 @@ __pycache__/
 # Demo content and IDE metadata -- not part of the reusable plugin
 examples/
 .idea/
+
+# ask_oracle.py writes this when results.json has uncommitted changes (see _results_path)
+tests/oracle/results.local.json

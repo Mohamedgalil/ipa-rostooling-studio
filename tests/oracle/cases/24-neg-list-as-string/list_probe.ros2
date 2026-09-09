@@ -1,0 +1,8 @@
+list_probe:
+  artifacts:
+    prober:
+      node: prober
+      parameters:
+        'names':
+          type: Array[String]
+          value: ["a", "b"]

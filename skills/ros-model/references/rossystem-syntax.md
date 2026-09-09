@@ -136,12 +136,27 @@ guessing:
 **Never invent a plausible-looking real path.** `"cs4mt_bringup/launch/manufacturing_tb.launch.py"`
 is worse than the sentinel, not better: it is indistinguishable from a verified path, so it silently
 converts a known-unknown into a false fact. Every regeneration run before 2026-07-21 fabricated one
-of these.
+of these. **Rung 2 means the launch file itself, found with `Glob` — not a `fromFile:` line seen in
+another model** (a corpus file, a vendored catalogue file, or this plugin's own past output under
+`tests/regenerated/`). A path in one of those is that file's author's claim, not something you
+verified; copying it is rung 3 wearing rung 2's clothes.
+
+Say which rung on the `fromFile:` line itself, with a trailing comment (SKILL.md rule 5):
+
+```
+fromFile: "ur_bringup/launch/ur5e.launch.py"   # caller-supplied
+fromFile: "ur_bringup/launch/ur5e.launch.py"   # on disk: /abs/path/ur_bringup/launch/ur5e.launch.py
+fromFile: "TODO_PACKAGE/launch/TODO.launch.py"
+```
+
+The sentinel needs no comment (`RM066` already marks it); `rosmodel_lint.py`'s `RM096` (WARNING)
+flags any other `fromFile:` with no provenance comment.
 
 Whichever rung you land on, if it is not rung 1 or 2, **report it to the caller** as
 *fromFile: SYNTHESISED — not extracted from the source, supplied only to avoid the fromFileHelper
-NPE.* `rosmodel_lint.py` emits `RM066` (INFO) on any `fromFile:` containing `TODO`, so the
-placeholder stays visible rather than settling in as if it were real.
+NPE* — and if you saw a candidate path somewhere that you correctly rejected as not being rung 1 or
+2 evidence, say where. `rosmodel_lint.py` emits `RM066` (INFO) on any `fromFile:` containing `TODO`,
+so the placeholder stays visible rather than settling in as if it were real.
 
 ## 3. `RosNode`
 
@@ -411,10 +426,14 @@ caller's iteration on return. Nested container values produce arbitrary, non-det
 diagnostics. **Author scalar values only** — Integer, Double, Boolean, String.
 
 > **This constrains what you AUTHOR, not what you may transcribe.** When a source parameter already
-> holds a List, Array or Struct value, **reproduce it verbatim**. Never delete a parameter to
-> satisfy this rule — dropping `source_list` to keep the file "clean" loses model content and is a
-> far worse outcome than a non-deterministic diagnostic. Warn the caller that `CheckParameterValue`
-> may report unstable results for that parameter.
+> holds a List, Array or Struct value, **reproduce it as a real `[...]` list** — "verbatim" means
+> keep the parameter and every element, not copy a quoting defect. A source `value: "['a', 'b']"`
+> is a string; the oracle rejects it against the declared `Array`/`List` type with `Expect a list
+> of elements`. Convert it to `value: ["a", "b"]`, and report the conversion (SKILL.md §8, check
+> 12) — this is a source defect, not a style to preserve; `rosmodel_lint.py` flags it as `RM095`.
+> Never delete a parameter to satisfy this rule — dropping `source_list` to keep the file "clean"
+> loses model content and is a far worse outcome than a non-deterministic diagnostic. Warn the
+> caller that `CheckParameterValue` may report unstable results for that parameter.
 
 ## 5b. System-level `parameters:` — a different shape entirely
 
@@ -565,8 +584,8 @@ Every name in `nodes: [...]` **must** also appear as a key in this file's `nodes
 `checkIfNodeInSystem` raises an ERROR (`rosmodel_lint.py` mirrors this as `RM054`).
 
 `subSystems:` — 19 files, but every sampled example is low quality (one indents its reference with a
-tab and leaves it bare). Emit only when composition is explicitly requested, normalised to the
-2-space ladder, and flag the output as reconstructed rather than copied.
+tab and leaves it bare). Emit it whenever composition is requested — see SKILL.md §8d — normalised
+to the 2-space ladder, and flag the output as reconstructed rather than copied.
 
 **Quote the subsystem reference with double quotes**, consistent with §8. Bare is legal —
 `SubSystem: system=[System|EString]` admits a plain `ID` — but the corpus examples that leave it
