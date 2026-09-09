@@ -1457,6 +1457,17 @@ def seed_from_many(paths, roots=None, name=None):
                              % (os.path.basename(path), n["label"], label))
             label_used.add(label)
             new["label"] = label
+            # Which source this node came from. A merge is the ONLY place that knows -- once the
+            # nodes are in one project they are indistinguishable, which is why a merged canvas
+            # read as one undifferentiated pile and why `label_system` renames (above) were the
+            # only surviving trace of where anything came from. The editor colours, filters and
+            # containerises by this; it is provenance, a peer of seededFromAll, not a view
+            # choice, so it lives on the node rather than under project["view"].
+            #
+            # It cannot reach an emitted byte: emit_rossystem/emit_ros2 write named keys, and
+            # both fact trees are built from an allow-list, so an extra node key is excluded by
+            # construction. tests/studio_parity.js pins that.
+            new["srcSystem"] = sysname
             new["ifaces"] = []
             for f in n.get("ifaces") or []:
                 nf = dict(f)

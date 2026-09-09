@@ -247,6 +247,83 @@ defaulted to `String`, which used to retype every such parameter and turn `value
 Both slots are held to the real 3.1.0 language server by `tests/oracle/cases/22-parameters`
 (ACCEPTED, 0E/0W) and to a lossless round-trip by `tests/fixtures/params/`.
 
+## Where a node came from — colour, legend, and the System level
+
+A project composed from several sources — `init`'s multi-file merge, or the editor's **Import** —
+used to lose the one fact that made it readable: *which system each node came from*. Once merged
+they were one undifferentiated pile of cards, and the only surviving trace of the boundary was a
+rename in `init`'s diagnostics.
+
+`project.json` now records it per node as **`srcSystem`**, stamped by `seed_from_many`'s pass A
+(where the source is still identifiable) and by the in-page importer. An imported `project.json`
+that already carries origins of its own keeps them rather than being flattened onto the importing
+file's name — the node really did come from that system.
+
+`srcSystem` is **provenance, not view state and not content.** It sits on the node, a peer of
+`seededFromAll`, because it is a fact about the model's history rather than a drawing choice. It
+cannot reach an emitted byte: `emit_rossystem`/`emit_ros2` write named keys and both fact trees
+build from an allow-list, so an extra node key is excluded by construction. `tests/studio_parity.js`
+stamps an unmistakable value on **every** node — including catalogue- and subsystem-backed ones —
+re-emits, and fails if it appears in the `.rossystem`, in `projectFacts()`, or in the companion's
+`project_facts()`. That last one matters most: a leak there would make `diff` report every node of
+a merged project as changed.
+
+Three things use it, and **all three are inert unless there is more than one source system** — a
+blank or single-source project looks exactly as it did:
+
+- **Colour.** Each source system gets one of eight hues, applied as a card border, a 5px left
+  edge and a tinted header. The palette lives beside the interaction-kind one in
+  `_studio_common.py` and is defined in all four theme blocks (light, `prefers-color-scheme:
+  dark`, and both explicit `data-theme` overrides). It is a **different axis** from the kind
+  colours — a node has both — so origin owns the card and kind keeps the ports, and the two never
+  compete for the same pixel. Hues are separated in the Okabe-Ito spirit (blue, orange, green,
+  purple, magenta, gold, teal, slate), and no adjacent pair relies on red-vs-green. More than
+  eight systems wrap; the legend still names each one. The origin colour is written *above*
+  `.sel`/`.hasdiag`/`.issue-e` in the stylesheet so selection and diagnostics win the border
+  back — where a card came from matters less than "this one is selected" or "the server rejected
+  this one" — while the left edge keeps saying it regardless.
+- **A legend that filters.** A **Source systems** section in the rail, following the **Show
+  kinds** pattern: one row per system with its swatch, its name and its node count, and a
+  checkbox that hides that system's nodes. Hiding takes the **edges** with it, exactly as the
+  kind filter does — a filter that hid the cards and kept the wires would draw edges into empty
+  space. Colour is never the only channel: every row is labelled and counted, so the legend reads
+  correctly with no colour vision at all. The section is rebuilt on every render, because Import
+  can add a system at any time and a legend that missed it would be worse than none.
+- **Containers at the System level.** Level 1 already hid every interface row, so a merged
+  project at the level whose *name* promises system-scale grouping was the level that showed it
+  least: a heap of bare name cards. Each source system is now one box there, its ports being the
+  exposure labels its members declare, wired ones solid and unwired dimmed.
+
+**The containers are the subsystem machinery on a different axis, not a parallel one.**
+`groupPorts()` — "one row per exposure label across this set of nodes, with every (node,
+interface) pair behind it" — was lifted out of `subPorts()` and is now shared by both, so
+`subPorts(ref)` is a one-line call. Keeping a second copy is the shape `STATUS.md` keeps
+recording: two implementations of one rule that agree until someone fixes only one. The
+invisible-stacked-port trick is carried over for the same reason it exists for subsystems —
+`drawEdges()` resolves an endpoint by querying `[data-n][data-i]`, so every pair behind a
+collapsed row still needs an element or its edge silently disappears.
+
+That uncovered a **real bug in `portCenter()`**, which this fixes for both groupings: its
+fallback looked only for the member's own `.node[data-n=…]` card. At level 1 every port is
+hidden, so the width test fails; and a member inside a container is not rendered at all, so the
+card lookup fails too. Both misses meant the edge was silently dropped — at the one level whose
+whole job is showing how the groups connect. It now falls back to whichever container is standing
+in for that node, so the wire lands on the group. Verified in a browser: two cross-system
+connections survive the switch from Full to System and re-route onto the boxes.
+
+A node can be *both* "from source system X" and part of a `backing:"sub"` reference. Those are two
+different groupings and nesting them is **not attempted**: a `backing:"sub"` node has a null
+origin and stays inside the subsystem machinery that already owns it. That is also why wrapping a
+selection needs no special handling — wrap mutates the node in place, so its `srcSystem` survives
+untouched and simply stops being consulted while it is a sub member.
+
+Container positions live in `project.view.sysPos` and the per-system filter in
+`project.view.systemShown`, so both round-trip with the rest of the visualization; dragging a
+container is a view change, never an edit, and never enters the undo history. Boxes are first
+placed in a row ordered by their members' centroid — centroids of overlapping groups overlap too,
+and two boxes stacked on each other is strictly worse than a row that needs one drag — starting
+below the floating find control, whose canvas footprint was measured rather than guessed.
+
 ## Subsystems — one level of abstraction
 
 A `subSystems:` entry names one whole reused composition. The studio used to **flatten** its

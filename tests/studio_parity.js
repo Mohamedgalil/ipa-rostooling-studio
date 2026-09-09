@@ -444,6 +444,27 @@ function compareViewStates(projectPath, htmlPath, expectPath) {
     });
   });
 
+  // ---- provenance is not content ----------------------------------------------------------
+  // `n.srcSystem` -- which source .rossystem a node was merged or imported from -- is a NEW node
+  // key, and a node key is a far more dangerous place to add something than project.view: the
+  // emitter walks nodes, and both fact trees describe them. It is excluded by construction
+  // (emit_rossystem/emit_ros2 write named keys, project_facts builds from an allow-list), which
+  // is exactly the kind of "nothing reads it" claim that stops being true one refactor later.
+  //
+  // Stamped on EVERY node here, including catalogue- and subsystem-backed ones, with a value
+  // that would be unmistakable in the output if it ever leaked.
+  var provenance = JSON.parse(JSON.stringify(project));
+  provenance.nodes.forEach(function (n, i) { n.srcSystem = "ORIGIN_LEAK_" + i; });
+  var pfns = loadShipped(html, provenance);
+  if (pfns.genSystem() !== expected) {
+    var dp = firstDiff(expected, pfns.genSystem());
+    problems.push("n.srcSystem CHANGED the emitted .rossystem at " + (dp || "(trailing bytes)")
+      + " -- provenance is a fact about where a node came from, never content");
+  }
+  if (JSON.stringify(pfns.projectFacts()).indexOf("ORIGIN_LEAK_") !== -1)
+    problems.push("n.srcSystem reached projectFacts() -- re-seeding a merged project would then "
+      + "report every node as changed");
+
   // ...and the SAME claim on the Python side, which is a separate implementation and therefore a
   // separate opportunity to read a view key. `diff` reduces both sides to project_facts(); if a
   // saved arrangement leaked in there, `diff` would report "you changed the model" for a project
@@ -453,13 +474,15 @@ function compareViewStates(projectPath, htmlPath, expectPath) {
   var vp = projectPath.replace(/\.json$/, "") + ".viewkeys.json";
   var withView = JSON.parse(JSON.stringify(project));
   withView.view = fullView;
+  withView.nodes.forEach(function (n, i) { n.srcSystem = "ORIGIN_LEAK_" + i; });
   fs.writeFileSync(vp, JSON.stringify(withView, null, 2));
   try {
     var factsPlain = canonical(JSON.parse(runStudio(["--facts", projectPath])));
     var factsView = canonical(JSON.parse(runStudio(["--facts", vp])));
     if (factsPlain !== factsView)
-      problems.push("project_facts() CHANGED when project.view was populated -- the Python fact "
-        + "tree is reading the arrangement, so `diff` would report a drag as a model edit");
+      problems.push("project_facts() CHANGED when project.view was populated and every node was "
+        + "given a srcSystem -- the Python fact tree is reading the arrangement or the "
+        + "provenance, so `diff` would report a drag, or a merge, as a model edit");
   } finally {
     try { fs.unlinkSync(vp); } catch (e) { }
   }

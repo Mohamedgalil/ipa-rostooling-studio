@@ -123,6 +123,11 @@ try{
   .filter label{display:flex;align-items:center;gap:.4rem;font-size:.76rem;color:var(--ink-2);padding:.12rem 0;cursor:pointer}
   .filter .sw{width:11px;height:11px;border-radius:3px;flex-shrink:0}
   .filter input{accent-color:var(--accent);width:13px;height:13px}
+  /* a system name is long and arbitrary (it is a filename stem), so it gets the flexible column
+     and truncates, while the node count stays pinned and readable at the right. */
+  .filter .sysnm{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:.7rem}
+  .filter .syscnt{flex:none;font-family:var(--mono);font-size:.66rem;color:var(--ink-3)}
+  .sysfoot{margin-top:.4rem;font-size:.68rem;line-height:1.35;color:var(--ink-3)}
   .issues .row{display:flex;align-items:center;gap:.45rem;font-size:.78rem;padding:.2rem 0}
   .issues .cnt{font-family:var(--mono);font-weight:700}
   .issues .err{color:var(--dead)} .issues .wrn{color:var(--warn)} .issues .ok{color:var(--accent-2)}
@@ -202,6 +207,23 @@ try{
   .node.fcur{border-color:var(--warn);box-shadow:0 0 0 3px var(--warn-wash),var(--shadow-lift)}
   .canvas svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1}
   .node{position:absolute;z-index:2;background:var(--surface);border:1.5px solid var(--rule);border-radius:9px;box-shadow:var(--shadow);min-width:190px;user-select:none}
+  /* origin system: which source .rossystem this node was merged/imported from. The index class
+     only sets two custom properties, so the rule that PAINTS is `.node.orig` at the same
+     specificity as .sel / .hasdiag / .issue-e -- and it is written above them on purpose, so
+     selection and diagnostics win the border back. Where a card came from matters less than
+     "this one is selected" or "the server rejected this one". */
+  .node.s0{--org:var(--s0);--org-bg:var(--s0-bg)}
+  .node.s1{--org:var(--s1);--org-bg:var(--s1-bg)}
+  .node.s2{--org:var(--s2);--org-bg:var(--s2-bg)}
+  .node.s3{--org:var(--s3);--org-bg:var(--s3-bg)}
+  .node.s4{--org:var(--s4);--org-bg:var(--s4-bg)}
+  .node.s5{--org:var(--s5);--org-bg:var(--s5-bg)}
+  .node.s6{--org:var(--s6);--org-bg:var(--s6-bg)}
+  .node.s7{--org:var(--s7);--org-bg:var(--s7-bg)}
+  /* a 5px left edge carries the identity even when the border colour is taken over by .sel or
+     .hasdiag, so a selected card does not stop saying where it came from. */
+  .node.orig{border-color:var(--org);border-left:5px solid var(--org)}
+  .node.orig .nhead{background:var(--org-bg)}
   .node.sel{border-color:var(--accent);box-shadow:var(--shadow-lift)}
   .node.cat{border-style:dashed}
   /* a subSystems: node is not declared by THIS file -- dimmed and dotted so it reads as
@@ -249,6 +271,13 @@ try{
      A subSystems: reference is ONE reused composition. Three ways to look at it, all pure
      presentation: the state lives in project.view and is excluded from the fact tree, so
      collapsing, framing or drilling in cannot change one emitted byte. */
+  /* the System level's container: one box per source system, coloured by that system's slot.
+     Same shape as a collapsed subsystem box (below) because it is the same idea on a different
+     axis -- a group of nodes standing as one unit, with the group's exposure labels as ports. */
+  .node.sysbox{border-width:2px;border-color:var(--org);background:var(--surface);min-width:230px}
+  .node.sysbox .nhead{background:var(--org-bg);gap:.3rem}
+  .node.sysbox .nhead .sw{width:.6rem;height:.6rem;border-radius:2px;flex:none}
+  .node.sysbox .nfrom{font-style:italic}
   .node.subbox{border-width:2px;border-color:var(--k-sub);background:var(--panel)}
   .node.subbox .nhead{background:color-mix(in srgb,var(--k-sub) 12%,transparent)}
   .node.subbox .nfrom{font-style:italic}
@@ -587,6 +616,15 @@ try{
         <span class="secmeta"><span class="secdot e" id="issDot" hidden></span><span id="errCnt">0</span>&nbsp;err &middot; <span id="wrnCnt">0</span>&nbsp;wrn</span></button></h4>
       <div class="secbody" id="secb_rail-issues">
         <div class="issuelist" id="issueList"></div>
+      </div>
+    </div>
+    <!-- Hidden entirely for a single-source project (see syncSystemFilter): one system needs no
+         legend, and an always-present section listing one entry would just be noise. -->
+    <div class="insec filter" data-sec="rail/systems" id="sysFilterSec" hidden>
+      <h4><button type="button" class="sechead" aria-expanded="true" aria-controls="secb_rail-systems"><span class="caret">&#9662;</span><span class="sectitle">Source systems</span></button></h4>
+      <div class="secbody" id="secb_rail-systems">
+        <div id="sysFilterBox"></div>
+        <div class="sysfoot">Colour marks which source <code>.rossystem</code> each node came from. At the <b>System</b> level each becomes one box.</div>
       </div>
     </div>
     <div class="insec filter" data-sec="rail/kinds">
@@ -1277,7 +1315,7 @@ var DATA = /*__DATA__*/null;
   //   collapsed (default)  one box; its ports are the labels the referenced file exposes
   //   framed               the internals, inside a labelled frame
   //   drill-in             that file alone, read-only, with a breadcrumb back
-  var drillRef=null, subPos={}, selSub=null, pkgPos={};
+  var drillRef=null, subPos={}, selSub=null, pkgPos={}, sysPos={};
   function subState(ref){
     var v=(project.view&&project.view.subsystems)||{};
     return v[ref]==="framed"?"framed":"collapsed";
@@ -1307,8 +1345,10 @@ var DATA = /*__DATA__*/null;
   function syncViewState(){
     project.view=project.view||{};
     var v=project.view;
-    v.subPos=subPos; v.pkgPos=pkgPos;
+    v.subPos=subPos; v.pkgPos=pkgPos; v.sysPos=sysPos;
     v.level=level; v.mode=mode; v.autoSides=autoSides;
+    // systemShown is written through setOriginShown() directly (like view.subsystems), so it is
+    // already live on project.view -- nothing to copy here, and copying would fight that writer.
     v.hiddenKinds=hiddenKindList();
     // The camera is the one piece that is arguably NOT part of "the picture I built" -- it is
     // where you were standing, not what you arranged. It is saved anyway (a reader who zoomed
@@ -1322,7 +1362,7 @@ var DATA = /*__DATA__*/null;
   // is undoable, preferences are not -- is the same one secOpen already draws.
   function restoreViewLayout(){
     var v=project.view||{};
-    subPos=v.subPos||{}; pkgPos=v.pkgPos||{};
+    subPos=v.subPos||{}; pkgPos=v.pkgPos||{}; sysPos=v.sysPos||{};
   }
   // The full restore, for the paths where a genuinely different project arrives: Open, drop, and
   // the autosave prompt. A project.json saved before this existed carries none of these keys, so
@@ -1653,9 +1693,112 @@ var DATA = /*__DATA__*/null;
   // DSL's own view of it. A label two member nodes both declare (the catalogued turtlebot's
   // "tf") collapses to ONE row and is badged: the ambiguity is real (RM065) and this is the
   // first view in which it is visible rather than buried.
-  function subPorts(ref){
+  // ============================ origin systems ============================
+  // A merged or imported project holds nodes from SEVERAL source .rossystem files, and once
+  // merged they were indistinguishable: one undifferentiated pile of cards, with the renames in
+  // init's diagnostics the only surviving hint of where anything came from. `n.srcSystem` (set
+  // by seed_from_many's pass A and by the in-page importer) is that provenance, and everything
+  // below is what the canvas does with it -- tint, legend, filter, and a container per system at
+  // the System level.
+  //
+  // Deliberately inert for a single-source project: originList() returns one entry, multiOrigin()
+  // is false, and every consumer short-circuits. A blank project, or one seeded from one file,
+  // looks exactly as it did before -- no colours, no legend section, no containers.
+  //
+  // A node carries an origin AND may separately be part of a `subSystems:` reference. Those are
+  // two different groupings and nesting them is not attempted: a `backing:"sub"` node returns a
+  // null origin and stays inside the subsystem machinery that already owns it. That is why
+  // wrapping a selection needs no special handling -- wrap mutates the node in place, so its
+  // srcSystem survives untouched and simply stops being consulted while it is a sub member.
+  function originOf(n){
+    if(!n||n.backing==="sub") return null;
+    return n.srcSystem||(project.system&&project.system.name)||"(this project)";
+  }
+  // First-appearance order, not sorted: the colour a system gets should not shuffle because a
+  // later import happens to sort before it, and node order is stable across a save/load.
+  function originList(){
+    var seen={}, out=[];
+    project.nodes.forEach(function(n){
+      var o=originOf(n);
+      if(o&&!seen[o]){ seen[o]=1; out.push(o); }
+    });
+    return out;
+  }
+  function multiOrigin(){ return originList().length>1; }
+  var ORIGIN_SLOTS=8;
+  function originIdx(sys){
+    var i=originList().indexOf(sys);
+    // More systems than slots wraps rather than running out of colours. The legend still names
+    // every system, so a repeated hue is ambiguous only until you read the label.
+    return i<0?0:(i%ORIGIN_SLOTS);
+  }
+  function originShown(sys){
+    var v=(project.view&&project.view.systemShown)||{};
+    return v[sys]!==false;
+  }
+  function setOriginShown(sys,on){
+    project.view=project.view||{};
+    project.view.systemShown=project.view.systemShown||{};
+    project.view.systemShown[sys]=!!on;
+  }
+  // Hidden by the legend filter. Checked everywhere a node is drawn or an edge is resolved, the
+  // same way kindShown gates a port -- a filter that hid the card but kept its wires would draw
+  // edges to nothing.
+  function originHidden(n){
+    if(!multiOrigin()) return false;
+    var o=originOf(n);
+    return !!o&&!originShown(o);
+  }
+  function originMembers(sys){
+    return project.nodes.filter(function(n){ return originOf(n)===sys; });
+  }
+  // True when this node is standing in for its origin's container rather than being drawn.
+  // Mirrors isCollapsedMember() exactly, for the other grouping axis.
+  function isBoxedByOrigin(n){
+    return level===1&&multiOrigin()&&!!originOf(n)&&originShown(originOf(n));
+  }
+  // The rail's "Source systems" legend: one labelled swatch per origin, with a checkbox that
+  // shows or hides that system's nodes. Rebuilt from render() rather than wired once, because
+  // Import can add a system at any time and a legend that missed it would be worse than none.
+  //
+  // The whole section is hidden unless there is more than one source. Colour-coding one system
+  // says nothing, and a section listing a single entry is noise -- this is the "inert for a
+  // single-source project" rule, enforced in the one place the user can see it.
+  //
+  // Colour is never the only channel: every row is labelled with its system name and its node
+  // count, so the legend reads correctly with no colour vision at all.
+  function syncSystemFilter(){
+    var sec=document.getElementById("sysFilterSec"), box=document.getElementById("sysFilterBox");
+    if(!sec||!box) return;
+    var list=originList();
+    sec.hidden=list.length<2;
+    if(sec.hidden){ box.innerHTML=""; return; }
+    var sig=list.map(function(s){ return s+":"+(originShown(s)?1:0)+":"+originMembers(s).length; }).join("|");
+    if(box.dataset.sig===sig) return;      // nothing changed; leave the DOM (and focus) alone
+    box.dataset.sig=sig;
+    box.innerHTML="";
+    list.forEach(function(sys){
+      var l=document.createElement("label");
+      l.title=sys+" — "+originMembers(sys).length+" node(s)";
+      l.innerHTML='<input type="checkbox" '+(originShown(sys)?"checked ":"")+'>'
+        +'<span class="sw" style="background:var(--s'+originIdx(sys)+')"></span>'
+        +'<span class="sysnm">'+esc(sys)+'</span>'
+        +'<span class="syscnt">'+originMembers(sys).length+'</span>';
+      l.querySelector("input").onchange=function(e){
+        // A view, not an edit: no pushUndo, exactly like the kind filter.
+        setOriginShown(sys,e.target.checked);
+        if(selNode&&originHidden(nodeById(selNode))){ selNode=null; fillInspector(); }
+        render();
+      };
+      box.appendChild(l);
+    });
+  }
+  // Generalised out of subPorts(): "one row per exposure label across this set of nodes, with
+  // every (node, interface) pair behind it". Both groupings need exactly this -- a collapsed
+  // subsystem box and a System-level origin container are the same idea on different axes.
+  function groupPorts(members){
     var rows=[], byLabel={};
-    subMembers(ref).forEach(function(n){
+    members.forEach(function(n){
       (n.ifaces||[]).forEach(function(f){
         var lbl=String(f.label||f.name||"");
         if(!lbl) return;
@@ -1671,6 +1814,10 @@ var DATA = /*__DATA__*/null;
     });
     return rows;
   }
+  // One line, on purpose. This used to BE the loop now living in groupPorts(); leaving a second
+  // copy here is the shape STATUS.md keeps recording -- two implementations of one rule that
+  // agree until someone fixes only one of them.
+  function subPorts(ref){ return groupPorts(subMembers(ref)); }
   function renderSubBox(ref){
     var entry=subEntry(ref)||{}, members=subMembers(ref), rows=subPorts(ref);
     var el=document.createElement("div");
@@ -1727,6 +1874,92 @@ var DATA = /*__DATA__*/null;
     });
     canvas.appendChild(el);
   }
+  // The System level's unit is a SYSTEM. Level 1 already hid every interface row, so a merged
+  // project at that level was a heap of bare name cards with no indication that they came from
+  // three different files -- the one level whose name promised exactly that grouping was the
+  // level that showed it least.
+  //
+  // This is renderSubBox() on the other axis, and deliberately the same mechanic rather than a
+  // parallel one: one box per origin system, its ports being the exposure labels its members
+  // declare (groupPorts, shared with the subsystem boxes), wired ones solid and unwired dimmed.
+  // The invisible-stacked-port trick is carried over for the same reason it exists there --
+  // drawEdges() resolves an endpoint by querying [data-n][data-i], so every (node, interface)
+  // pair behind a collapsed row still needs an element, or its edge silently disappears.
+  // First placement for the containers. A box has no x/y of its own -- it stands for N nodes --
+  // so without this they all stack in the default corner, which is the defect the Deps view's
+  // package boxes were just fixed for (f014526). Laid out in a ROW rather than at each group's
+  // centroid: centroids of overlapping groups overlap too, and two boxes on top of each other is
+  // strictly worse than a row that needs one drag. Ordered BY centroid, so the row still roughly
+  // matches where the reader last saw those nodes. Only ever fills in what is missing, so a
+  // dragged or saved position is never overwritten.
+  function placeOriginBoxes(){
+    var list=originList();
+    var need=list.filter(function(s){ return !sysPos[s]; });
+    if(!need.length) return;
+    var cen={};
+    list.forEach(function(s){
+      var m=originMembers(s), sx=0;
+      m.forEach(function(n){ sx+=(n.x||0); });
+      cen[s]=m.length?sx/m.length:0;
+    });
+    need.sort(function(a,b){ return cen[a]-cen[b]; });
+    // Start to the right of anything already placed, so a system added by a later Import lands
+    // beside the existing row instead of on top of it.
+    // y=100, not 60: the floating find control sits over canvas coordinates y 46..80 at the
+    // default zoom, and a box placed at 60 opens with its title bar underneath it -- measured,
+    // not guessed. x=60 is clear of it because the row starts left of the control's own inset.
+    var startX=60, ROW_Y=100, STEP=300;
+    list.forEach(function(s){ if(sysPos[s]) startX=Math.max(startX,sysPos[s].x+STEP); });
+    need.forEach(function(s,i){ sysPos[s]={x:startX+i*STEP,y:ROW_Y}; });
+  }
+  function renderOriginBox(sys){
+    var members=originMembers(sys), rows=groupPorts(members);
+    var el=document.createElement("div");
+    el.className="node sysbox s"+originIdx(sys);
+    var pos=sysPos[sys]||{x:60,y:60};
+    el.style.left=pos.x+"px"; el.style.top=pos.y+"px";
+    el.dataset.sys=sys;
+    var wired=0;
+    rows.forEach(function(r){ if(r.wired) wired++; });
+    el.innerHTML='<div class="nhead" data-drag>'
+      +'<span class="sw" style="background:var(--s'+originIdx(sys)+')"></span>'
+      +'<span class="ntitle">'+esc(sys)+'</span>'
+      +'<span class="badge" title="every node this project merged or imported from '
+      +esc(sys)+'. Switch to Interfaces or Full to open it back up into its nodes.">system</span></div>'
+      +'<div class="nfrom">'+members.length+' node(s) &middot; '+(rows.length
+        ?(wired+' of '+rows.length+' interface(s) wired')
+        :'<span class="subempty">no interfaces — nothing can connect to this</span>')+'</div>'
+      +'<div class="ifaces"></div>';
+    var box=el.querySelector(".ifaces");
+    rows.forEach(function(r){
+      if(!kindShown[r.kind]) return;
+      var src=SRC_SIDE[r.kind];
+      var row=document.createElement("div");
+      row.className="iface"+(r.wired?"":" unwired");
+      row.dataset.kind=r.kind;
+      var ports="";
+      r.pairs.forEach(function(pr,i){
+        ports+='<span class="port '+(src?"src":"snk")+' '+r.kind+'"'
+          +(i?' style="opacity:0;pointer-events:none"':'')
+          +' data-n="'+pr.n.id+'" data-i="'+pr.f.id+'" data-kind="'+r.kind+'"'
+          +' data-src="'+src+'" data-type="'+esc(pr.f.type||"")+'"></span>';
+      });
+      // Unlike a subsystem's ⚠2, a repeated label here is not someone else's ambiguity to
+      // report: these are THIS project's nodes, and init/import already renamed a genuine
+      // collision (RM065). Several pairs on one row means several nodes legitimately expose the
+      // same-named interface, so the count is shown plainly rather than as a warning.
+      var many=(r.pairs.length>1)
+        ? ('<span class="amb" title="'+r.pairs.length+' nodes in '+esc(sys)+' expose &quot;'
+           +esc(r.label)+'&quot;">&times;'+r.pairs.length+'</span>')
+        : "";
+      row.innerHTML='<span class="kd '+r.kind+'">'+r.kind+'</span>'
+        +'<span class="inm">'+esc(r.label)+'</span>'+many
+        +'<span class="ity">'+esc(r.pairs[0].f.type||"—")+'</span>'+ports;
+      box.appendChild(row);
+    });
+    canvas.appendChild(el);
+  }
+
   // The bounding box of a framed subsystem's member cards, measured off what was rendered
   // rather than estimated -- the same rule nodeBox() follows and for the same reason.
   function memberRect(ref){
@@ -1765,15 +1998,25 @@ var DATA = /*__DATA__*/null;
     // keeps that icon from ever going stale -- there is no incremental patch to get wrong, only
     // a fresh paint against whatever runIssues() just computed.
     runIssues();
+    syncSystemFilter();    // Import can add a source system between renders
     canvas.className="canvas "+(level===4?"deps":"lvl"+level);
     [].slice.call(canvas.querySelectorAll(".node,.pkgbox,.subframe")).forEach(function(e){e.remove();});
     for(var i=0;i<project.nodes.length;i++){
-      if(isCollapsedMember(project.nodes[i])) continue;   // the box below stands for it
-      renderNode(project.nodes[i]);
+      var nd=project.nodes[i];
+      if(isCollapsedMember(nd)) continue;    // the subsystem box below stands for it
+      if(originHidden(nd)) continue;         // hidden by the legend's per-system filter
+      if(isBoxedByOrigin(nd)) continue;      // the origin container below stands for it
+      renderNode(nd);
     }
     liveSubRefs().forEach(function(ref){
       if(subState(ref)==="collapsed") renderSubBox(ref);
     });
+    // One container per source system, at the System level only. multiOrigin() keeps this inert
+    // for a single-source or blank project, which is most of them.
+    if(level===1&&multiOrigin()){
+      placeOriginBoxes();
+      originList().forEach(function(sys){ if(originShown(sys)) renderOriginBox(sys); });
+    }
     // frames are measured off the RENDERED member cards, so they are drawn after them
     liveSubRefs().forEach(function(ref){
       if(subState(ref)!=="framed") return;
@@ -1943,8 +2186,15 @@ var DATA = /*__DATA__*/null;
     // as separate classes for what each MEANS in the CSS comments (the server's last verdict vs.
     // the live instant checks), not because they look different, so there's no reason to gate
     // one on the absence of the other.
+    // The origin tint is a CLASS, not an inline style: it has to lose to .sel, .hasdiag and
+    // .issue-e, all of which say something more urgent about this card than where it came from,
+    // and CSS ordering is what arranges that. `orig` is absent entirely for a single-source
+    // project, so nothing about those cards changes.
+    var org=multiOrigin()?originOf(n):null;
     el.className="node"+(n.backing==="cat"?" cat":"")+(n.backing==="sub"?" sub":"")+((selNode===n.id||multiSel[n.id])?" sel":"")
+      +(org?(" orig s"+originIdx(org)):"")
       +(hasdiag?" hasdiag":"")+(liveErrs?" issue-e":"");
+    if(org) el.dataset.orig=org;
     el.style.left=n.x+"px"; el.style.top=n.y+"px"; el.dataset.n=n.id;
     var fromStr='"'+n.pkg+"."+n.node+'"';
     var badge=n.backing==="sub"?"subsystem":(n.backing==="cat"?"catalogue":"authored");
@@ -2056,6 +2306,18 @@ var DATA = /*__DATA__*/null;
     if(p){var pr=p.getBoundingClientRect(); if(pr.width>0) return {x:(pr.left-cr.left+pr.width/2)/k,y:(pr.top-cr.top+pr.height/2)/k};}
     // fall back to node-box centre (level 1 hides ports)
     var nb=canvas.querySelector('.node[data-n="'+nId+'"]');
+    if(!nb){
+      // ...or to whichever CONTAINER is standing in for that node right now. Level 1 hides every
+      // port, so the width>0 test above fails even when a collapsed box does carry this pair's
+      // port, and the member card itself is deliberately not rendered -- so both lookups miss and
+      // the edge was silently dropped. That is the wrong answer at the one level whose whole job
+      // is showing how the groups connect: the wire should land on the group.
+      var nn=nodeById(nId);
+      if(nn&&nn.backing==="sub"&&nn.subRef)
+        nb=canvas.querySelector('.node.subbox[data-sub="'+STUDIO.cssEsc(nn.subRef)+'"]');
+      else if(nn&&originOf(nn))
+        nb=canvas.querySelector('.node.sysbox[data-sys="'+STUDIO.cssEsc(originOf(nn))+'"]');
+    }
     if(!nb) return null;
     var br=nb.getBoundingClientRect();
     return {x:(br.left-cr.left+br.width/2)/k, y:(br.top-cr.top+br.height/2)/k};
@@ -2075,6 +2337,9 @@ var DATA = /*__DATA__*/null;
       var a=ifaceById(nodeById(c.from.n),c.from.i), bb=ifaceById(nodeById(c.to.n),c.to.i);
       if(!a||!bb) continue;
       if(!kindShown[a.kind] || !kindShown[bb.kind]) continue;   // <-- edge hidden by filter
+      // Same requirement for the per-system filter: hiding a system has to take its wires with
+      // it, or the canvas draws edges into empty space where the cards used to be.
+      if(originHidden(nodeById(c.from.n))||originHidden(nodeById(c.to.n))) continue;
       var s=portCenter(c.from.n,c.from.i), t=portCenter(c.to.n,c.to.i);
       if(!s||!t) continue;
       var path=document.createElementNS(NS,"path");
@@ -2752,6 +3017,12 @@ var DATA = /*__DATA__*/null;
     project.nodes.forEach(function(n){ (n.ifaces||[]).forEach(function(f){ if(f.label) exposureUsed[f.label]=1; }); });
 
     (proj.nodes||[]).forEach(function(n){
+      // Provenance, the same field init's merge stamps (ros_studio.py, seed_from_many pass A).
+      // An imported project.json fragment may already carry origins of its own from an earlier
+      // merge -- keep those rather than flattening them onto this file's name, because the node
+      // really did come from that system and re-labelling it here would lose a distinction the
+      // canvas is about to draw. Only an untagged node adopts this import's name.
+      if(!n.srcSystem) n.srcSystem=hint;
       var lbl=uniqueLabel(n.label,labelUsed,hint);
       if(lbl!==n.label){
         report.push("node '"+n.label+"' collides with one already on the canvas, renamed to '"+lbl+"'.");
@@ -3353,6 +3624,16 @@ var DATA = /*__DATA__*/null;
         try{el.setPointerCapture(ev.pointerId);}catch(e){}
         return;
       }
+      // An origin container is the same kind of thing on the other axis: it stands for N nodes,
+      // its position is a VIEW (sysPos), and dragging it must not touch the model or the undo
+      // history. Its member nodes keep their own x/y untouched underneath.
+      if(el.dataset.sys!==undefined){
+        var yref=el.dataset.sys, yp=sysPos[yref]||{x:el.offsetLeft,y:el.offsetTop};
+        sysPos[yref]=yp;
+        dragState={sys:yref,px:ev.clientX,py:ev.clientY,ox:yp.x,oy:yp.y,moved:0};
+        try{el.setPointerCapture(ev.pointerId);}catch(e){}
+        return;
+      }
       var n=nodeById(el.dataset.n);
       if(!n) return;
       // Ctrl/Cmd+click adjusts the multi-selection instead of picking the node up: a held
@@ -3402,6 +3683,14 @@ var DATA = /*__DATA__*/null;
         drawEdges();
         return;
       }
+      if(dragState.sys){
+        var yp=sysPos[dragState.sys];
+        yp.x=Math.max(0,dragState.ox+ddx); yp.y=Math.max(0,dragState.oy+ddy);
+        var yel=canvas.querySelector('.node.sysbox[data-sys="'+STUDIO.cssEsc(dragState.sys)+'"]');
+        if(yel){ yel.style.left=yp.x+"px"; yel.style.top=yp.y+"px"; }
+        drawEdges();
+        return;
+      }
       if(dragState.group){
         dragState.group.forEach(function(g){
           g.node.x=Math.max(0,g.ox+ddx); g.node.y=Math.max(0,g.oy+ddy);
@@ -3420,7 +3709,14 @@ var DATA = /*__DATA__*/null;
     canvas.addEventListener("pointerup",function(ev){
       if(!dragState) return;
       var wasClick=dragState.moved<5, n=dragState.n, snap=dragState.snap;
-      var sref=dragState.sub, pref=dragState.pkg; dragState=null;
+      var sref=dragState.sub, pref=dragState.pkg, yref=dragState.sys; dragState=null;
+      if(yref){
+        // Like the package box: no inspector of its own (the nodes it stands for each have one,
+        // and they are one level down), so a click is a no-op and only a real drag needs the
+        // canvas re-measured.
+        if(!wasClick) sizeCanvas();
+        return;
+      }
       if(sref){
         // a click on the box selects it and shows the system panel, where its view state and
         // its "open" button live; a drag just leaves it where it was dropped (no undo entry)
@@ -3756,6 +4052,12 @@ var DATA = /*__DATA__*/null;
         } else if(dragState.n){ dragState.n.x=dragState.ox; dragState.n.y=dragState.oy; }
         else if(dragState.sub&&subPos[dragState.sub]){
           subPos[dragState.sub].x=dragState.ox; subPos[dragState.sub].y=dragState.oy;
+        }
+        else if(dragState.sys&&sysPos[dragState.sys]){
+          sysPos[dragState.sys].x=dragState.ox; sysPos[dragState.sys].y=dragState.oy;
+        }
+        else if(dragState.pkg&&pkgPos[dragState.pkg]){
+          pkgPos[dragState.pkg].x=dragState.ox; pkgPos[dragState.pkg].y=dragState.oy;
         }
         dragState=null; render();
       }
