@@ -128,6 +128,17 @@ try{
   .filter .sysnm{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:.7rem}
   .filter .syscnt{flex:none;font-family:var(--mono);font-size:.66rem;color:var(--ink-3)}
   .sysfoot{margin-top:.4rem;font-size:.68rem;line-height:1.35;color:var(--ink-3)}
+  /* "seed from ROS 2 source" panel */
+  .srcform{display:flex;flex-direction:column;gap:.6rem;margin:.6rem 0}
+  .srcform label{display:flex;flex-direction:column;gap:.2rem;font-size:.78rem;font-weight:600;color:var(--ink-2)}
+  .srcform input{font-family:var(--mono);font-size:.76rem;padding:.35rem .45rem;border:1px solid var(--rule);border-radius:5px;background:var(--surface);color:var(--ink)}
+  .srcform input:focus{outline:none;border-color:var(--accent)}
+  .srcform .hint{font-weight:400;font-size:.68rem;line-height:1.35;color:var(--ink-3)}
+  .srcform .req{font-weight:700;font-size:.62rem;letter-spacing:.04em;text-transform:uppercase;color:var(--dead)}
+  .srcstate{font-size:.72rem;color:var(--ink-3);align-self:center}
+  .srcstate.bad{color:var(--dead)}
+  /* an unfilled placeholder must be impossible to miss in the copied block */
+  .gen .ph{background:var(--dead-wash);color:var(--dead);font-weight:700;border-radius:3px;padding:0 .15rem}
   .issues .row{display:flex;align-items:center;gap:.45rem;font-size:.78rem;padding:.2rem 0}
   .issues .cnt{font-family:var(--mono);font-weight:700}
   .issues .err{color:var(--dead)} .issues .wrn{color:var(--warn)} .issues .ok{color:var(--accent-2)}
@@ -609,6 +620,7 @@ try{
       <div class="secbody" id="secb_rail-add">
         <button class="railbtn" id="addNode"><span class="plus">+</span> Node (hand-authored)</button>
         <button class="railbtn" id="addCat"><span class="plus">+</span> From catalogue&hellip;</button>
+        <button class="railbtn" id="fromSrc"><span class="plus">&#8681;</span> From ROS 2 source&hellip;</button>
       </div>
     </div>
     <div class="insec issues" data-sec="rail/issues">
@@ -707,6 +719,45 @@ try{
       <div class="tabs" id="genTabs"></div>
       <pre class="gen" id="genOut"></pre>
       <textarea class="copybox" id="copyBox" spellcheck="false" readonly></textarea>
+    </div>
+  </div>
+</div>
+
+<!-- Seeding from a real ROS 2 repository. This page is a file:// document with no network and
+     no way to spawn a process: it CANNOT run the extractors, and pretending otherwise (a button
+     that appears to import a repo and silently does nothing) would be worse than not offering
+     it. So it does the part it genuinely can -- assemble the exact, correctly ordered,
+     correctly flagged commands from the paths the user knows -- and says plainly who has to run
+     them. Every flag below is taken from the two extractors' own argparse and from
+     skills/ros-model/SKILL.md; none is invented. -->
+<div class="scrim" id="srcScrim">
+  <div class="modal">
+    <h3>Seed a project from ROS 2 source <button class="close" data-close>&#10005;</button></h3>
+    <div class="body">
+      <div class="gennote">This page runs offline from <code>file://</code>, so it cannot execute the extractors itself. Fill in the paths and it writes the exact commands &mdash; run them in a terminal, or paste them to Claude Code and ask it to run them. The last one produces the <code>project.json</code> you then <b>Open</b> here.</div>
+      <div class="srcform">
+        <label>Source tree <span class="req">required</span>
+          <input id="srcRepo" spellcheck="false" placeholder="path/to/ros2_ws/src">
+          <span class="hint">A ROS 2 package, or a directory of them. The extractor walks it for <code>package.xml</code>.</span></label>
+        <label>Launch file <span class="req">required</span>
+          <input id="srcLaunch" spellcheck="false" placeholder="path/to/pkg/launch/bringup.launch.py">
+          <span class="hint">Nothing can discover this for you, and there is usually more than one. Several are accepted (space-separated); the <b>first</b> decides <code>fromFile:</code> and the default system name.</span></label>
+        <label>Output directory
+          <input id="srcOut" spellcheck="false" placeholder="ros_model" value="ros_model">
+          <span class="hint">Everything below is written here: <code>rosnodes/*.ros2</code>, <code>msgs/*.ros</code>, and the <code>.rossystem</code> beside them.</span></label>
+        <label>System name
+          <input id="srcName" spellcheck="false" placeholder="(defaults to the launch file's stem)">
+          <span class="hint">Names the <code>.rossystem</code> and the system inside it.</span></label>
+        <label>Controller config
+          <input id="srcCtrl" spellcheck="false" placeholder="(optional) path/to/controllers.yaml">
+          <span class="hint">Only for <code>ros2_control</code> systems. Auto-discovered from the launch arguments when it can be; pass it when the extractor says it could not.</span></label>
+      </div>
+      <div class="modalbtns">
+        <button class="tbtn primary" id="srcCopy">Copy commands</button>
+        <span class="srcstate" id="srcState"></span>
+      </div>
+      <pre class="gen" id="srcOutBox"></pre>
+      <div class="gennote" id="srcAfter"></div>
     </div>
   </div>
 </div>
@@ -6734,6 +6785,126 @@ var DATA = /*__DATA__*/null;
   document.getElementById("selJson").onclick=function(){var t=document.getElementById("copyBox");t.focus();t.select();
     // copy-to-clipboard is the other hand-off route to the companion, so it counts as committed
     try{if(document.execCommand("copy")) clearDirty();}catch(e){}};
+
+  // ============================ seed from ROS 2 source ============================
+  // The documented pipeline, and nothing but it. Every flag here comes from the two extractors'
+  // own argparse and from skills/ros-model/SKILL.md's "Converting real source" block; the
+  // executable ground truth is tests/extract_golden.py, which runs steps 1 and 2 exactly this
+  // way. Nothing is invented -- a fabricated flag would fail at the shell, minutes later, in a
+  // tool the user has no reason to distrust.
+  //
+  // The one coupling that is invisible from the flags: step 1's -o and step 2's --models must be
+  // the SAME directory. ModelIndex does a flat os.listdir() of --models, and a wrong path fails
+  // SILENTLY -- no local models, so every launch node resolves against the vendored catalogue or
+  // is skipped with a # FLAG. That is why both are derived here from one field instead of being
+  // asked for twice.
+  var SRC_PH="<FILL-IN>";
+  function shq(s){
+    // POSIX single-quoting, so a path with a space or a bracket survives the copy. A value that
+    // is still the placeholder is left BARE and unquoted -- quoting it would make it look like a
+    // real answer, and the whole point is that the shell should fail loudly on it.
+    s=String(s==null?"":s).trim();
+    if(!s) return SRC_PH;
+    if(/^[A-Za-z0-9_@%+=:,.\/-]+$/.test(s)) return s;
+    return "'"+s.replace(/'/g,"'\\''")+"'";
+  }
+  function srcCmds(){
+    var repo=document.getElementById("srcRepo").value.trim();
+    var launch=document.getElementById("srcLaunch").value.trim();
+    var out=document.getElementById("srcOut").value.trim()||"ros_model";
+    var name=document.getElementById("srcName").value.trim();
+    var ctrl=document.getElementById("srcCtrl").value.trim();
+    var missing=[];
+    if(!repo) missing.push("the source tree");
+    if(!launch) missing.push("the launch file");
+
+    var O=shq(out);
+    // Several launch files are accepted (nargs="+"); split on whitespace and quote each.
+    var launches=launch?launch.split(/\s+/).map(shq).join(" "):SRC_PH;
+    var stem=name||"<system>";
+    // PY/PLUGIN follow the spelling every other doc in this repo uses. CLAUDE_PLUGIN_ROOT is set
+    // when the plugin is installed; inside the repo it is not, and the paths are simply
+    // scripts/... -- which SKILL.md says in as many words, so the note below says it too.
+    var PY='"${ROSMODEL_PYTHON:-python3}"';
+    var P='"${CLAUDE_PLUGIN_ROOT}/scripts';
+    var l=[];
+    l.push("# 1. ROS 2 source -> draft .ros2 node models (+ .ros for project-local message types)");
+    l.push(PY+" "+P+'/extract_ros2_interfaces.py" '+shq(repo)+" \\");
+    l.push("    -o "+O+"/rosnodes --emit-msgs "+O+"/msgs \\");
+    l.push("    --json "+O+"/extraction_record.json");
+    l.push("");
+    l.push("# 2. launch file(s) + those .ros2 -> a draft .rossystem");
+    l.push("#    --models MUST be step 1's -o directory: it is a flat listdir, and a wrong path");
+    l.push("#    fails silently (every node then resolves to the catalogue, or is skipped).");
+    var two=PY+" "+P+'/extract_rossystem.py" '+launches+" \\";
+    l.push(two);
+    l.push("    --models "+O+"/rosnodes \\");
+    l.push("    -o "+O+"/"+(name?shq(name):stem)+".rossystem \\");
+    l.push("    --workspace "+shq(repo)+" \\");
+    if(name) l.push("    --system-name "+shq(name)+" \\");
+    if(ctrl) l.push("    --controllers-file "+shq(ctrl)+" \\");
+    l.push("    --json "+O+"/system_record.json");
+    l.push("");
+    l.push("# 3. that .rossystem -> project.json (sibling .ros2/.ros are picked up automatically)");
+    l.push(PY+" "+P+'/ros_studio.py" init '+O+"/"+(name?shq(name):stem)+".rossystem \\");
+    l.push("    --out "+O+"/project.json");
+    return {text:l.join("\n"), missing:missing, stem:stem, out:out};
+  }
+  function renderSrcCmds(){
+    var r=srcCmds();
+    var box=document.getElementById("srcOutBox");
+    box.textContent=r.text;
+    // Highlight every placeholder so an unfilled field is impossible to copy by accident
+    // without noticing. Done by re-walking the text, not by building HTML above, so the COPIED
+    // string and the DISPLAYED string can never diverge.
+    if(r.text.indexOf(SRC_PH)>=0||r.stem==="<system>"){
+      box.innerHTML=box.innerHTML
+        .replace(/&lt;FILL-IN&gt;/g,'<span class="ph">&lt;FILL-IN&gt;</span>')
+        .replace(/&lt;system&gt;/g,'<span class="ph">&lt;system&gt;</span>');
+    }
+    var st=document.getElementById("srcState");
+    st.className="srcstate"+(r.missing.length?" bad":"");
+    st.textContent=r.missing.length
+      ? ("fill in "+r.missing.join(" and ")+" — the commands carry <FILL-IN> until you do")
+      : "";
+    document.getElementById("srcAfter").innerHTML=
+      'Step 2 exits non-zero whenever it flags anything, and step 1 does on a lint ERROR &mdash; '
+      +'that is normal here: <b>a partial model is a result, not a failure</b>, so read the '
+      +'reports rather than stopping. Then <b>Open</b> <code>'+esc(r.out)+'/project.json</code> '
+      +'in this page. If step 1 fails with "No such file or directory", '
+      +'<code>${CLAUDE_PLUGIN_ROOT}</code> is unset because you are inside the plugin repo &mdash; '
+      +'use plain <code>scripts/&hellip;</code> paths.';
+  }
+  (function(){
+    var scrim=document.getElementById("srcScrim");
+    var btn=document.getElementById("fromSrc");
+    if(!btn||!scrim) return;
+    btn.onclick=function(){ scrim.classList.add("on"); renderSrcCmds();
+      var f=document.getElementById("srcRepo"); if(f) setTimeout(function(){f.focus();},0); };
+    ["srcRepo","srcLaunch","srcOut","srcName","srcCtrl"].forEach(function(id){
+      var el=document.getElementById(id); if(el) el.oninput=renderSrcCmds;
+    });
+    document.getElementById("srcCopy").onclick=function(){
+      var t=document.getElementById("srcOutBox").textContent;
+      var st=document.getElementById("srcState");
+      function done(ok){ st.className="srcstate"+(ok?"":" bad");
+        st.textContent=ok?"copied — run it in a terminal, or paste it to Claude Code"
+                         :"could not copy; select the text above instead"; }
+      // navigator.clipboard is unavailable on a file:// origin in some browsers, so the old
+      // execCommand path is kept as the fallback rather than assumed dead.
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(t).then(function(){done(true);},function(){done(false);});
+        return;
+      }
+      try{
+        var ta=document.createElement("textarea");
+        ta.value=t; ta.style.position="fixed"; ta.style.opacity="0";
+        document.body.appendChild(ta); ta.select();
+        var ok=document.execCommand("copy");
+        document.body.removeChild(ta); done(ok);
+      }catch(e){ done(false); }
+    };
+  })();
 
   // ============================ mode / level ============================
   var modeSeg=document.getElementById("modeSeg"), levelSeg=document.getElementById("levelSeg");

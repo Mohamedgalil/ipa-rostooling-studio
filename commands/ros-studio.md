@@ -552,6 +552,54 @@ file, and its comments live there. The
 be written — `tests/studio_parity.js` holds all three previews to the Python emitter's bytes, and
 the fourth tab, **changed since the seed**, to `diff`'s.
 
+## Starting from a real ROS 2 repository
+
+**From ROS 2 source…** in the rail (beside **Add** / **From catalogue…**) covers the case the
+editor previously had no answer for: you have a source repo, not a model.
+
+**It does not run the pipeline, and does not pretend to.** This page is a `file://` document with
+no network and no way to spawn a process — it cannot invoke Python, full stop. A button that
+looked like it imported a repo and silently did nothing would be worse than no button. So it does
+the part it genuinely can: you type the paths you know, and it assembles the **exact,
+correctly-ordered, correctly-flagged** commands, with a copy control and a note saying you run
+them in a terminal — or paste them to Claude Code and ask it to.
+
+The pipeline is the one `skills/ros-model/SKILL.md` documents under *Converting real source*, and
+every flag comes from the two extractors' own argparse. `tests/extract_golden.py` runs steps 1 and
+2 exactly this way, which is executable ground truth rather than prose:
+
+1. `extract_ros2_interfaces.py <src> -o <out>/rosnodes --emit-msgs <out>/msgs --json …`
+2. `extract_rossystem.py <launch…> --models <out>/rosnodes -o <out>/<system>.rossystem --workspace <src> --json …`
+3. `ros_studio.py init <out>/<system>.rossystem --out <out>/project.json`
+
+Four things the panel exists to get right, each of which is a way this goes wrong by hand:
+
+- **Step 1's `-o` and step 2's `--models` must be the same directory.** `ModelIndex` does a flat
+  `os.listdir()` of `--models`, and a wrong path **fails silently** — there are simply no local
+  models, so every launch node resolves against the vendored catalogue or is skipped with a
+  `# FLAG`. Both are derived from one **output directory** field rather than asked for twice, and
+  the generated block says so in a comment.
+- **The launch file cannot be guessed.** Nothing discovers it, and a real repo usually has
+  several. It is a required field, and until you fill it the commands carry a `<FILL-IN>`
+  placeholder rendered in red — visually distinct from every real value, and left *unquoted* so
+  the shell fails loudly on it rather than silently accepting a plausible-looking path. Several
+  launch files are accepted (they are `nargs="+"`); the **first** decides `fromFile:` and the
+  default system name, which the field's hint says.
+- **Optional flags appear only when you fill them in.** `--system-name` and `--controllers-file`
+  are real and documented, but emitting them empty would be inventing a value. `--controllers-file`
+  is auto-discovered from the launch arguments when it can be; the hint says to pass it when the
+  extractor reports it could not.
+- **A non-zero exit mid-pipeline is normal.** Step 2 exits non-zero whenever it flags anything and
+  step 1 does on a lint ERROR — *a partial model is a result, not a failure* — so the note tells
+  you to read the reports rather than stop. It also names the `${CLAUDE_PLUGIN_ROOT}` trap: the
+  variable is set when the plugin is installed and unset inside the repo, where the paths are
+  plain `scripts/…`, which is exactly what a "No such file or directory" on step 1 means.
+
+Paths are POSIX-single-quoted when they need it, so a directory with a space survives the copy.
+Verified by running the generated commands unmodified against `tests/fixtures/extract/src`: all
+three steps exit 0 and produce a `project.json` of 4 nodes and 9 interfaces that `generate`
+re-emits cleanly.
+
 ## Opening files in the page
 
 The page can now **read** models, not just write them. **Open** in the topbar (or drag files onto
