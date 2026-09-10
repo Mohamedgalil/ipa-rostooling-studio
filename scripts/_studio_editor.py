@@ -7066,18 +7066,27 @@ var DATA = /*__DATA__*/null;
   function splitLaunchPaths(text){
     var s=String(text==null?"":text).trim();
     if(!s) return [];
-    var out=[], buf="", quote=null, sawQuote=false;
-    function flush(){ var t=buf.trim(); if(t) out.push(t); buf=""; sawQuote=false; }
+    var out=[], buf="", quote=null, sawQuote=false, atStart=true;
+    function flush(){ var t=buf.trim(); if(t) out.push(t); buf=""; sawQuote=false; atStart=true; }
     for(var i=0;i<s.length;i++){
       var ch=s.charAt(i);
       if(quote){ if(ch===quote) quote=null; else buf+=ch; continue; }
-      if(ch==='"'||ch==="'"){ quote=ch; sawQuote=true; continue; }
+      // A quote character only OPENS quoting at the start of an argument -- the same place a
+      // shell would accept one. Treating any ' or " anywhere as an opener corrupted a path
+      // with an apostrophe INSIDE it ("it's ws/a.launch.py") by consuming everything up to the
+      // next quote character as one "quoted" run; with a second path after it and no closing
+      // quote in sight, that swallowed the rest of the field into one argument and derived the
+      // system name from the WRONG file. atStart tracks "nothing has been written into this
+      // argument yet" and is reset by flush(), so a genuinely quoted argument (the whole path
+      // wrapped in quotes, which is how you spell a path containing BOTH an apostrophe and a
+      // space unambiguously) still works exactly as before.
+      if((ch==='"'||ch==="'")&&atStart){ quote=ch; sawQuote=true; atStart=false; continue; }
       if(/\s/.test(ch)){
         // an explicitly quoted argument ends at the next space whatever it is named
         if(sawQuote||/\.(py|xml|yaml|yml)$/i.test(buf.trim())){ flush(); continue; }
         buf+=" "; continue;
       }
-      buf+=ch;
+      buf+=ch; atStart=false;
     }
     flush();
     return out;
