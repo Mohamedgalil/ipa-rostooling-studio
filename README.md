@@ -28,7 +28,7 @@ validator rule table and an enforced emission profile.
 ### ✅ There is a working oracle — use it
 
 `tests/oracle/ask_oracle.py` drives the real RosTooling language servers over stdio and reports
-their diagnostics. All 25 cases<!--@count:oracle_cases--> currently behave as documented; the
+their diagnostics. All 26 cases<!--@count:oracle_cases--> currently behave as documented; the
 rejections are negative controls that confirm the hard exclusions, plus three that settled the
 `from:` reference form. The per-case verdicts live with the runs that produced them, in
 [`tests/oracle/RESULTS.md`](tests/oracle/RESULTS.md).

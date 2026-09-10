@@ -1922,6 +1922,19 @@ class Linter(object):
                           % (key.value, raw),
                           "Expected 'true' or 'false' (Basics.xtext:173).")
 
+        if (is_quoted(node) and re.match(r"^\s*[\[{].*[\]}]\s*$", raw, re.S)
+                and (declared is None or declared.startswith("Array")
+                     or declared.startswith("List"))):
+            self.warn(line, "RM095",
+                      "Parameter '%s' value is a quoted string shaped like a list/struct."
+                      % key.value,
+                      "A quoted \"[...]\" is a ParameterString; a .rossystem that references "
+                      "this parameter and copies the string form will be rejected by "
+                      "CheckParameterValue with 'Expect a list of elements' (validator-rules.md "
+                      "sec 2.6) -- confirmed a transcribed .ros2 with this defect does not itself "
+                      "error, so this is WARNING here, not ERROR. Report it as a source defect "
+                      "(SKILL.md sec 8) and emit a real list in any .rossystem that uses it.")
+
     def check_qos(self, node):
         if not is_mapping(node):
             return
@@ -2080,12 +2093,14 @@ class Linter(object):
                 node_names, local_from = self.check_rossystem_nodes(val, interfaces)
             elif name == "subSystems":
                 subsystems_val = val
-                self.warn(line, "RM061",
-                          "'subSystems:' is supported but every corpus example is low-quality.",
-                          "19 files use it; the sampled one indents its reference with a tab and "
-                          "leaves it bare. checkIfInterfaceInSystem also recurses exactly one "
-                          "level and casts unconditionally, so a nested subsystem throws "
-                          "ClassCastException (validator-rules.md sec 3.5). Keep nesting flat.")
+                self.info(line, "RM061",
+                          "'subSystems:' present -- the reuse checks RM090-RM093 apply "
+                          "(bare-per-line, flat nesting, no label reachable two ways).",
+                          "Emit this whenever the caller asked to reuse a composition -- do not "
+                          "treat this INFO as a reason to leave it out (SKILL.md sec 8d). "
+                          "checkIfInterfaceInSystem recurses exactly one level and casts "
+                          "unconditionally, so a nested subsystem throws ClassCastException "
+                          "(validator-rules.md sec 3.5). Keep nesting flat.")
             elif name == "processes":
                 self.warn(line, "RM063",
                           "'processes:' has near-zero corpus support (1 file).",
@@ -2326,6 +2341,15 @@ class Linter(object):
                       "the correct value when none is known (rossystem-syntax.md sec 2) -- it is "
                       "reported so the placeholder stays visible and is not mistaken for a "
                       "verified path. Replace it with the real launch file before use.")
+        elif not os.path.abspath(self.path).startswith(os.path.abspath(_ASSETS_DIR) + os.sep):
+            src_line = self.lines[line - 1] if 1 <= line <= len(self.lines) else ""
+            if "# caller-supplied" not in src_line and "# on disk:" not in src_line:
+                self.warn(line, "RM096",
+                          "'fromFile:' is a specific path with no provenance comment.",
+                          "Say '# caller-supplied' or '# on disk: <path>' on this line, or use "
+                          "the TODO sentinel (SKILL.md rule 5). A confident-looking path with no "
+                          "stated provenance is indistinguishable from a verified one -- that is "
+                          "exactly what rule 5 warns fabrication is dangerous for.")
 
         if not is_quoted(node):
             self.error(line, "RM020",
@@ -2637,6 +2661,16 @@ class Linter(object):
                            "terminal BOOLEAN is 'true'|'false' only (Basics.xtext:173). "
                            "Uppercase silently becomes a ParameterString "
                            "(emission-profile rule 18).")
+            elif (is_scalar(value_node) and is_quoted(value_node)
+                  and re.match(r"^\s*[\[{].*[\]}]\s*$", value_node.value, re.S)):
+                self.error(node_line(value_node), "RM095",
+                           "Parameter '%s' value is a quoted string shaped like a list/struct."
+                           % key.value,
+                           "A quoted \"[...]\" is a ParameterString; CheckParameterValue rejects "
+                           "it against an Array/List parameter with 'Expect a list of elements' "
+                           "(validator-rules.md sec 2.6). Emit value: [\"a\", \"b\"] and report "
+                           "the conversion (SKILL.md sec 8) if the source .ros2 carried the "
+                           "string form -- that is a source defect, not a style to preserve.")
 
     def check_processes(self, node, declared_nodes):
         for key, val in mapping_items(node):

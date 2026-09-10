@@ -1,0 +1,8 @@
+list_probe_system:
+  fromFile: "TODO_PACKAGE/launch/TODO.launch.py"
+  nodes:
+    "prober":
+      from: "list_probe.prober"
+      parameters:
+        - "names_string_form": "prober::names"
+          value: "['a', 'b']"

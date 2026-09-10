@@ -221,8 +221,9 @@ class ModelIndex(object):
                     if k.split(".", 1)[1] == executable or v.get("artifact") == executable]
             if hits:
                 note = ("the launch file runs package %r, but no model declares that "
-                        "package; matched on executable %r instead, so from: below names "
-                        "the CATALOGUE's package %r"
+                        "package; matched on executable %r instead, against catalogue "
+                        "package %r. If the node is emitted below, its from: names the "
+                        "CATALOGUE's package, not the launch file's"
                         % (package, executable, hits[0][0].split(".", 1)[0]))
         if not hits:
             return None, None, None
@@ -381,6 +382,11 @@ def _walk_actions(lf, expr, order, seen, depth):
         name = call_name(expr)
         if name in LAUNCH_NODE_CALLS:
             _add_node(lf, expr, order, seen)
+            return
+        if name == "ExecuteProcess":
+            lf.dropped.append(
+                "ExecuteProcess(...) -- a raw process, not a ROS node action; the DSL has "
+                "no node to model it with")
             return
         if name == "IncludeLaunchDescription":
             lf.flags.append(Flag(
@@ -1055,6 +1061,22 @@ def main(argv=None):
             primary, 1))
 
     candidates = connection_candidates(sys_draft)
+
+    if not sys_draft.nodes:
+        # `nodes:` with nothing under it emits no BEGIN token, so the indentation lexer
+        # almost certainly rejects it -- and a system with no nodes models nothing either
+        # way. Writing one produces a file that passes the linter while saying nothing,
+        # which is worse than writing none.
+        print("%s: NO MODEL WRITTEN -- no node resolved from this launch file." % args.out,
+              file=sys.stderr)
+        for item in sorted(set(sys_draft.dropped)):
+            print("  it does contain: %s" % item, file=sys.stderr)
+        for flag in sys_draft.flags:
+            print("  %s" % flag.reason, file=sys.stderr)
+        if not sys_draft.dropped and not sys_draft.flags:
+            print("  It declares no launch_ros Node(...) actions at all.", file=sys.stderr)
+        return 1
+
     text = emit(sys_draft, from_file, primary, launch_files, args.models, candidates)
     out_dir = os.path.dirname(os.path.abspath(args.out))
     if out_dir:
