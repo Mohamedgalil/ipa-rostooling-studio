@@ -7481,7 +7481,7 @@ var DATA = /*__DATA__*/null;
    enter:function(){ closeDrawers(); },
    wait:"waiting for Auto layout",
    done:function(){ return !!tourSaw.autoLayout; },
-   body:["<b>Auto layout</b> is a layered pass that follows connection direction: sources left, sinks right, four barycentre sweeps to cut crossings, isolated nodes in a trailing column. Node sizes are measured off the rendered cards, because a node's height is its interface count.",
+   body:["<b>Auto layout</b> is a layered pass that follows connection direction: sources left, sinks right, four barycentre sweeps to cut crossings, isolated nodes laid out as their own grid. Node sizes are measured off the rendered cards, because a node's height is its interface count.",
          "Node <code>x</code>/<code>y</code> are model data, so this is a normal undoable edit — <code>Ctrl+Z</code> puts the old arrangement back, including the subsystem and package boxes the pass clears."]},
 
   {id:"levels",title:"Four ways to look at one model",anchor:function(){return document.getElementById("levelSeg");},
