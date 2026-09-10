@@ -7025,6 +7025,37 @@ var DATA = /*__DATA__*/null;
     if(/^[A-Za-z0-9_@%+=:,.\/-]+$/.test(s)) return s;
     return "'"+s.replace(/'/g,"'\\''")+"'";
   }
+  // The launch-file field takes SEVERAL files (extract_rossystem.py's nargs="+"), and the
+  // separator is whitespace -- so a single path that CONTAINS whitespace was split down the
+  // middle. `/home/me/my ws/src/tb3/launch/bringup.launch.py` became two arguments, and the
+  // system name, which is derived from the FIRST of them, came out as "my". The source-tree
+  // field never had this because it is quoted whole and never split. It matters more than it
+  // looks: this tool's primary user is on Windows, where `Program Files` and OneDrive folders
+  // make a space in a path the norm rather than the exception.
+  //
+  // Quotes the reader typed are honoured first. What is left is split on whitespace ONLY at a
+  // boundary that FOLLOWS a launch-file extension, because that is the only place a new
+  // argument can legally begin -- a launch file is a .py/.xml/.yaml/.yml, which the stem regex
+  // in srcCmds() already assumes -- so whitespace anywhere else belongs to the path.
+  function splitLaunchPaths(text){
+    var s=String(text==null?"":text).trim();
+    if(!s) return [];
+    var out=[], buf="", quote=null, sawQuote=false;
+    function flush(){ var t=buf.trim(); if(t) out.push(t); buf=""; sawQuote=false; }
+    for(var i=0;i<s.length;i++){
+      var ch=s.charAt(i);
+      if(quote){ if(ch===quote) quote=null; else buf+=ch; continue; }
+      if(ch==='"'||ch==="'"){ quote=ch; sawQuote=true; continue; }
+      if(/\s/.test(ch)){
+        // an explicitly quoted argument ends at the next space whatever it is named
+        if(sawQuote||/\.(py|xml|yaml|yml)$/i.test(buf.trim())){ flush(); continue; }
+        buf+=" "; continue;
+      }
+      buf+=ch;
+    }
+    flush();
+    return out;
+  }
   function srcCmds(){
     var repo=document.getElementById("srcRepo").value.trim();
     var launch=document.getElementById("srcLaunch").value.trim();
@@ -7041,17 +7072,19 @@ var DATA = /*__DATA__*/null;
     // than emitting a <system> placeholder the status line then failed to mention -- a command
     // block containing an unfilled token while the panel reports nothing missing is the one
     // outcome worse than asking for the value.
+    var launchList=splitLaunchPaths(launch);
     var stem=name;
-    if(!stem&&launch){
-      var first=launch.split(/\s+/)[0].replace(/\\/g,"/");
+    if(!stem&&launchList.length){
+      var first=launchList[0].replace(/\\/g,"/");
       stem=(first.split("/").pop()||"").replace(/\.(launch\.)?(py|xml|yaml|yml)$/i,"")
              .replace(/\.launch$/i,"");
     }
     if(!stem) stem="<FILL-IN>";
 
     var O=shq(out);
-    // Several launch files are accepted (nargs="+"); split on whitespace and quote each.
-    var launches=launch?launch.split(/\s+/).map(shq).join(" "):SRC_PH;
+    // Several launch files are accepted (nargs="+"); each one is quoted separately. The split
+    // is splitLaunchPaths', not a bare /\s+/, so a path with a space stays ONE argument.
+    var launches=launchList.length?launchList.map(shq).join(" "):SRC_PH;
     // PY/PLUGIN follow the spelling every other doc in this repo uses. CLAUDE_PLUGIN_ROOT is set
     // when the plugin is installed; inside the repo it is not, and the paths are simply
     // scripts/... -- which SKILL.md says in as many words, so the note below says it too.
