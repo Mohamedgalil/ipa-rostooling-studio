@@ -1861,25 +1861,48 @@ def _card_height(node):
     return 56 + 22 * (len(node.get("ifaces") or []) + len(node.get("params") or []))
 
 
-def _grid_layout(nodes):
-    """Seed positions: a square-ish grid, each ROW spaced by the tallest card in it.
+def _card_width(node):
+    """What the page's card for this node will be about that wide, before anything has drawn
+    it. The stylesheet's min-width is 190px; past that, the widest UNCLIPPED line on the card
+    wins. The node title and every interface name/type truncate with an ellipsis (they have
+    to -- a 58-interface card is already the tall extreme _card_height exists for), but the
+    "package.node" line under the title does not, so a long package or node name is what
+    actually pushes a real card wider than the minimum. ~7.2px/char at the size that line
+    renders in, the same reasoning _card_height already applies to row height: an
+    over-estimate merely leaves a gap, an under-estimate overlaps the next column.
+    """
+    frm = "%s.%s" % (node.get("pkg") or "", node.get("node") or "")
+    return max(190, 40 + int(7.2 * len(frm)))
 
-    The row pitch used to be a flat 240px whatever was in the row. A node's height is its
-    interface count, and real models are full of nodes that go straight past that: seeding a
-    merge of the vendored turtlebot3 and UR catalogues puts a 58-interface card (about 1330px)
-    into a row pitched at 240, and four of the six rows then overlapped the next -- on FIRST
-    OPEN of a freshly seeded project, before the reader has touched anything. `Auto layout`
-    fixed it, but only for a reader who knew to press it; overlapping cards on open read as the
-    tool being broken rather than as a layout wanting a nudge.
+
+def _grid_layout(nodes):
+    """Seed positions: a square-ish grid, each ROW spaced by the tallest card in it and each
+    COLUMN spaced by the widest.
+
+    The row pitch used to be a flat 240px, and the column pitch a flat 300px, whatever actually
+    landed in that row or column. A node's height is its interface count and real models are
+    full of nodes that go past 240px tall; a node's width follows its package/node NAME, and a
+    real catalogue is full of names past what 300px holds -- turtlebot3_navigation2 (the 14-node
+    composition the docs point at) puts 4 of its 14 cards overlapping a neighbour on first open
+    with a flat column pitch, for the same underlying reason the row fix exists: a card's actual
+    footprint was never consulted. `Auto layout` fixes it for a reader who knows to press it;
+    overlapping cards on open read as the tool being broken rather than as a layout wanting a
+    nudge, on both axes.
     """
     cols = max(1, int(len(nodes) ** 0.5 + 0.9999))
-    gap, y = 30, 80
+    gap_x, gap_y, y = 40, 30, 80
+    col_w = [0] * cols
+    for i, n in enumerate(nodes):
+        col_w[i % cols] = max(col_w[i % cols], _card_width(n))
+    col_x = [60]
+    for w in col_w[:-1]:
+        col_x.append(col_x[-1] + w + gap_x)
     for start in range(0, len(nodes), cols):
         row = nodes[start:start + cols]
         for i, n in enumerate(row):
-            n["x"] = 60 + i * 300
+            n["x"] = col_x[i]
             n["y"] = y
-        y += max(_card_height(n) for n in row) + gap
+        y += max(_card_height(n) for n in row) + gap_y
 
 
 def blank_project(name="new_system"):
