@@ -5625,7 +5625,20 @@ var DATA = /*__DATA__*/null;
     centreOn(n.id);
   };
   var catScrim=document.getElementById("catScrim");
-  document.getElementById("addCat").onclick=function(){catScrim.classList.add("on");renderCat("");document.getElementById("catSearch").focus();};
+  // Opening the catalogue renders the UNFILTERED list, so the search box has to be cleared to
+  // match it. It was not: the field kept the previous session's query while the list beneath it
+  // showed everything, and the next character typed was appended to that stale text -- so a
+  // second search for a node that IS in the catalogue answered "No catalogue entries match".
+  // Step 6 of the tutorial asks a first-time reader to open this panel a second time and search
+  // again, which is exactly the sequence that breaks. Cleared AND selected: clearing fixes the
+  // mismatch, and the select() means a value restored by a browser's form-state machinery is
+  // still replaced by the first keystroke rather than typed into.
+  document.getElementById("addCat").onclick=function(){
+    catScrim.classList.add("on");
+    renderCat("");
+    var q=document.getElementById("catSearch");
+    q.value=""; q.focus(); q.select();
+  };
   document.getElementById("catSearch").oninput=function(e){renderCat(e.target.value);};
   function renderCat(q){
     q=(q||"").toLowerCase();
