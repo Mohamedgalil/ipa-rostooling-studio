@@ -23,6 +23,32 @@ param_pkg:
         'window':
           type: Integer
           default: 10
+        # ---- list-typed parameters -------------------------------------------------------
+        # A `default:` under an Array[...] type is a ParameterList: a real bracketed list, and
+        # it composes as a YAML SEQUENCE rather than a scalar. `init` used to read only scalars
+        # there, so every one of these seeded as "value": null and `generate` re-spelled it as
+        # an empty quoted string -- a ParameterString where a list belongs. rosmodel_lint sees
+        # nothing wrong with that (RM095 only catches a QUOTED list-shaped string, not a
+        # dropped one); the real 3.1.0 language server rejects the file outright. Array[...]
+        # parameters are ordinary in real systems -- plugins, controllers, frames, joints --
+        # so nothing here was exotic enough to explain why it had never been noticed.
+        'frames':
+          type: Array[String]
+          default: ["base_link", "odom"]
+        'joint_limits':
+          type: Array[Double]
+          default: [0.5, 1.0, 1.5]
+        'channels':
+          type: Array[Integer]
+          default: [1, 2, 3]
+        'flags':
+          type: Array[Boolean]
+          default: [true, false]
+        # An Array with NO default. `default:` is optional on the ParameterType and `[]` is a
+        # parse error, so the only honest emission is no `default:` line at all -- which is
+        # also what both extractors already do. Pins that the emitter does not invent one.
+        'plugins':
+          type: Array[String]
     # Declares NO parameters at all. The system below still exposes one on the node backed by
     # it, which is the `orphan` path: kept and flagged, never silently dropped.
     logger:

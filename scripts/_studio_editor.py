@@ -1094,10 +1094,23 @@ var DATA = /*__DATA__*/null;
     var anyHidden=!paramShown||KINDS.some(function(k){return !kindShown[k];});
     rt.classList.toggle("hasfilter",anyHidden);
   }
-  // The ParameterTypes the emitter can write a value for. List/Struct/Base64/Array exist in the
-  // grammar (Basics.xtext:51-52) but _fmt_param_value has no representation for them, so
-  // offering them here would let the author author a value the emitter cannot spell.
-  var PTYPES=["String","Boolean","Integer","Double"];
+  // The ParameterTypes the emitter can write a value for. Struct/Base64 exist in the grammar
+  // (Basics.xtext:51-52) but _fmt_param_value has no representation for them, so offering them
+  // here would let the author author a value the emitter cannot spell. Array[...] IS spellable
+  // now (a bracketed ParameterList), and leaving it off this list was its own bug: a seeded
+  // `Array[String]` parameter selected NO option, so the dropdown silently displayed "String"
+  // for it -- the first option, which is what a <select> falls back to.
+  var PTYPES=["String","Boolean","Integer","Double",
+              "Array[String]","Array[Boolean]","Array[Integer]","Array[Double]"];
+  // ...and any type the project actually carries that still is not on that list (a Struct, a
+  // List[...], anything a future extractor emits) is offered too, so the control shows what the
+  // parameter really is instead of quietly re-labelling it as the first option.
+  function ptypeOptions(cur){
+    var opts=PTYPES.slice();
+    cur=String(cur==null?"":cur).trim();
+    if(cur&&opts.indexOf(cur)<0) opts.push(cur);
+    return opts;
+  }
 
   document.getElementById("sysname").value=(project.system&&project.system.name)||"system";
   // The status chip's one-time notice: sourced from the companion's own DATA.banner (a
@@ -4810,7 +4823,7 @@ var DATA = /*__DATA__*/null;
         +(cat
           ?'<span class="kd" style="background:var(--k-param)" title="'+esc(pt)+'">'+esc(pt.slice(0,3))+'</span>'
           :'<select class="kd ptypesel" data-ptype="'+pp.id+'" style="background:var(--k-param)" title="parameter type">'
-            +PTYPES.map(function(o){return '<option value="'+o+'"'+(o===pt?" selected":"")+'>'+o+'</option>';}).join("")+'</select>')
+            +ptypeOptions(pt).map(function(o){return '<option value="'+o+'"'+(o===pt?" selected":"")+'>'+o+'</option>';}).join("")+'</select>')
         +'<span class="grow">'
         +(cat
           // a catalogue artifact's declared parameters are its own -- same restriction as its
@@ -5210,7 +5223,7 @@ var DATA = /*__DATA__*/null;
         h+='<div class="pkgrow"><div class="pn">'+esc(sp.name)+'</div>'
           +'<div class="prow3">'
           +'<select data-spt="'+sp.id+'" data-undo="1">'
-          +PTYPES.map(function(o){return '<option'+(o===t?" selected":"")+'>'+o+'</option>';}).join("")
+          +ptypeOptions(t).map(function(o){return '<option'+(o===t?" selected":"")+'>'+o+'</option>';}).join("")
           +'</select>'
           +'<input data-spd="'+sp.id+'" data-undo="1" value="'+esc(sp["default"]==null?"":sp["default"])+'" placeholder="default (of the type)">'
           +'<input data-spv="'+sp.id+'" data-undo="1" value="'+esc(sp.value==null?"":sp.value)+'" placeholder="value (of the parameter)">'
@@ -6283,10 +6296,13 @@ var DATA = /*__DATA__*/null;
         o+="      parameters:\n";
         pex.forEach(function(p){
           var t=String(p.ptype||"").trim()||inferPtype(p.sysValue);
+          // RosParameter's `value:` is MANDATORY, so unlike the .ros2 `default:` this slot
+          // cannot be omitted; `''` is the degenerate fallback emit_rossystem also writes.
+          var pv=fmtParamValue(t,p.sysValue);
           o+=cmtBlock(p,"before","        ")
             +'        - '+qd(p.label||p.name)+': '
             +qd((n.artifact||"")+"::"+p.name)+noteSuffix(cmtOf(p,"line"))
-            +'\n          value: '+fmtParamValue(t,p.sysValue)+'\n';
+            +'\n          value: '+(pv==null?"''":pv)+'\n';
         });
       }
     });
@@ -6306,9 +6322,10 @@ var DATA = /*__DATA__*/null;
         var d=p["default"];
         var t=String(p.ptype||"").trim()||inferPtype((d!=null&&d!=="")?d:p.value);
         o+='      type: '+t+noteSuffix(cmtOf(p,"type"))+'\n';
-        if(d!=null&&d!=="") o+='      default: '+fmtParamValue(t,d)+'\n';
-        if(p.value!=null&&p.value!=="")
-          o+='      value: '+fmtParamValue(t,p.value)+noteSuffix(cmtOf(p,"value"))+'\n';
+        var sdv=(d!=null&&d!=="")?fmtParamValue(t,d):null;
+        if(sdv!=null) o+='      default: '+sdv+'\n';
+        var svv=(p.value!=null&&p.value!=="")?fmtParamValue(t,p.value):null;
+        if(svv!=null) o+='      value: '+svv+noteSuffix(cmtOf(p,"value"))+'\n';
       });
     }
     if(project.connections.length){
@@ -6413,9 +6430,46 @@ var DATA = /*__DATA__*/null;
     var a=Math.abs(e);
     return mant+"e"+(e<0?"-":"+")+(a<10?("0"+a):String(a));
   }
+  // MIRRORS ros_studio._ARRAY_TYPE_RE / _list_items. The ELEMENTS of a ParameterList literal,
+  // or null when there is nothing legal to write -- `[]` is a parse error (the rule needs at
+  // least one element), so an empty list and a missing value are the same answer.
+  var ARRAY_TYPE_RE=/^(?:Array|List)\s*\[\s*(.+?)\s*\]$/;
+  function listItems(value){
+    if(Object.prototype.toString.call(value)==="[object Array]")
+      return value.length?value.map(String):null;
+    var raw=String(value==null?"":value).trim();
+    if(!raw) return null;
+    if(raw.charAt(0)==="["&&raw.charAt(raw.length-1)==="]") raw=raw.slice(1,-1);
+    var items=[], buf="", depth=0, quote=null;
+    for(var i=0;i<raw.length;i++){
+      var ch=raw.charAt(i);
+      if(quote){ buf+=ch; if(ch===quote) quote=null; continue; }
+      if(ch==='"'||ch==="'"){ quote=ch; buf+=ch; continue; }
+      if(ch==="["||ch==="{") depth++;
+      else if(ch==="]"||ch==="}") depth--;
+      else if(ch===","&&depth<=0){ items.push(buf); buf=""; continue; }
+      buf+=ch;
+    }
+    items.push(buf);
+    items=items.map(function(s){return s.trim();}).filter(function(s){return s!=="";});
+    return items.length?items:null;
+  }
   function fmtParamValue(ptype,value){
     ptype=String(ptype||"String").trim();
     var raw=(value==null)?"":String(value);
+    var arr=ARRAY_TYPE_RE.exec(ptype);
+    if(arr){
+      // An Array[...] default is a real bracketed ParameterList, never a quoted string that
+      // looks like one -- that is a ParameterString (RM095), and an EMPTY quoted literal,
+      // which is what this used to emit for every list parameter, is what the real 3.1.0
+      // server rejects with a "missing [" parse error. null = "write no slot at all".
+      var items=listItems(value);
+      if(items==null) return null;
+      var el=arr[1];
+      return "["+items.map(function(it){
+        return fmtParamValue(el,unquoteEmitted(it))||"";
+      }).join(", ")+"]";
+    }
     if(ptype==="Boolean") return /^\s*(t|1|y|true)/i.test(raw)?"true":"false";
     if(ptype==="Integer"){
       if(!raw) return "0";
@@ -6469,8 +6523,10 @@ var DATA = /*__DATA__*/null;
     var out=[];
     if(p.ns!=null&&p.ns!=="") out.push("ns="+p.ns);
     out.push("type="+t);
-    if(d!=null&&d!=="") out.push("default="+unquoteEmitted(fmtParamValue(t,d)));
-    if(v!=null&&v!=="") out.push("value="+unquoteEmitted(fmtParamValue(t,v)));
+    var fdv=(d!=null&&d!=="")?fmtParamValue(t,d):null;
+    if(fdv!=null) out.push("default="+unquoteEmitted(fdv));
+    var fvv=(v!=null&&v!=="")?fmtParamValue(t,v):null;
+    if(fvv!=null) out.push("value="+unquoteEmitted(fvv));
     return out.join("; ");
   }
   function genQos(qos,indent){
@@ -6547,11 +6603,13 @@ var DATA = /*__DATA__*/null;
       if(ps.length){
         o+="      parameters:\n";
         ps.forEach(function(p){
-          var d=artParamDecl(p);
+          var d=artParamDecl(p), dv=fmtParamValue(d[0],d[1]);
           o+=cmtBlock(p,"ros2Before","        ")
             +"        "+qs2(p.name)+":"+noteSuffix(cmtOf(p,"ros2Line"))
             +"\n          type: "+d[0]
-            +"\n          default: "+fmtParamValue(d[0],d[1])+"\n";
+            // `default:` is OPTIONAL on the ParameterType; an Array[...] with no elements has
+            // no legal literal, so the honest emission is no slot at all. MIRRORS emit_ros2.
+            +(dv==null?"":"\n          default: "+dv)+"\n";
         });
       }
     });
@@ -6612,7 +6670,11 @@ var DATA = /*__DATA__*/null;
     return s;
   }
   function paramFact(ptype,value){
-    return (ptype||"String")+" = "+unquoteEmitted(fmtParamValue(ptype,value));
+    // An Array with no elements emits no `default:` line at all, so the source side reads back
+    // nothing for it -- the leaf has to be the same empty string on both sides. MIRRORS
+    // ros_studio._param_fact.
+    var fv=fmtParamValue(ptype,value);
+    return (ptype||"String")+" = "+(fv==null?"":unquoteEmitted(fv));
   }
   // a qos: block as one line, in QOS_PINNED order -- the order _emit_qos writes it, so the
   // parsed and the predicted forms agree.

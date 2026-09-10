@@ -64,7 +64,8 @@ var WANTED = ["splitLines", "indentOf", "splitComment", "cleanNote", "unq", "cmt
   "subState", "genSystem", "generatedFiles",
   "handPkgNodes", "foldArtifacts", "localTypePkgs", "companionTypes", "companionPkgs",
   "typeAutoNote",
-  "pyFloat", "pyRepr", "fmtParamValue", "inferPtype", "artParamDecl", "sysParamFact",
+  "pyFloat", "pyRepr", "listItems", "fmtParamValue", "inferPtype", "artParamDecl",
+  "sysParamFact",
   "genQos", "genRos2", "genRos",
   "cmtClean", "cmtList", "cmtOf", "cmtBlock", "noteSuffix",
   "factStr", "unquoteEmitted", "paramFact", "qosFact", "ifaceFactKey", "projectFacts",
@@ -190,6 +191,7 @@ function loadShipped(html, project) {
     "var CATALOGUE = DATA.catalogue || {};\n" +
     "var CATTYPES = DATA.catalogueTypes || {};\n" +
     "var SYSTEMS = DATA.systems || {};\n" +
+    sliceVar(script, "ARRAY_TYPE_RE") + "\n" +
     sliceVar(script, "FACT_SECTIONS") + "\n" +
     sliceVar(script, "FACT_MISSING") + "\n" +
     sliceVar(script, "DIFF_OP_MARK") + "\n" +

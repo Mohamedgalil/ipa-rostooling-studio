@@ -151,6 +151,90 @@ def ros_facts(path):
     return facts
 
 
+def _param_literal_shape(text):
+    """One `default:` literal reduced to its SHAPE plus its content, so a list that came back
+    as a string is not mistaken for the same fact.
+
+    The three shapes are genuinely different statements in the grammar and are the whole reason
+    this check exists:
+
+      list:a|b     a ParameterList   -- `["base_link", "odom"]` / `['base_link', 'odom']`
+      str:a        a ParameterString -- `'balanced'`, and also the WRONG `'["base_link"]'`
+      bare:a       an unquoted ParameterInteger / Double / Boolean -- `10`, `0.5`, `true`
+
+    Quote STYLE is deliberately normalised away (the source corpus writes `"x"`, the emitter
+    writes `'x'` -- docs/grammar-subset.md sec 5.5 says both parse, pick one), but
+    quoted-versus-bracketed is not, because that IS the defect being pinned.
+    """
+    text = text.strip()
+    if text.startswith("[") and text.endswith("]"):
+        inner, buf, depth, quote = [], "", 0, None
+        for ch in text[1:-1]:
+            if quote:
+                buf += ch
+                if ch == quote:
+                    quote = None
+                continue
+            if ch in "\"'":
+                quote = ch
+                buf += ch
+                continue
+            if ch in "[{":
+                depth += 1
+            elif ch in "]}":
+                depth -= 1
+            elif ch == "," and depth <= 0:
+                inner.append(buf)
+                buf = ""
+                continue
+            buf += ch
+        inner.append(buf)
+        return "list:" + "|".join(i.strip().strip("\"'") for i in inner if i.strip())
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        return "str:" + text[1:-1]
+    return "bare:" + text
+
+
+def ros2_param_facts(path):
+    """{(package, artifact, param): "<type> = <shape>"} for every .ros2 artifact parameter.
+
+    Nothing else in this harness looked at the .ros2 DECLARATION side of a parameter: `facts()`
+    reads the .rossystem only, and the fact tree behind `diff` was blind to this loss on both
+    sides at once -- a dropped list default reads back as "no default" from the generated file
+    and compares EQUAL to a source default the seeder had also failed to read. That is exactly
+    how `default: ["base_link"]` becoming `default: ''` survived every green suite here and
+    surfaced only as the real language server rejecting the regenerated file.
+
+    Read textually, on the 2-space ladder the emitter writes, for the same reason ros_facts is:
+    a bug in the shared YAML reader must not be able to make this agree with the emitter about
+    a default neither of them kept. A YAML compose would also flatten the list literal back
+    into a sequence, which is the very distinction being checked.
+    """
+    out, pkg, art, param, in_params = {}, None, None, None, False
+    for raw in open(path, encoding="utf-8"):
+        code = raw.split("#")[0].rstrip()
+        if not code.strip():
+            continue
+        col = len(code) - len(code.lstrip(" "))
+        text = code.strip()
+        if col == 0:
+            pkg, art, param, in_params = text.rstrip(":"), None, None, False
+        elif col == 4 and text.endswith(":"):
+            art, param, in_params = text.rstrip(":").strip("\"'"), None, False
+        elif col == 6 and text.endswith(":"):
+            in_params = text.rstrip(":") == "parameters"
+            param = None
+        elif col == 8 and in_params and text.endswith(":"):
+            param = text.rstrip(":").strip("\"'")
+            out[(pkg, art, param)] = ""
+        elif col == 10 and param and text.startswith("type:"):
+            out[(pkg, art, param)] = text[5:].strip()
+        elif col == 10 and param and text.startswith("default:"):
+            out[(pkg, art, param)] = "%s = %s" % (
+                out.get((pkg, art, param), ""), _param_literal_shape(text[8:]))
+    return out
+
+
 def _stage_siblings(src_dir, work, exts):
     """Copy the neighbours the seeder opens -- the .ros2 files a node's from: resolves to, and
     the .rossystem files a subSystems: entry resolves to when the target is project-local rather
@@ -275,6 +359,22 @@ def check_roundtrip(src, work):
                             % (name, len(missing), len(rb), missing[:6]))
         if added:
             failures.append("%s: %d INVENTED -- %s" % (name, len(added), added[:6]))
+
+    # the .ros2 DECLARATION side of each parameter: its type and its default LITERAL. Only
+    # artifacts this project rebuilt are compared -- a file merely staged is someone else's
+    # model -- and only parameters the source declared, since an exposure the source carried
+    # only in the .rossystem legitimately grows a declaration here (_infer_ptype).
+    for name in sorted(os.listdir(outdir)):
+        if not name.endswith(".ros2") or not os.path.isfile(os.path.join(work, name)):
+            continue
+        pb = ros2_param_facts(os.path.join(work, name))
+        pa = ros2_param_facts(os.path.join(outdir, name))
+        for key in sorted(pb):
+            if key not in pa:
+                failures.append("%s: parameter %s.%s LOST" % ((name,) + key[1:]))
+            elif pa[key] != pb[key]:
+                failures.append("%s: parameter %s.%s changed -- source `%s`, emitted `%s`"
+                                % (name, key[1], key[2], pb[key], pa[key]))
     return not failures, failures
 
 
@@ -460,9 +560,22 @@ def _anchor(code):
 
 
 def comment_facts(path):
-    """{(anchor, text)} for every comment LINE: its own line for a trailing comment, the next
-    code-bearing line for a standalone one, '<end of file>' when nothing follows."""
-    facts, pending = set(), []
+    """{(anchor, text, ordinal)} for every comment LINE: its own line for a trailing comment,
+    the next code-bearing line for a standalone one, '<end of file>' when nothing follows.
+
+    The ordinal is in the key for the same reason it is in ros_facts': a file may carry the SAME
+    comment on the same kind of line more than once, and a plain set collapses those into one
+    fact. A model whose launch-file extractor annotates every overridden parameter -- which is
+    what tests/fixtures/extract/golden does, twice with `value: true # from the launch file` --
+    then reads as ONE dropped comment while `init` correctly reports two, and the accounting
+    check below fails on a discrepancy that is the harness's, not the emitter's."""
+    facts, pending, counts = set(), [], {}
+
+    def add(anchor, text):
+        key = (anchor, text)
+        counts[key] = counts.get(key, 0) + 1
+        facts.add(key + (counts[key],))
+
     with open(path, encoding="utf-8") as handle:
         for raw in handle:
             code, note = split_comment(raw)
@@ -472,12 +585,12 @@ def comment_facts(path):
                 continue
             anchor = _anchor(code)
             if note is not None:
-                facts.add((anchor, note))
+                add(anchor, note)
             for text in pending:
-                facts.add((anchor, text))
+                add(anchor, text)
             pending = []
     for text in pending:
-        facts.add(("<end of file>", text))
+        add("<end of file>", text)
     return facts
 
 
@@ -485,9 +598,13 @@ def _kept(fact, after):
     """A source comment survived when the SAME anchor carries text that contains it. Containment,
     not equality: the emitter merges its own RM088/RM089 provenance into an authored trailing
     comment that does not already name the file, so the author's words come back with the
-    disclosure prepended."""
-    anchor, text = fact
-    return any(ga == anchor and text in gt for ga, gt in after)
+    disclosure prepended.
+
+    The ordinal is deliberately NOT matched: it exists to keep repeated comments distinct on the
+    source side, and requiring the Nth copy to survive as the Nth copy would fail a file whose
+    elements the emitter legitimately re-sorts."""
+    anchor, text = fact[0], fact[1]
+    return any(ga == anchor and text in gt for ga, gt, _n in after)
 
 
 def check_comments(src, work):
@@ -529,7 +646,7 @@ def check_comments(src, work):
         after = comment_facts(os.path.join(outdir, cand[0]))
         for fact in sorted(comment_facts(source)):
             if not _kept(fact, after):
-                lost.append((base,) + fact)
+                lost.append((base, fact[0], fact[1]))
 
     m = DROPPED_RE.search(out)
     reported = int(m.group(1)) if m else 0
@@ -759,7 +876,12 @@ def _default_targets():
                  os.path.join(_HERE, "fixtures", "sublabels"),
                  os.path.join(_HERE, "fixtures", "hazards"),
                  os.path.join(_HERE, "fixtures", "params"),
-                 os.path.join(_HERE, "fixtures", "subsysgraph")):
+                 os.path.join(_HERE, "fixtures", "subsysgraph"),
+                 # the extractor's own golden output. It is a REAL extractor run, not a
+                 # hand-written witness, so it carries shapes nobody thought to write by hand --
+                 # among them `default: ["base_link"]`, whose silent loss to `default: ''` this
+                 # suite could not see because the fixture was not in this list at all.
+                 os.path.join(_HERE, "fixtures", "extract", "golden")):
         if not os.path.isdir(root):
             continue
         out += sorted(os.path.join(root, f) for f in os.listdir(root)

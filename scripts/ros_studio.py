@@ -113,10 +113,82 @@ def _sanitise(text):
     return re.sub(r"[^A-Za-z0-9_]", "_", str(text))
 
 
+# `Array[String]` / `List[Double]` -- the bracketed form, which is the only one the JAR-era
+# grammar has (docs/grammar-subset.md sec 5.3: the older `'Array:'` + indent form was replaced
+# before the jar was built, and the token file carries 'Array', not 'Array:').
+_ARRAY_TYPE_RE = re.compile(r"^(?:Array|List)\s*\[\s*(.+?)\s*\]$")
+
+
+def _list_items(value):
+    """The ELEMENTS of a ParameterList literal, or None when there is nothing legal to write.
+
+    A `default:` under an `Array[...]` type is a real bracketed list (`ParameterList`), never a
+    quoted string that happens to look like one -- that is a `ParameterString`, which is the
+    defect RM095 reports on the .ros2 side and oracle case 24-neg-list-as-string pins on the
+    .rossystem side.
+
+    Elements are split here rather than parsed as YAML/JSON because each one is any
+    `ParameterValue` literal and is handed straight back to _fmt_param_value, which already
+    knows how to spell one for the element type. Quotes and nested brackets are respected so a
+    value containing a comma survives.
+
+    `[]` is NOT a legal literal -- the rule needs at least one element -- so an empty list and a
+    missing value are the same answer here: None, meaning "omit the slot".
+    """
+    if isinstance(value, (list, tuple)):
+        items = [str(v) for v in value]
+        return items or None
+    raw = ("" if value is None else str(value)).strip()
+    if not raw:
+        return None
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1]
+    items, buf, depth, quote = [], [], 0, None
+    for ch in raw:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+            continue
+        if ch in "\"'":
+            quote = ch
+            buf.append(ch)
+            continue
+        if ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+        elif ch == "," and depth <= 0:
+            items.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    items.append("".join(buf))
+    items = [i.strip() for i in items if i.strip()]
+    return items or None
+
+
 def _fmt_param_value(ptype, value):
-    """Typed value emission -- prevents the True/int and Double-without-.0 traps."""
+    """Typed value emission -- prevents the True/int and Double-without-.0 traps.
+
+    Returns None -- meaning "write no slot at all" -- only for an `Array[...]`/`List[...]` type
+    with no elements, because the grammar has no literal for an empty list.
+    """
     ptype = (ptype or "String").strip()
     raw = "" if value is None else str(value)
+    array = _ARRAY_TYPE_RE.match(ptype)
+    if array:
+        # This branch is the fix for silent list-default loss. Without it an `Array[String]`
+        # parameter fell through to the String tail below and came out as `default: ''` -- an
+        # empty ParameterString where a list belongs. rosmodel_lint reports 0 errors on that;
+        # the real 3.1.0 server rejects the file with `missing '[' at ''''`, which is a
+        # diagnostic nobody could trace back to a dropped default.
+        items = _list_items(value)
+        if items is None:
+            return None
+        elem = array.group(1)
+        return "[" + ", ".join(
+            _fmt_param_value(elem, _unquote_emitted(i)) or "" for i in items) + "]"
     if ptype == "Boolean":
         return "true" if re.match(r"^\s*(t|1|y|true)", raw, re.I) else "false"
     if ptype == "Integer":
@@ -585,6 +657,38 @@ def _compose(path, kind):
     return lint.root if ok else None
 
 
+def _param_default_literal(node):
+    """A `.ros2` parameter's `default:` node as the literal text the project carries.
+
+    A `ParameterList` default -- `default: ["base_link"]`, which EVERY `Array[...]` parameter
+    both extractors emit has -- composes as a YAML SEQUENCE, not a scalar. The old
+    `dn.value if is_scalar(dn) else None` therefore dropped it on the floor: `init` seeded
+    `"value": null` and `generate` re-spelled it as `default: ''`, an empty ParameterString
+    where a real list belongs. `rosmodel_lint` reports 0 errors on that (RM095 only sees a
+    QUOTED list-shaped string, not a missing one), so the loss surfaced only as the real
+    language server rejecting the regenerated file with `missing '[' at ''''` -- a diagnostic
+    with no visible connection to the parameter that caused it.
+
+    A sequence comes back as its bracketed literal, re-quoting each element in the style the
+    source used, which is byte-for-byte what the in-page parseRos2 reads off the same line.
+    """
+    if node is None:
+        return None
+    if L.is_scalar(node):
+        return node.value
+    if not L.is_sequence(node):
+        return None
+    parts = []
+    for item in node.value:
+        if not L.is_scalar(item):
+            return None                       # a nested struct: no slot for it, carry nothing
+        style = getattr(item, "style", None)
+        parts.append(_q_double(item.value) if style == '"'
+                     else _q_single(item.value) if style == "'"
+                     else item.value)
+    return "[" + ", ".join(parts) + "]" if parts else None
+
+
 def parse_ros2(path):
     """Map a .ros2 AmentPackage to {(package, nodeOrArtifact): artifact_record}. Each record
     carries the full interface set with types and the artifact parameters."""
@@ -644,7 +748,7 @@ def parse_ros2(path):
                         tn = L.mapping_get(pv, "type")
                         dn = L.mapping_get(pv, "default")
                         ptype = tn.value if L.is_scalar(tn) else None
-                        pdefault = dn.value if L.is_scalar(dn) else None
+                        pdefault = _param_default_literal(dn)
                     params.append({"name": ros_plot._strip_quotes(pk.value),
                                    "ptype": ptype or "String", "value": pdefault})
             rec = {"artifact": artifact, "node": node_name, "package": package,
@@ -1939,7 +2043,13 @@ def emit_ros2(package, git, art_records, companion_pkgs, pkg_comments=None):
                              + _note_suffix(pc.get("ros2Line")))
                 ptype, val = _art_param_decl(p)
                 lines.append("          type: " + ptype)
-                lines.append("          default: " + _fmt_param_value(ptype, val))
+                # `default:` is OPTIONAL on the ParameterType (Basics.xtext:77-80). An
+                # Array[...] with no elements has no legal literal -- `[]` is a parse error and
+                # a quoted '' is a ParameterString, i.e. a lie the real server rejects -- so the
+                # honest emission is no slot at all, the same call the extractors already make.
+                dv = _fmt_param_value(ptype, val)
+                if dv is not None:
+                    lines.append("          default: " + dv)
     return "\n".join(lines) + "\n"
 
 
@@ -2174,9 +2284,13 @@ def emit_rossystem(project):
                 lines.append("        - " + _q_double(lbl) + ": "
                              + _q_double("%s::%s" % (n["artifact"], p["name"]))
                              + _note_suffix(pcm.get("line")))
-                lines.append("          value: "
-                             + _fmt_param_value(p.get("ptype") or _infer_ptype(p.get("sysValue")),
-                                                p.get("sysValue")))
+                # RosParameter's `value:` is MANDATORY (RosSystem.xtext:78-82), so unlike the
+                # .ros2 `default:` this slot cannot be omitted. An Array exposure with nothing
+                # in it has no legal literal either way; `''` is what this has always written
+                # and the lint/oracle will say so, rather than the file failing to parse.
+                pval = _fmt_param_value(p.get("ptype") or _infer_ptype(p.get("sysValue")),
+                                        p.get("sysValue"))
+                lines.append("          value: " + (pval if pval is not None else "''"))
     # The system-level `parameters:` block sits between nodes: and connections: (rule 25).
     sys_params = project.get("params") or []
     if sys_params:
@@ -2203,10 +2317,13 @@ def emit_rossystem(project):
             p.get("default") if p.get("default") not in (None, "") else p.get("value"))
         lines.append("      type: " + ptype + _note_suffix(pcm.get("type")))
         if p.get("default") not in (None, ""):
-            lines.append("      default: " + _fmt_param_value(ptype, p.get("default")))
+            sdv = _fmt_param_value(ptype, p.get("default"))
+            if sdv is not None:
+                lines.append("      default: " + sdv)
         if p.get("value") not in (None, ""):
-            lines.append("      value: " + _fmt_param_value(ptype, p.get("value"))
-                         + _note_suffix(pcm.get("value")))
+            svv = _fmt_param_value(ptype, p.get("value"))
+            if svv is not None:
+                lines.append("      value: " + svv + _note_suffix(pcm.get("value")))
     if project["connections"]:
         lines.append("  connections:")
         for c in project["connections"]:
@@ -2633,9 +2750,13 @@ def _sys_param_fact(p):
         out.append("ns=%s" % p["ns"])
     out.append("type=%s" % ptype)
     if p.get("default") not in (None, ""):
-        out.append("default=%s" % _unquote_emitted(_fmt_param_value(ptype, p["default"])))
+        fdv = _fmt_param_value(ptype, p["default"])
+        if fdv is not None:
+            out.append("default=%s" % _unquote_emitted(fdv))
     if p.get("value") not in (None, ""):
-        out.append("value=%s" % _unquote_emitted(_fmt_param_value(ptype, p["value"])))
+        fvv = _fmt_param_value(ptype, p["value"])
+        if fvv is not None:
+            out.append("value=%s" % _unquote_emitted(fvv))
     return "; ".join(out)
 
 
@@ -2675,9 +2796,14 @@ def _unquote_emitted(s):
 def _param_fact(ptype, value):
     """`type` + `default` as one leaf, spelled the way the FILE spells it: the project side
     runs _fmt_param_value (which quotes a String) and then unquotes, because the source side
-    reads through a parser that already did."""
+    reads through a parser that already did.
+
+    An Array with no elements emits no `default:` line at all, so the source side reads back
+    None for it -- the leaf has to be the same empty string on both sides or `diff` would
+    report every such parameter as changed on every run."""
+    fv = _fmt_param_value(ptype, value)
     return "%s = %s" % (ptype or "String",
-                        _unquote_emitted(_fmt_param_value(ptype, value)))
+                        "" if fv is None else _unquote_emitted(fv))
 
 
 def _iface_fact_key(kind, name):

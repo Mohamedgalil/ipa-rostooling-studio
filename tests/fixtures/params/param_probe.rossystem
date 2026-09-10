@@ -39,6 +39,13 @@ param_probe:
         # in the .rossystem `value:` slot and must NOT rewrite the artifact's `default:`.
         - "loop_window": "tuner::window"
           value: 40
+        # A LIST override in the .rossystem `value:` slot, over an Array[String] declaration.
+        # The exposure side has no `type:` of its own (RosParameter has no such slot), so the
+        # type comes from the artifact and the value has to come back out as a real list, not
+        # as a quoted string shaped like one -- the defect RM095 names and oracle case
+        # 24-neg-list-as-string pins.
+        - "loop_frames": "tuner::frames"
+          value: ["base_link", "map"]
     "logger":
       from: "param_pkg.logger"
       interfaces:
