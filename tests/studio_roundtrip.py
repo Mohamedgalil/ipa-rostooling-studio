@@ -165,7 +165,25 @@ def _param_literal_shape(text):
     Quote STYLE is deliberately normalised away (the source corpus writes `"x"`, the emitter
     writes `'x'` -- docs/grammar-subset.md sec 5.5 says both parse, pick one), but
     quoted-versus-bracketed is not, because that IS the defect being pinned.
+
+    That same quoted-versus-bare distinction is kept PER ELEMENT, not just on the literal as a
+    whole. `i.strip().strip("\"'")` used to collapse every element down to its bare text, so a
+    quoted string element and an unquoted number/bool element with the same digits compared
+    EQUAL: `Array[String] default: ["1", "2"]` and a regression that emitted
+    `Array[Integer]-shaped [1, 2]` both reduced to `list:1|2`. That is the exact code path
+    `_param_default_literal`/`_fmt_param_value` added for list elements (recursing through
+    `_fmt_param_value` per element by the array's declared element TYPE) -- so this guard, as
+    first written, could not have caught a regression in the one thing it exists to guard.
+    Confirmed by mutation: forcing every element to the String branch in both emitters (so
+    `Array[Integer] [1, 2, 3]` comes out `['1', '2', '3']`) passed silently under the old
+    per-element `.strip("\"'")`, and fails under this one.
     """
+    def elem_shape(item):
+        item = item.strip()
+        if len(item) >= 2 and item[0] == item[-1] and item[0] in "\"'":
+            return "q:" + item[1:-1]
+        return "b:" + item
+
     text = text.strip()
     if text.startswith("[") and text.endswith("]"):
         inner, buf, depth, quote = [], "", 0, None
@@ -189,7 +207,7 @@ def _param_literal_shape(text):
                 continue
             buf += ch
         inner.append(buf)
-        return "list:" + "|".join(i.strip().strip("\"'") for i in inner if i.strip())
+        return "list:" + "|".join(elem_shape(i) for i in inner if i.strip())
     if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
         return "str:" + text[1:-1]
     return "bare:" + text

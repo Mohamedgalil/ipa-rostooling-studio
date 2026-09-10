@@ -252,6 +252,8 @@ def extract_model(path, use_catalogue=True):
                             "label": pk.value,
                             "ref": pv.value if L.is_scalar(pv) else "",
                             "value": (value_node.value if L.is_scalar(value_node)
+                                      else _param_list_literal(value_node)
+                                      if L.is_sequence(value_node)
                                       else _node_repr(value_node)),
                         })
 
@@ -396,8 +398,10 @@ def extract_model(path, use_catalogue=True):
                 ptype = tnode.value if L.is_scalar(tnode) else None
                 pns = nsnode.value if L.is_scalar(nsnode) else None
                 pdefault = dnode.value if L.is_scalar(dnode) else (
+                    _param_list_literal(dnode) if L.is_sequence(dnode) else
                     _node_repr(dnode) if dnode is not None else None)
                 pvalue = vnode.value if L.is_scalar(vnode) else (
+                    _param_list_literal(vnode) if L.is_sequence(vnode) else
                     _node_repr(vnode) if vnode is not None else None)
             model["systemParams"].append({"name": pk.value, "type": ptype,
                                           "default": pdefault, "value": pvalue, "ns": pns})
@@ -423,6 +427,38 @@ def extract_model(path, use_catalogue=True):
     model["nodeCount"] = len(model["nodes"])
     model["edgeCount"] = len(model["edges"])
     return model
+
+
+def _param_list_literal(node):
+    """A ParameterList `value:`/`default:` sequence node, re-spelled as a bracketed literal
+    with each element's own quoting preserved -- e.g. `["x,y", "z"]` (2 elements).
+
+    Mirrors ros_studio._param_default_literal (which this module cannot import: ros_studio
+    imports ros_plot, not the other way around), because the two need to agree exactly. Before
+    this existed, every caller here fell back to _node_repr, which is fine for DISPLAY but
+    silently corrupts a round-trip: it strips each element's quotes and rejoins with ", ",
+    so a string element containing its own comma (`"x,y"`) becomes indistinguishable from two
+    elements (`x`, `y`). That string is what `ros_studio._list_items` re-splits on later --
+    correctly, given what it's handed -- so the comma that was DATA silently became a new
+    element boundary, and the real language server still accepts the result. Confirmed via
+    scratch repro: `value: ["x,y", "z"]` (2 elements) round-tripped as `['x', 'y', 'z']`
+    (3 elements) before this fix.
+    """
+    if not L.is_sequence(node):
+        return None
+    parts = []
+    for item in node.value:
+        if not L.is_scalar(item):
+            return None                       # a nested struct: no slot for it, carry nothing
+        style = getattr(item, "style", None)
+        v = item.value
+        if style == '"' or (style == "'" and ("'" in v or "\\" in v)):
+            parts.append('"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"')
+        elif style == "'":
+            parts.append("'" + v + "'")
+        else:
+            parts.append(v)
+    return "[" + ", ".join(parts) + "]" if parts else None
 
 
 def _node_repr(node):

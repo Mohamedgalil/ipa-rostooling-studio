@@ -2959,9 +2959,27 @@ def project_facts(project):
                                                      f["name"])
         # keyed by the exposure LABEL, matching source_facts, which reads it back off the
         # `- "label": "artifact::name"` line the emitter now writes.
+        #
+        # A list-shaped sysValue is predicted through _fmt_param_value, exactly like the
+        # .ros2 declaration side already is via _param_fact -- because the emitter (line ~2317)
+        # re-quotes every element itself and does not necessarily keep the source's quote
+        # character. This raw _fact_str(sysValue) used to pass regardless, but only because
+        # ros_plot._node_repr (the seeder this project.json's sysValue came from) silently
+        # flattened a source list like ["base_link", "map"] into the STRING "[base_link, map]"
+        # -- and source_facts(), reading the generated file back through that same lossy
+        # _node_repr, flattened the actual ['base_link', 'map'] the emitter wrote into the
+        # identical string. Two independent bugs producing the same wrong text is not
+        # agreement; fixing _node_repr to preserve each element's quoting (so a comma INSIDE
+        # a string element survives) made that coincidence visible as a real predictor/emitter
+        # mismatch: source quotes with "double", the emitter always emits 'single'.
         for p in n.get("params") or []:
             if p.get("exposed"):
-                rec["parameters"][p.get("label") or p["name"]] = _fact_str(p.get("sysValue"))
+                sv = p.get("sysValue")
+                if isinstance(sv, str) and sv.strip()[:1] == "[" and sv.strip()[-1:] == "]":
+                    ptype = p.get("ptype") or _infer_ptype(sv)
+                    fv = _fmt_param_value(ptype, sv)
+                    sv = "" if fv is None else _unquote_emitted(fv)
+                rec["parameters"][p.get("label") or p["name"]] = _fact_str(sv)
         facts["nodes"][n["label"]] = rec
 
     for c in project["connections"]:

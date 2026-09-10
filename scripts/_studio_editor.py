@@ -6752,9 +6752,22 @@ var DATA = /*__DATA__*/null;
         rec.exposures[lbl]=f.kind+"-> "+(n.artifact||"")+"::"+f.name;
       });
       // keyed by the exposure LABEL, matching source_facts, which reads it back off the
-      // `- "label": "artifact::name"` line the emitter writes.
+      // `- "label": "artifact::name"` line the emitter writes. MIRRORS ros_studio.project_facts:
+      // a list-shaped sysValue is predicted through fmtParamValue, because the emitter
+      // re-quotes every element itself (single quotes) rather than keeping the source's own
+      // quote character -- a plain factStr(sysValue) only ever matched by coincidence, when
+      // the seeder's list reading was itself lossy enough to already look like the emitted form.
       (n.params||[]).forEach(function(p){
-        if(p.exposed) rec.parameters[p.label||p.name]=factStr(p.sysValue);
+        if(!p.exposed) return;
+        var sv=p.sysValue;
+        if(typeof sv==="string"){
+          var t=sv.replace(/^\s+|\s+$/g,"");
+          if(t.charAt(0)==="["&&t.charAt(t.length-1)==="]"){
+            var ptype=p.ptype||inferPtype(sv), fv=fmtParamValue(ptype,sv);
+            sv=(fv==null)?"":unquoteEmitted(fv);
+          }
+        }
+        rec.parameters[p.label||p.name]=factStr(sv);
       });
       facts.nodes[n.label]=rec;
     });
