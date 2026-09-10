@@ -1849,11 +1849,37 @@ def _match_iface(node, label, kind):
     return None
 
 
+def _card_height(node):
+    """What the page's card for this node will be about that tall, before anything has drawn it.
+
+    Exactly the editor's nodeBox() fallback -- `56 + 22 * ifaces` -- plus the parameter rows,
+    which that fallback does not count because it is only ever consulted for a card the page is
+    about to measure properly anyway. Here there is nothing to measure: this runs in the
+    companion, before any browser has seen the project. An over-estimate merely leaves a gap; an
+    under-estimate overlaps two cards, so the parameter rows are counted.
+    """
+    return 56 + 22 * (len(node.get("ifaces") or []) + len(node.get("params") or []))
+
+
 def _grid_layout(nodes):
+    """Seed positions: a square-ish grid, each ROW spaced by the tallest card in it.
+
+    The row pitch used to be a flat 240px whatever was in the row. A node's height is its
+    interface count, and real models are full of nodes that go straight past that: seeding a
+    merge of the vendored turtlebot3 and UR catalogues puts a 58-interface card (about 1330px)
+    into a row pitched at 240, and four of the six rows then overlapped the next -- on FIRST
+    OPEN of a freshly seeded project, before the reader has touched anything. `Auto layout`
+    fixed it, but only for a reader who knew to press it; overlapping cards on open read as the
+    tool being broken rather than as a layout wanting a nudge.
+    """
     cols = max(1, int(len(nodes) ** 0.5 + 0.9999))
-    for i, n in enumerate(nodes):
-        n["x"] = 60 + (i % cols) * 300
-        n["y"] = 80 + (i // cols) * 240
+    gap, y = 30, 80
+    for start in range(0, len(nodes), cols):
+        row = nodes[start:start + cols]
+        for i, n in enumerate(row):
+            n["x"] = 60 + i * 300
+            n["y"] = y
+        y += max(_card_height(n) for n in row) + gap
 
 
 def blank_project(name="new_system"):

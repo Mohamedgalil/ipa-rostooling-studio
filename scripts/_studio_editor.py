@@ -4405,13 +4405,14 @@ var DATA = /*__DATA__*/null;
         if(--indeg[w]===0) queue.push(w);
       });
     }
-    // Isolated nodes get their own trailing column: mixed into layer 0 they pad out the
-    // sources and hide where the graph actually starts.
-    var maxL=0; ids.forEach(function(id){ if(degree[id]&&layer[id]>maxL) maxL=layer[id]; });
-    ids.forEach(function(id){ if(!degree[id]) layer[id]=maxL+1; });
-
-    var layers=[];
-    ids.forEach(function(id){ (layers[layer[id]]=layers[layer[id]]||[]).push(id); });
+    // Isolated nodes are laid out SEPARATELY, after the layered pass: mixed into layer 0 they
+    // pad out the sources and hide where the graph actually starts, and given a layer of their
+    // own they became one unbounded column -- see the grid at the end of this function.
+    var iso=[], layers=[];
+    ids.forEach(function(id){
+      if(!degree[id]) iso.push(id);
+      else (layers[layer[id]]=layers[layer[id]]||[]).push(id);
+    });
     for(var i=0;i<layers.length;i++) layers[i]=layers[i]||[];
     // Barycentre ordering, four sweeps. Crossings are what makes a layered drawing readable
     // or not, and the median/barycentre heuristic removes most of them for a few lines.
@@ -4451,6 +4452,37 @@ var DATA = /*__DATA__*/null;
       });
       colX+=wmax+GAPX;
     });
+
+    // ---- the isolated set, as a GRID rather than as one trailing column -------------------
+    // A partially-wired or catalogue-heavy project is mostly isolated nodes, and one column of
+    // them is unreadable: measured on a real 45-node merged project with 41 isolated nodes, the
+    // single column ran about 8000px tall and Fit then zoomed the whole canvas to ~15%. It also
+    // poisoned the layered part, because that column's height became `tallest` and every real
+    // layer was vertically centred against it.
+    //
+    // Roughly sqrt(n) columns, measured in PIXELS rather than in cards: a node box is about
+    // 230x150, so sqrt(n) COLUMNS of a card that is half as wide as it is tall still comes out
+    // three times wider than it is tall. Squaring the block itself is the same one line --
+    // width cols*W equals height (n/cols)*H when the column height is sqrt(totalH * avgW).
+    // Where the CONNECTED part is taller than that, its height is used instead: fewer, taller
+    // columns cost nothing, because the reader is already scrolling to that height anyway.
+    if(iso.length){
+      var isoH=0, isoW=0;
+      iso.forEach(function(id){ var b=boxOf(id); isoH+=b.h+GAPY; isoW+=b.w+GAPX; });
+      var targetH=Math.max(tallest, Math.sqrt(isoH*(isoW/iso.length)));
+      var isoY=Y0, colH=0, colW=0, colCount=0;
+      if(colX>X0) colX+=GAPX;                        // a clear gutter after the graph proper
+      iso.forEach(function(id){
+        var b=boxOf(id);
+        // `colCount` guards the degenerate case of a single card taller than targetH: it still
+        // has to go somewhere, and an empty column would loop forever.
+        if(colCount&&colH+b.h>targetH){
+          colX+=colW+GAPX; isoY=Y0; colH=0; colW=0; colCount=0;
+        }
+        pos[id]={x:Math.round(colX), y:Math.round(isoY)};
+        isoY+=b.h+GAPY; colH+=b.h+GAPY; colW=Math.max(colW,b.w); colCount++;
+      });
+    }
     return pos;
   }
 
