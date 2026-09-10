@@ -239,8 +239,23 @@ class Server:
     def notify(self, method, params):
         self._send({"jsonrpc": "2.0", "method": method, "params": params})
 
-    def drain(self, seconds, until_uri=None):
-        """Collect messages for `seconds`. Stop early once diagnostics for until_uri arrive."""
+    def drain(self, seconds, until_uri=None, until_result=False):
+        """Collect messages for `seconds`. Stop early once the thing being waited for arrives:
+        diagnostics for `until_uri`, or any response carrying a `result` for `until_result`.
+
+        `until_result` exists because the initialize wait was the single largest cost in a run
+        and it was a FIXED 45 seconds -- that drain had no early exit, so every invocation slept
+        out the whole window even though its caller's only test is `any("result" in m)`. Asking
+        the oracle about a four-file model took 65s, 48 of which were this wait and the 3s one
+        that follows it.
+
+        Exiting as soon as the answer the caller is looking for has arrived cannot weaken the
+        check. A server that never answers still waits the full window and still reports
+        NO_INITIALIZE_RESPONSE, and nothing is dropped either way: the inbox is a queue, so a
+        message that arrives after this returns is read by the NEXT drain rather than lost --
+        which, for a server that publishes diagnostics eagerly during indexing, means those
+        diagnostics are now attributed by their own uri instead of being discarded here.
+        """
         msgs, deadline = [], time.time() + seconds
         while time.time() < deadline:
             try:
@@ -253,6 +268,8 @@ class Server:
             if until_uri and m.get("method") == "textDocument/publishDiagnostics":
                 if m.get("params", {}).get("uri", "").lower() == until_uri.lower():
                     deadline = min(deadline, time.time() + 1.0)  # brief grace for follow-ups
+            if until_result and "result" in m:
+                deadline = min(deadline, time.time() + 1.0)      # same grace, same reason
         return msgs
 
     def close(self):
@@ -293,7 +310,7 @@ def run_case(case_dir: Path, verbose=False):
             "workspaceFolders": [{"uri": uri_of(case_dir), "name": case_dir.name}],
             "capabilities": {"textDocument": {"publishDiagnostics": {"relatedInformation": True}}},
         })
-        init = srv.drain(45)
+        init = srv.drain(45, until_result=True)
         if not any("result" in m for m in init if isinstance(m, dict)):
             result["status"] = "NO_INITIALIZE_RESPONSE"
             result["stderr"] = srv.stderr_lines[-25:]

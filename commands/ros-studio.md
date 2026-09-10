@@ -166,6 +166,17 @@ error page from a previous failing run. For the same reason the banner carries i
 severity now instead of the page hard-coding "Generation failed"; a page that overstates one thing
 gets believed less about the next.
 
+**It says so before it blocks.** Starting a JVM, waiting out an LSP handshake and then waiting
+per file takes tens of seconds — measured 53s for a 2-node model, 107s for a 45-node one — and it
+used to print nothing at all for the duration, which on a default-on check is indistinguishable
+from a hang. `generate` now prints what it is about to do, how long to expect, and how to skip it,
+flushed (stdout is block-buffered when `generate` is piped, which is how the studio and the hooks
+run it). The wait itself also got shorter without getting weaker: the `initialize` drain in
+`ask_oracle.py` was a fixed 45-second sleep with no early exit, even though its caller's only test
+is "did a response arrive". It now stops when one does — a server that never answers still waits
+the whole window and still reports `NO_INITIALIZE_RESPONSE`. Measured on the same 4-file model:
+65s → 24s, identical verdict.
+
 **A version check, not just an existence check.** The jar is built with `Build-Jdk-Spec: 21` and
 the launcher needs Java 19+, but nothing in the repo ever checked that — the requirement lived
 only in prose. An older JVM passed the `exists()` test, started, and died inside the JVM with
@@ -332,6 +343,21 @@ Two traps worth knowing, both of which were live bugs:
   is `no viable alternative at input '"..."'` from the real server. The rule cannot express an
   actual namespace string at all, which is why RM044 records zero corpus support.
 
+**A list default is a list, not a string.** An `Array[...]`/`List[...]` type's `default:` is a
+bracketed `ParameterList` (`default: ['base_link', 'odom']`). It composes as a YAML *sequence*,
+which the seeder used to skip because it only read scalars there — so the value was seeded as
+`null` and re-emitted as `default: ''`, an empty `ParameterString` where a list belongs. The
+linter reports 0 errors on that (RM095 only fires on a *quoted* list-shaped string, and this one
+had been emptied first); the real server rejects the file with `missing '['`. Both sides now carry
+the literal and re-spell each element by the element type. A list with no elements has no legal
+literal — `[]` is a parse error — so the optional `default:` slot is **omitted** rather than
+filled with a lie, which is what both extractors already do. `RosParameter`'s `value:` is
+mandatory and keeps its empty-string fallback for that degenerate case.
+`tests/fixtures/params/` carries one witness per element type, and
+`studio_roundtrip.py`'s `ros2_param_facts()` compares each default's *shape* (`list:` vs `str:`
+vs bare) source-against-generated, because reducing both sides to "no default" is exactly how
+this survived every green suite.
+
 A parameter known only as an exposure has no declared type, but the `.ros2` this project writes
 for a hand-backed artifact requires one. The type is **inferred from the override value**
 (`false` → `Boolean`, `40` → `Integer`, `0.5` → `Double`, otherwise `String`) rather than
@@ -491,8 +517,16 @@ Nine nodes fit on a fixed grid; dozens do not. The canvas therefore has:
   `/odom`" is one query. Matches are outlined and everything else recedes; Enter / Shift+Enter
   step through them and scroll each into view.
 - **Auto layout** — a layered (Sugiyama-style) arrangement that follows connection direction:
-  sources on the left, sinks on the right, four barycentre sweeps to cut crossings, isolated
-  nodes in a trailing column. Feedback edges (a controller subscribing to what it drives) are
+  sources on the left, sinks on the right, four barycentre sweeps to cut crossings. Isolated
+  nodes are laid out separately, as a **grid** to the right of the graph — one trailing *column*
+  is what it used to be, and on a merged project with 41 unwired nodes out of 45 that column ran
+  6120px tall, **Fit** answered 13%, and it dragged the connected layers off-centre with it
+  (every layer is centred against the tallest one). The grid's column height is
+  `sqrt(totalHeight × averageWidth)`, i.e. the √n rule measured in pixels rather than in cards —
+  a node box is about 230×150, so √n *columns* of a card twice as tall as it is wide still comes
+  out three times wider than tall. Where the connected part is taller, its height is used
+  instead. Same project, same button: 2700×1302, Fit 73%. Feedback edges (a controller
+  subscribing to what it drives) are
   detected and excluded from the *layering* only; they are still drawn. Node sizes are measured
   off the rendered boxes rather than estimated, because a node's height is its interface count.
   Node `x`/`y` live in `project.json`, so a layout is a normal **undoable** edit (`Ctrl+Z`), and

@@ -3738,6 +3738,19 @@ def cmd_generate(args):
         if available:
             print("\n--- oracle (real language server) ---")
             print("  %s" % why)
+            # SAY SOMETHING BEFORE BLOCKING. run_oracle() starts a JVM, waits out an LSP
+            # handshake and then waits per file: measured at 53s for a 2-node model and 107s
+            # for a 45-node one, and it printed NOTHING for the whole of it. A minute of dead
+            # terminal is indistinguishable from a hang, and this landed on by default in the
+            # same change -- so the first thing most users would ever see of the oracle is the
+            # tool apparently freezing at the moment it is doing the most valuable thing it
+            # does. The flush matters: stdout is block-buffered when `generate` is piped, which
+            # is how the studio and the hooks run it, so an unflushed line arrives with the
+            # verdict and is worth nothing.
+            print("  asking the real language server for a second opinion on %d file(s) — "
+                  "it starts a JVM and answers per file, so expect roughly a minute "
+                  "(--no-oracle skips it)" % len(written))
+            sys.stdout.flush()
             # a staged subSystems: target is walked too -- it can carry catalogue references of
             # its own that collect_deps still has to vendor in before the server sees it.
             ok, text, records = run_oracle(outdir, written + staged)
