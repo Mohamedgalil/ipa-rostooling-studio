@@ -14,5 +14,10 @@ __pycache__/
 examples/
 .idea/
 
+# CoreSense Studio frontend build inputs. The BUILT bundle (web/studio/dist/) is committed
+# on purpose -- the server serves it directly and nobody should need npm to run the app --
+# but node_modules is 73 MB / 5,500 files of dependency tree and must never be committed.
+web/studio/frontend/node_modules/
+
 # ask_oracle.py writes this when results.json has uncommitted changes (see _results_path)
 tests/oracle/results.local.json

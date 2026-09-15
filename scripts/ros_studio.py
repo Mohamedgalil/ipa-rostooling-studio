@@ -3212,9 +3212,17 @@ def merged_source_facts(paths):
 
 def run_lint(paths):
     """Run rosmodel_lint over the generated files; return (errors, warnings, infos, text)."""
+    # Build a registry of every msg/srv/action this SAME extraction batch defines, so a
+    # cross-file reference within it (package A's service field typed as package B's message,
+    # both generated together here) resolves locally instead of only against the small
+    # hand-curated vendored catalogue -- see collect_ros_local_specs() for why that matters.
+    local_specs = set()
+    for p in paths:
+        if p.endswith('.ros'):
+            local_specs |= L.collect_ros_local_specs(p)
     findings = []
     for p in paths:
-        lint = L.Linter(p, use_catalogue=True)
+        lint = L.Linter(p, use_catalogue=True, local_specs=local_specs)
         lint.run()
         findings.extend(lint.findings)
     errs = [f for f in findings if f.severity == L.ERROR]

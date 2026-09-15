@@ -1,0 +1,7 @@
+[
+  {"id":"model-generator","name":"Generate ROS model artifacts","icon":"M","stages":["Architecture"],"action":"generate","skill":"skills/ros-model/SKILL.md","outputs":[".rossystem",".ros2",".ros"]},
+  {"id":"source-extractor","name":"Review source → model","icon":"↔","stages":["Architecture"],"action":"source-import","outputs":["Staged extraction","Unresolved facts","Connection proposals"]},
+  {"id":"repositories","name":"Source repositories","icon":"R","stages":["Architecture"],"action":"repositories","outputs":["repositories.repos","Pinned Git checkout"]},
+  {"id":"model-check","name":"Check model contracts","icon":"✓","stages":["Architecture","Validate"],"action":"validate","outputs":["Immutable check evidence"]},
+  {"id":"coding-cli","name":"Installed coding agent","icon":"✧","stages":["Architecture","Validate"],"action":"agent","skill":"skills/ros-model/SKILL.md","outputs":["Task handoff","CLI-owned file edits"]}
+]

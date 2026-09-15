@@ -24,6 +24,12 @@ jar that cannot run is reported on stdout, on stderr and in the Studio itself (a
 path and needs no working jar to do it — it points `ROSMODEL_JAVA` at a nonexistent path, which is
 reproducible anywhere. See `commands/ros-studio.md` § *Validation* for the full rationale.
 
+There is now a third caller besides the hook and `ros_studio.py generate`: **CoreSense Studio**,
+the local web app (`scripts/studio_server.py`, documented in
+[`docs/coresense-studio.md`](../docs/coresense-studio.md)). Its "Check model" runs the generation
+gate, then this linter over the freshly generated files, then the oracle when Java allows — the
+same three stages, reported as three rows in the browser. Nothing about the rules below changes.
+
 The linter's role is now to give **fast, single-file, offline** feedback
 in the edit loop, and to cover the checks the oracle cannot make (house style, rossdl
 compatibility, provenance sentinels). Where the two disagree, **the oracle wins** — every ERROR in

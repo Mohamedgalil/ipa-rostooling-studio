@@ -1,0 +1,68 @@
+[
+ {
+  "id": "first-system",
+  "title": "Build and reopen your first system",
+  "level": "Beginner",
+  "steps": [
+   {
+    "id": "create-project",
+    "title": "Your separate practice project is ready",
+    "body": "Starting this walkthrough already created tutorial_first_system in its own saved directory. Read the exact path at the bottom of the workspace. Do not create a second project. Your previous work remains in Projects → Recent projects.",
+    "target": "root-path",
+    "view": "Architecture",
+    "tab": "brief",
+    "check": "project-ready"
+   },
+   {
+    "id": "write-brief",
+    "title": "Describe one small task",
+    "body": "In Architecture → Project brief, set What should the system do? to “Publish a greeting and receive it in a second node.” Set What counts as success? to “The receiver logs the greeting.” Wait for Saved to disk in the top bar.",
+    "target": "brief-form",
+    "view": "Architecture",
+    "tab": "brief",
+    "check": "brief-saved",
+    "selector": "textarea[aria-label=\"System purpose\"]"
+   },
+   {
+    "id": "choose-components",
+    "title": "Inspect the two starter nodes",
+    "body": "Choose Open architecture. The starter already contains a publisher, a subscriber and their connection. Do not add duplicates from the catalogue. Select each node to inspect its package, interfaces and deployment unit.",
+    "target": "canvas",
+    "view": "Architecture",
+    "tab": "system",
+    "check": "starter-nodes",
+    "selector": ".react-flow"
+   },
+   {
+    "id": "connect-components",
+    "title": "Read the intended connection",
+    "body": "Select the line between the two nodes. The Connection inspector shows its endpoints, interface type and declared policies. Edit either endpoint through its source or target interface button. This is intended communication; traffic has not yet been observed.",
+    "target": "canvas",
+    "view": "Architecture",
+    "tab": "system",
+    "check": "connection-present",
+    "selector": ".react-flow"
+   },
+   {
+    "id": "run-check",
+    "title": "Run the real model check",
+    "body": "Open Validate → Checks and choose Run model checks. Read the recorded result and which tools ran. This checks model validity; it does not prove compilation, message delivery or robot behavior.",
+    "target": "validate-model",
+    "view": "Validate",
+    "tab": "checks",
+    "check": "model-check-recorded",
+    "controlText": "Run model checks"
+   },
+   {
+    "id": "reopen-project",
+    "title": "Reopen this saved project",
+    "body": "Wait for Saved to disk. Open Projects, find tutorial_first_system in Recent projects using its directory if names repeat, and choose Open. Check the Project brief and Architecture. Your walkthrough progress is saved with this project.",
+    "target": "project-menu",
+    "view": "Architecture",
+    "tab": "brief",
+    "check": "project-reopened",
+    "selector": "header [data-action=\"projects\"]"
+   }
+  ]
+ }
+]
