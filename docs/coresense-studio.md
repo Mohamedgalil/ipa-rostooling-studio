@@ -4,16 +4,17 @@ A small, local, token-protected web service (`scripts/studio_server.py`) plus a 
 (`web/studio/`). You run it on your own machine, it serves one browser tab, and it keeps every
 project as plain files in a directory you choose.
 
-**This is not the same thing as `/ros-studio`.** The repository ships two separate tools that both
-happen to be called "studio":
+**This is not the same thing as `ros_studio.py`.** The repository ships two separate things that
+both happen to be called "studio":
 
 | | What it is | Entry point |
 |---|---|---|
-| **`/ros-studio`** | A Claude Code slash command that renders **one self-contained `file://` HTML page** with no network and no server. Seed it, author in the page, commit a `project.json` back to disk, generate. | `scripts/ros_studio.py` — see the main [`README.md`](../README.md) |
+| **`ros_studio.py`** | A deterministic CLI, no UI: seed a `project.json`, generate `.ros2`/`.rossystem`/`.ros`, validate. | `scripts/ros_studio.py` — see the main [`README.md`](../README.md) |
 | **CoreSense Studio** (this document) | A **local HTTP service** with a real project store on disk, multi-file projects, linked ROS source repositories, and a React front end. | `scripts/studio_server.py` |
 
-Both still work, and neither replaces the other. `ros_studio.py` is also imported *by* the web app
-as its model-generation and validation engine, so the two share one emitter and one linter.
+`ros_studio.py` is imported *by* the web app as its model-generation and validation engine, so the
+two share one emitter and one linter — CoreSense Studio is the interface for authoring and
+checking a model; `ros_studio.py` is not meant to be used standalone for that.
 
 ## What it does, and what it deliberately does not
 

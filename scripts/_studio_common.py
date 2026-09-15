@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-_studio_common.py -- shared HTML/CSS/JS primitives + emit vocabulary for the two
-self-contained RosTooling front-ends, ros_plot.py (read-only viewer) and ros_studio.py
-(the /ros-studio authoring editor).
+_studio_common.py -- shared HTML/CSS/JS primitives + emit vocabulary for ros_plot.py (the
+self-contained, read-only /ros-plot viewer) and ros_studio.py (the deterministic generation
+and validation engine, imported directly by CoreSense Studio).
 
-Both pages are single vanilla-JS documents with no network access. The visual language
-(the `:root` palette + seven interaction-kind colours), the SVG arrowhead markers, the
-bezier edge path, the pointer-capture drag, the theme toggle and the deterministic grid
-layout are identical between them; keeping ONE copy here means the viewer and the editor
-can never drift apart. ros_studio's generator also reuses the emit vocabulary that mirrors
-rosmodel_lint's constants, so the emitter and the checker can never disagree.
+ros_plot.py is a single vanilla-JS document with no network access; its visual language (the
+`:root` palette + seven interaction-kind colours), the SVG arrowhead markers, the bezier edge
+path, the pointer-capture drag, the theme toggle and the deterministic grid layout live here
+so a future second viewer could not drift from it. ros_studio.py's generator also reuses the
+emit vocabulary that mirrors rosmodel_lint's constants (KIND_TO_BLOCK, TYPE_SEG_TO_ROS_BLOCK),
+so the emitter and the checker can never disagree.
 
 Nothing here imports the rest of the plugin, so it is safe for both scripts to import.
 """
@@ -46,8 +46,8 @@ TYPE_SEG_TO_ROS_BLOCK = {"msg": "msgs", "srv": "srvs", "action": "actions"}
 # BODY, would paint the page in the OS theme first and then visibly flip it. This runs
 # synchronously in <head>, before the <style> block below is even parsed, so the
 # data-theme attribute -- and therefore which half of PALETTE_CSS applies -- is already
-# decided by the time anything paints. Shared here (not duplicated per page) so /ros-studio
-# and /ros-plot, which already share one localStorage bucket on a file:// origin, agree.
+# decided by the time anything paints. Shared here so a future second file://-origin page
+# sharing this localStorage bucket would agree with /ros-plot rather than drift from it.
 THEME_BOOT_JS = r"""try{
   var t=localStorage.getItem("rosStudio.theme");
   if(t==="light"||t==="dark") document.documentElement.setAttribute("data-theme",t);

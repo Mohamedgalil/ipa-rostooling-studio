@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""studio_roundtrip.py -- regression harness for /ros-studio's seed -> generate round-trip,
-and for the JS/Python parity of the editor's preview.
+"""studio_roundtrip.py -- regression harness for ros_studio.py's seed -> generate round-trip.
 
 The defect this exists to catch: `init` used to discard the .rossystem exposure LABEL
 ("odom_pub") and keep only the interface NAME it arrow-points at ("odom"), then re-link
@@ -29,20 +28,15 @@ Five checks per fixture:
                this way (ros_plot read it, ros_studio never seeded or emitted it), and a fact
                set can only protect a field some fixture actually carries, so this check
                manufactures the carrier instead of waiting for one.
-  PARITY       tests/studio_parity.js: the editor's genSystem()/genRos2()/genRos() -- pulled out
-               of the RENDERED page, not out of the template -- emit the same bytes as
-               emit_rossystem()/emit_ros2()/_companion_ros(). The editor is a live preview of
-               those emitters, and message fields are authored ONLY there; if
-               the two drift, the page lies about the model and every other check here still
-               passes. Needs `node`; SKIPs without it (the other checks still run and gate).
   COMMENTS     every comment line in the source either comes back out attached to the SAME
                element, or is REPORTED by `init` -- and the count `init` reports is exactly the
                number that did not come back. `generate` used to emit only its own provenance
                lines, so all 30+ comments on the TurtleBot 3 example were deleted on the first
-               edit cycle, with every other check here still green. See the comment policy in
-               commands/ros-studio.md; tests/fixtures/comments/ carries one witness per
-               position, including two the policy deliberately drops, and
-               tests/fixtures/subsystems/ adds the two subSystems: positions.
+               edit cycle, with every other check here still green. See the "Comments" policy
+               block near the top of scripts/ros_studio.py for which positions are preserved;
+               tests/fixtures/comments/ carries one witness per position, including two the
+               policy deliberately drops, and tests/fixtures/subsystems/ adds the two
+               subSystems: positions.
 
 And, once, a whole-directory section:
 
@@ -84,7 +78,6 @@ except (AttributeError, ValueError):     # pre-3.7, or a stream that cannot be r
     pass
 SCRIPTS = os.path.join(PLUGIN_ROOT, "scripts")
 STUDIO = os.path.join(SCRIPTS, "ros_studio.py")
-PARITY_JS = os.path.join(_HERE, "studio_parity.js")
 
 EXPOSURE_RE = re.compile(
     r'^\s+-\s+"?([\w.-]+)"?:\s*(pub|sub|ss|sc|as|ac)->\s*"?([\w:.-]+)"?\s*$')
@@ -703,43 +696,6 @@ def generated_system(outdir, src):
     return os.path.join(outdir, cand[0]) if cand else None
 
 
-def check_parity(work, proj_name="project.json", gen_name="generated", src=None):
-    """Hand artefacts an earlier check just built to tests/studio_parity.js, which pulls the
-    shipped pure functions out of the RENDERED editor and diffs its .rossystem/.ros2 previews
-    against the Python emitter's bytes. Returns (True|False|None, [lines]); None means SKIP.
-
-    Run over the FIELDS artefacts as well as the plain round-trip ones, because a fact set the
-    fixture does not carry is a preview the editor is never asked to produce: namespace, qos
-    and fromGitRepo would each pass this check vacuously on examples/ alone."""
-    node = shutil.which("node")
-    if node is None:
-        return None, ["skipped: `node` is not on PATH — the editor's JS cannot be run"]
-    if not os.path.isfile(PARITY_JS):
-        return None, ["skipped: %s is missing" % PARITY_JS]
-    proj = os.path.join(work, proj_name)
-    outdir = os.path.join(work, gen_name)
-    if not os.path.isfile(proj) or not os.path.isdir(outdir):
-        return False, ["the round-trip produced nothing to compare against"]
-    expect = generated_system(outdir, src) if src else None
-    if expect is None:
-        cand = sorted(f for f in os.listdir(outdir) if f.endswith(".rossystem"))
-        if not cand:
-            return False, ["no generated .rossystem to compare against"]
-        expect = os.path.join(outdir, cand[0])
-
-    html = os.path.join(work, os.path.splitext(proj_name)[0] + ".editor.html")
-    code, out = run(["render", proj, "--out", html])
-    if code != 0:
-        return False, ["render failed (exit %d):\n%s" % (code, out)]
-    proc = subprocess.run([node, PARITY_JS, "--project", proj, "--html", html,
-                           "--expect", expect],
-                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    text = proc.stdout.decode("utf-8", "replace")
-    if proc.returncode == 0:
-        return True, []
-    return False, [line for line in text.splitlines() if line.strip()]
-
-
 # ---------------------------------------------------------------------------------------
 # MULTI-FILE
 # ---------------------------------------------------------------------------------------
@@ -916,9 +872,9 @@ def main(argv):
     def verdict(state):
         return "PASS" if state else ("SKIP" if state is None else "FAIL")
 
-    print("%-32s %-12s %-12s %-9s %-9s %-9s"
-          % ("FIXTURE", "ROUND-TRIP", "ORPHAN-GATE", "FIELDS", "PARITY", "COMMENTS"))
-    print("-" * 90)
+    print("%-32s %-12s %-12s %-9s %-9s"
+          % ("FIXTURE", "ROUND-TRIP", "ORPHAN-GATE", "FIELDS", "COMMENTS"))
+    print("-" * 80)
     failures = 0
     for src in targets:
         work = tempfile.mkdtemp(prefix="studio-rt-")
@@ -933,15 +889,9 @@ def main(argv):
             cmt_dir = os.path.join(work, "comments")
             os.makedirs(cmt_dir, exist_ok=True)
             cmt_ok, cmt_why = check_comments(src, cmt_dir)
-            par_ok, par_why = check_parity(work, src=src)
-            if fld_ok:      # only meaningful once the planted artefacts exist
-                f_ok, f_why = check_parity(fld_dir, "fields.json", "fields-generated", src=src)
-                if f_ok is False:
-                    par_ok = False
-                    par_why = par_why + ["[planted fields] " + line for line in f_why]
-            print("%-32s %-12s %-12s %-9s %-9s %-9s" % (
+            print("%-32s %-12s %-12s %-9s %-9s" % (
                 os.path.basename(src), verdict(ok), verdict(gate_ok), verdict(fld_ok),
-                verdict(par_ok), verdict(cmt_ok)))
+                verdict(cmt_ok)))
             for line in why:
                 failures += 1
                 print("    round-trip: %s" % line)
@@ -956,13 +906,6 @@ def main(argv):
             elif fld_ok is None:
                 for line in fld_why:
                     print("    fields: %s" % line)
-            if par_ok is False:
-                for line in par_why:
-                    failures += 1
-                    print("    parity: %s" % line)
-            elif par_ok is None:
-                for line in par_why:
-                    print("    parity: %s" % line)
             if cmt_ok is False:
                 for line in cmt_why:
                     failures += 1
