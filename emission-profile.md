@@ -662,10 +662,11 @@ corruption. **SHALL** = convention; deviating parses, but breaks house style.
 >
 > - **Rule 37 conflicts with a requirement.** `SKILL.md` rule 14 and the linter's `RM088`/`RM089`
 >   *require* a trailing comment disclosing the catalogue file behind every resolved reference —
->   2,105 such warnings on the catalogued corpus sweep when they are absent. `/ros-studio` also
->   preserves the author's own trailing comments in eleven `.rossystem` and eight `.ros2`
->   positions (`commands/ros-studio.md`); deleting them to satisfy this rule would be exactly the
->   silent loss the round-trip harness exists to prevent.
+>   2,105 such warnings on the catalogued corpus sweep when they are absent. `ros_studio.py`
+>   also preserves the author's own trailing comments in eleven `.rossystem` and eight `.ros2`
+>   positions (see the "Comments" policy block near the top of `scripts/ros_studio.py`); deleting
+>   them to satisfy this rule would be exactly the silent loss the round-trip harness exists to
+>   prevent.
 > - **Rule 36's "strictly shallower" is not safe.** A comment dedented to column 0 inside an
 >   indented block ends the model outright — `AbstractIndentationTokenSource` closes every open
 >   block and the server reports `missing EOF` (oracle case `19-neg-col0-comment`; `RM094`).

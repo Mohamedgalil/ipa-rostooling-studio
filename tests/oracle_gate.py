@@ -82,19 +82,12 @@ def main():
         check("default generate says the oracle did NOT run", "NOT RUN" in out, out[-400:])
         check("default generate says lint alone is not enough",
               "cannot catch everything" in out, out[-400:])
-        notice = os.path.splitext(proj)[0] + ".notice.html"
-        check("a notice page is written for the studio to show", os.path.isfile(notice))
-        if os.path.isfile(notice):
-            html = open(notice, encoding="utf-8").read()
-            check("the notice page carries the reason in its banner",
-                  "Real-server validation did NOT run" in html)
-            check("the notice page is titled as incomplete, NOT as a failed generation",
-                  '"bannerTitle": "Validation incomplete"' in html
-                  and '"bannerSev": "warn"' in html)
-        # ...and it is NOT written to <project>.error.html, which belongs to a real failure and
-        # would otherwise be overwritten by a run that generated perfectly well.
-        check("a clean-but-unvalidated run does not write .error.html",
-              not os.path.isfile(os.path.splitext(proj)[0] + ".error.html"))
+        # The reason is printed as a NOTE, not raised as an ERROR: the files ARE written and the
+        # lint DID pass, so this must read as incomplete validation, not a failed generation.
+        check("the reason is printed as a NOTE, carrying the reason",
+              "NOTE:" in out and "Real-server validation did NOT run" in out, out[-600:])
+        check("a clean-but-unvalidated run does not report an ERROR",
+              "\nERROR:" not in out, out[-400:])
 
         # ---- 3. --oracle means "I require it": not running it is an ERROR ------------------
         code, out = run([STUDIO, "generate", proj, "--outdir", os.path.join(work, "g2"),
@@ -104,10 +97,6 @@ def main():
               "--oracle was requested" in out, out[-400:])
 
         # ---- 4. --no-oracle is the deliberate opt-out, and is quiet ------------------------
-        # Clear the notice step 2 left behind, or "no notice was written" would be answered by
-        # the previous run's file rather than by this one.
-        if os.path.isfile(notice):
-            os.remove(notice)
         code, out = run([STUDIO, "generate", proj, "--outdir", os.path.join(work, "g3"),
                          "--no-oracle"], broken)
         check("--no-oracle exits 0", code == 0, "exit %d" % code)
@@ -116,8 +105,6 @@ def main():
         # substring check happily mistakes for the tool talking about the oracle.
         check("--no-oracle prints no oracle section",
               "--- oracle" not in out and "NOT RUN" not in out, out[-300:])
-        check("--no-oracle writes no notice page",
-              not os.path.isfile(os.path.splitext(proj)[0] + ".notice.html"))
 
         # ---- 4b. a JVM that starts but never answers is caught, and only ONE case is judged --
         # A stub `java` that reports 21 and then exits passes the preflight and gets as far as

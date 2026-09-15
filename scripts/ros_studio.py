@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ros_studio.py -- the Python companion for /ros-studio, an interactive authoring editor for
-RosTooling models. The editor itself is a self-contained vanilla-JS page (no network); this
-script owns everything the browser cannot: seeding a project from existing files,
-DETERMINISTIC file generation, and REAL validation against rosmodel_lint (always) and the
-language-server oracle (opt-in).
+ros_studio.py -- the deterministic generation and validation engine for RosTooling models.
+It seeds a project from existing files, DETERMINISTICALLY emits .ros2/.rossystem/.ros, and
+validates the result against rosmodel_lint (always) and the language-server oracle (opt-in).
+CoreSense Studio (scripts/studio_server.py) imports this module directly as its own generation
+and validation engine, so both it and this CLI emit through the same emitter and the same
+linter and can never disagree.
 
     ros_studio.py init [FILE.rossystem | DIR ...] [--out project.json] [--name NAME]
         Build a project.json. With a .rossystem argument, seed from it: reuse ros_plot's
@@ -18,11 +19,6 @@ language-server oracle (opt-in).
         labels renamed, a subSystems: reference to a system that is itself being merged
         collapsed onto it). With no argument, emit a blank project.
 
-    ros_studio.py render project.json [--out ros-studio.html] [--open]
-        Emit the self-contained editor HTML, with the three autocomplete datasets
-        (message/service/action types, package names, node catalogue) embedded so
-        autocomplete works offline.
-
     ros_studio.py generate project.json [--outdir DIR] [--oracle|--no-oracle] [--diff]
         Deterministically emit .ros2 / .rossystem / companion .ros (reusing rosmodel_lint's
         vocabulary), then run rosmodel_lint over the result.
@@ -31,25 +27,21 @@ language-server oracle (opt-in).
         dependencies are staged (collect_deps) and ask_oracle drives the jar. rosmodel_lint's
         RM rules are a deliberate approximation of the Xtext validator, so a run that consulted
         only them has not been fully checked -- and used to say nothing about that. If the jar
-        or a Java 19+ runtime is missing, the reason is reported on stdout, on stderr, AND in
-        the editor's own error surface (<project>.notice.html, whose banner opens on load);
-        the run still exits 0, because the files were written and the lint passed.
+        or a Java 19+ runtime is missing, the reason is reported on stdout and stderr; the run
+        still exits 0, because the files were written and the lint passed.
 
         --oracle REQUIRES the real server: not being able to run it is an error.
         --no-oracle skips it entirely and reports nothing about it.
 
-        On a generation/lint ERROR, or a rejection by the real server, re-render the editor with
-        the diagnostics injected onto the offending nodes (written next to the project as
-        <project>.error.html). With --diff, also print the model-level diff against the seed
-        source (see below).
+        On a generation/lint ERROR, or a rejection by the real server, the diagnostics are
+        printed and the command exits 1 (nothing is written on a generation-gate failure).
+        With --diff, also print the model-level diff against the seed source (see below).
 
     ros_studio.py diff project.json [--against FILE.rossystem] [--json]
         What changed since the seed. Compares the GENERATED model against the .rossystem the
         project was seeded from (project["seededFrom"]) at the MODEL level -- nodes,
         exposures, connections, parameters, artifacts, message specs -- not as text, because
         the emitter's fixed key order, quoting and sorting make a text diff unreadable.
-
-This SUPERSEDES /ros-plot for authoring; /ros-plot stays as the lightweight read-only path.
 """
 
 import argparse
@@ -315,7 +307,7 @@ def _merge_params(declared, exposed, nid):
 # rather than by line number, because a line number does not survive an edit and an element
 # identity does.
 #
-# POLICY (asserted by tests/studio_roundtrip.py, stated in commands/ros-studio.md):
+# POLICY (asserted by tests/studio_roundtrip.py, stated here):
 #   PRESERVED   a leading comment block attaches to the next modeled element; a trailing
 #               comment attaches to the element on its own line. Modeled elements are: the
 #               system, each subSystems: entry, each node, each exposure, each node-level
@@ -1813,7 +1805,8 @@ def _dropped_comment_diagnostics(dropped, limit=12):
     if not dropped:
         return []
     out = ["%d comment(s) could not be attached to a model element and will NOT be re-emitted "
-           "(see commands/ros-studio.md for which positions are preserved):" % len(dropped)]
+           "(see the comment policy near the top of this file for which positions are "
+           "preserved):" % len(dropped)]
     for item in dropped[:limit]:
         fname, line, what, text = item
         where = "%s:%d" % (fname, line) if line else fname
@@ -1953,8 +1946,8 @@ def _catalogue_packages():
     assets/roscommonobjects/ for the oracle run: two Package_Impl entries with one name, which
     makes every '<name>/msg/<Type>' qualified name ambiguous (RM009).
 
-    Read off the entries that carry a `file`, which is exactly the map render_editor embeds as
-    DATA.typeFiles -- so the page's companionTypes() cannot disagree with this about which
+    Read off the entries that carry a `file`, which is exactly what load_autocomplete()'s
+    typeFiles map exposes -- so a consumer of that map cannot disagree with this about which
     packages the project owns."""
     idx = L.load_type_index() or {}
     return {k.split("/")[0] for k in idx if "/" in k and (idx[k] or {}).get("file")}
@@ -3486,90 +3479,6 @@ def load_autocomplete():
 # Editor HTML
 # ========================================================================================
 
-def render_editor(project, diagnostics=None, banner=None, banner_title=None,
-                  banner_sev=None):
-    ac = load_autocomplete()
-    if diagnostics:
-        project = dict(project)
-        project["diagnostics"] = diagnostics
-    # The seed's fact tree travels WITH the page so the Commit modal can answer "what have I
-    # changed" offline: the editor rebuilds the after-side from the live project (projectFacts,
-    # the mirror of project_facts) and diffs against this. Absent when the project was created
-    # blank or the source has since moved -- the tab then says which, rather than showing an
-    # empty diff that would read as "nothing changed".
-    seeds = seed_sources(project)
-    recorded = project.get("seededFromAll") or (
-        [project["seededFrom"]] if project.get("seededFrom") else [])
-    seed_facts = merged_source_facts(seeds) if seeds else None
-    seed_note = None
-    if not recorded:
-        seed_note = "this project was not seeded from a .rossystem, so there is no source to " \
-                    "compare against."
-    elif not seeds:
-        seed_note = "the seed source is no longer where the project recorded it (%s)." \
-                    % ", ".join(recorded)
-    payload = {
-        "project": project,
-        "seedFacts": seed_facts,
-        "seedNote": seed_note,
-        "seedFrom": [os.path.basename(p) for p in (seeds or recorded)],
-        "seedMerged": len(seeds) > 1,
-        "types": ac["types"],
-        "typeFiles": ac.get("typeFiles", {}),
-        "packages": ac["packages"],
-        "catalogue": ac["catalogue"],
-        "catalogueTypes": ac.get("catalogueTypes", {}),
-        "systems": ac.get("systems", {}),
-        "kindOrder": ARROW_KINDS,
-        "kindLabels": {k: C.KIND_LABELS[k] for k in ARROW_KINDS},
-        "blocks": {k: C.KIND_TO_BLOCK[k] for k in ARROW_KINDS},
-        # The QoS vocabulary the editor offers comes from the LINTER's tables, not from a
-        # hand-copy in the page: the control can then never offer a field or a value that
-        # rosmodel_lint would reject, and its inline severities mirror the rules directly
-        # (RM031 info / RM034 warning / RM035 error).
-        "qos": {
-            "fields": L.QOS_PINNED,
-            "enums": QOS_UI_ENUMS,
-            "newer": L.QOS_NEWER,
-            "discouraged": L.QOS_DISCOURAGED,
-            "durations": list(QOS_DURATIONS),
-            "int32Min": L.INT32_MIN,
-            "int32Max": L.INT32_MAX,
-        },
-        "typeSegBlocks": C.TYPE_SEG_TO_ROS_BLOCK,
-        # The .ros vocabulary, again taken from the LINTER's tables rather than hand-copied
-        # into the page: the field editor can then never offer a type rosmodel_lint would
-        # reject, and its inline severities mirror RM074/RM075/RM077 directly. `arrays` is
-        # NOT derived from `scalars` -- time, duration and Header have no array rule, so
-        # 'time[]' is a parse error (Basics.xtext:212 lists exactly fourteen).
-        "ros": {
-            "blocks": L.ROS_SPEC_BLOCKS,
-            "bodies": L.ROS_SPEC_BODIES,
-            "scalars": L.ROS_SCALAR_TYPES,
-            "arrays": L.ROS_ARRAY_TYPES,
-            "nameKeywords": sorted(L.ROS_FIELD_NAME_KEYWORDS),
-        },
-        "banner": banner,
-        # Not every banner is a failed generation. An oracle that could not RUN leaves the
-        # generated files valid and the lint clean -- calling that "Generation failed" in the
-        # status chip is simply untrue, and a page that overstates one thing gets believed less
-        # about the next. The companion says which kind it is; the page stops guessing.
-        "bannerTitle": banner_title,
-        "bannerSev": banner_sev,
-        "acWarnings": ac["warnings"],
-    }
-    data = json.dumps(payload, ensure_ascii=False)
-    return (_EDITOR_TEMPLATE
-            .replace("/*__THEME_BOOT__*/", C.THEME_BOOT_JS)
-            .replace("/*__PALETTE_CSS__*/", C.PALETTE_CSS)
-            .replace("/*__JS_PRIMITIVES__*/", C.JS_PRIMITIVES)
-            .replace("/*__DATA__*/null", data)), ac["warnings"]
-
-
-# The editor template lives in a sibling module string to keep this file readable.
-from _studio_editor import EDITOR_TEMPLATE as _EDITOR_TEMPLATE  # noqa: E402
-
-
 # ========================================================================================
 # CLI
 # ========================================================================================
@@ -3617,21 +3526,6 @@ def cmd_init(args):
         print("ros_studio: seeding %s recovered ZERO nodes — the file may be malformed or "
               "empty. Wrote a project with no nodes." % seed_failed, file=sys.stderr)
         return 1
-    return 0
-
-
-def cmd_render(args):
-    project = _load_project(args.project)
-    html, warnings = render_editor(project)
-    out = os.path.abspath(args.out or os.path.join(
-        os.path.dirname(os.path.abspath(args.project)), "ros-studio.html"))
-    with open(out, "w", encoding="utf-8") as handle:
-        handle.write(html)
-    print(out)
-    for w in warnings:
-        print("  autocomplete: %s" % w, file=sys.stderr)
-    if args.open_after:
-        ros_plot._open_file(out)
     return 0
 
 
@@ -3716,14 +3610,8 @@ def cmd_generate(args):
             for m in msgs:
                 print("  GATE %s" % m)
         n_errs = len(gate["global"]) + sum(len(v) for v in gate["byNode"].values())
-        html, _ = render_editor(project, diagnostics=gate,
-                                banner="Generation blocked: %d issue(s) the language server "
-                                       "would reject — see the flagged nodes." % n_errs)
-        err_html = os.path.splitext(os.path.abspath(args.project))[0] + ".error.html"
-        with open(err_html, "w", encoding="utf-8") as handle:
-            handle.write(html)
-        print("\nERROR: generation refused (nothing written); re-rendered editor with "
-              "diagnostics -> %s" % err_html)
+        print("\nERROR: generation refused (nothing written): %d issue(s) the language "
+              "server would reject." % n_errs)
         return 1
 
     os.makedirs(outdir, exist_ok=True)
@@ -3751,15 +3639,7 @@ def cmd_generate(args):
                  f.line, f.rule, f.message))
 
     if errs:
-        # re-render the editor with diagnostics injected onto nodes
-        diag = _diagnostics_for_project(project, findings, files)
-        html, _ = render_editor(project, diagnostics=diag,
-                                banner="Generation produced %d error(s) — see the flagged "
-                                       "nodes." % len(errs))
-        err_html = os.path.splitext(os.path.abspath(args.project))[0] + ".error.html"
-        with open(err_html, "w", encoding="utf-8") as handle:
-            handle.write(html)
-        print("\nERROR: re-rendered editor with diagnostics -> %s" % err_html)
+        print("\nERROR: generation produced %d error(s)." % len(errs))
         return 1
 
     if getattr(args, "diff", False):
@@ -3829,9 +3709,8 @@ def cmd_generate(args):
                     title, msg = ("Validation did not complete",
                                   "the real language server did not complete "
                                   "(no diagnostics returned)")
-                err_html = _write_error_html(project, args.project, banner, diagnostics=odiag,
-                                             title=title, sev="err")
-                print("\nERROR: %s; re-rendered editor -> %s" % (msg, err_html), file=sys.stderr)
+                print("\n%s\n" % banner, file=sys.stderr)
+                print("ERROR: %s" % msg, file=sys.stderr)
                 return 1
             # ACCEPTED, but the server may still have said something. Oracle WARNINGs were
             # computed and then dropped on the floor here -- odiag was only ever consumed on the
@@ -3840,21 +3719,13 @@ def cmd_generate(args):
             # jar-failure notice exists to close, one branch over.
             n_warn = sum(len(v) for v in odiag["byNode"].values()) + len(odiag["global"])
             if n_warn:
-                note = _write_error_html(
-                    project, args.project,
-                    "The real language server ACCEPTED this model, with %d warning(s).\n\n"
-                    "They are on the flagged nodes. Warnings are not errors — nothing is "
-                    "blocked — but they come from the authority, not from the approximate "
-                    "RM rules, so they are worth reading.\n\n%s"
-                    % (n_warn, "\n".join(odiag["global"])),
-                    diagnostics=odiag, title="Accepted, with warnings", sev="warn",
-                    suffix=".notice.html")
-                print("\nNOTE: %d oracle warning(s); re-rendered editor -> %s" % (n_warn, note))
+                print("\nNOTE: the real language server ACCEPTED this model, with %d "
+                      "warning(s). Warnings are not errors — nothing is blocked — but they "
+                      "come from the authority, not from the approximate RM rules, so they "
+                      "are worth reading.\n%s" % (n_warn, "\n".join(odiag["global"])))
         else:
-            # NOT silent, and not a bare stack trace. The user's words were "if the jar is not
-            # runnable I want a clear error in the studio"; the console alone is not the studio,
-            # so this also goes into the page's own error surface via `banner`, which
-            # buildStatus() turns red and which the page auto-opens on load.
+            # NOT silent, and not a bare stack trace: printed plainly, on both the "--- oracle
+            # ---" section above and (if the caller required it) as an explicit ERROR below.
             oracle_note = (
                 "Real-server validation did NOT run.\n\n%s\n\n"
                 "What that means: the results below come only from rosmodel_lint's RM rules, "
@@ -3873,36 +3744,15 @@ def cmd_generate(args):
                 # degradation to be shrugged off.
                 print("\nERROR: --oracle was requested but the real language server could not "
                       "be run.", file=sys.stderr)
-                _write_error_html(project, args.project, oracle_note,
-                                  title="Validation could not run", sev="err")
+                print(oracle_note, file=sys.stderr)
                 return 1
 
     # A jar that could not run is a warning, not a failed generation: the files ARE written and
-    # the lint DID pass. But the page must say so, or "validated" silently means "half
-    # validated" -- so the editor is re-rendered with the notice even on an otherwise clean run.
+    # the lint DID pass. But it must be said loudly, or "validated" silently means "half
+    # validated".
     if oracle_note:
-        note_html = _write_error_html(project, args.project, oracle_note,
-                                      title="Validation incomplete", sev="warn",
-                                      suffix=".notice.html")
-        print("\nNOTE: re-rendered the editor carrying this notice -> %s" % note_html)
+        print("\nNOTE: %s" % oracle_note)
     return 0
-
-
-def _write_error_html(project, project_path, banner, diagnostics=None,
-                      title=None, sev=None, suffix=".error.html"):
-    """Re-render the editor beside the project with a banner it will show on load.
-
-    `suffix` exists because not every one of these is an error. A run whose files were written
-    and whose lint was clean, but which could not reach the real language server, is a NOTICE --
-    writing that to `<project>.error.html` would be a file whose own name misreports it, and
-    would also overwrite the genuine error page from a previous failing run.
-    """
-    html, _ = render_editor(project, diagnostics=diagnostics, banner=banner,
-                            banner_title=title, banner_sev=sev)
-    path = os.path.splitext(os.path.abspath(project_path))[0] + suffix
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(html)
-    return path
 
 
 def _generated_facts(project):
@@ -3949,8 +3799,8 @@ def _diff_report(project, against=None):
     after = _generated_facts(project)
     predicted = diff_facts(project_facts(project), after)
     if predicted:
-        notes.append("project_facts() and the generated files disagree in %d place(s) — the "
-                     "editor's preview of this diff will differ from the report below. This "
+        notes.append("project_facts() and the generated files disagree in %d place(s) — a "
+                     "predicted diff will differ from the report below. This "
                      "is an emitter/predictor bug, not an edit: %s"
                      % (len(predicted), "; ".join(r["path"] for r in predicted[:6])))
     records = diff_facts(before, after)
@@ -3977,39 +3827,6 @@ def cmd_diff(args):
     return 0
 
 
-def _diagnostics_for_project(project, findings, files):
-    """Map linter findings back to project node ids by matching the offending node label /
-    package in the generated file the finding came from. Best-effort surface for the editor."""
-    by_node = {}
-    labels = {n["label"]: n["id"] for n in project["nodes"]}
-    pkgs = {}
-    for n in project["nodes"]:
-        if n["pkg"]:
-            pkgs.setdefault(n["pkg"], []).append(n["id"])
-    unmatched = []
-    for f in findings:
-        if f.severity not in (L.ERROR, L.WARNING):
-            continue
-        msg = "%s %s (%s:%s)" % (f.rule, f.message, os.path.basename(
-            f.file or ""), f.line)
-        hits = []
-        for lbl, nid_ in labels.items():
-            if lbl and lbl in f.message:
-                hits = [nid_]
-                break
-        if not hits:
-            for pkg, ids in pkgs.items():
-                if pkg and pkg in f.message:
-                    hits = ids
-                    break
-        if hits:
-            for nid_ in hits:
-                by_node.setdefault(nid_, []).append(msg)
-        elif f.severity == L.ERROR:
-            unmatched.append(msg)
-    return {"global": unmatched, "byNode": by_node}
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="ros_studio.py", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -4024,12 +3841,6 @@ def main(argv=None):
                         help="system name for the seeded project (a merge otherwise adopts "
                              "the first source's)")
     p_init.set_defaults(func=cmd_init)
-
-    p_render = sub.add_parser("render", help="emit the self-contained editor HTML")
-    p_render.add_argument("project")
-    p_render.add_argument("--out", default=None)
-    p_render.add_argument("--open", dest="open_after", action="store_true")
-    p_render.set_defaults(func=cmd_render)
 
     p_gen = sub.add_parser("generate", help="emit files, lint, optionally ask the oracle")
     p_gen.add_argument("project")
@@ -4063,28 +3874,8 @@ def main(argv=None):
     # convenience: `ros_studio.py --json project.json` dumps generated files without writing
     parser.add_argument("--json", metavar="PROJECT", default=None,
                         help="print generated files as JSON for PROJECT and exit")
-    # Parity hooks. tests/studio_parity.js holds the editor's projectFacts() to --facts and its
-    # "changed since the seed" tab to --preview-diff; `diff` itself reports whether --facts and
-    # the files `generate` actually writes agree.
-    parser.add_argument("--facts", metavar="PROJECT", default=None,
-                        help="print the project's fact tree as JSON and exit")
-    parser.add_argument("--preview-diff", metavar="PROJECT", dest="preview_diff", default=None,
-                        help="print the diff the EDITOR previews (predicted, not generated) "
-                             "and exit")
 
     args = parser.parse_args(argv)
-    if getattr(args, "facts", None) and not getattr(args, "cmd", None):
-        print(json.dumps(project_facts(_load_project(args.facts)), indent=2,
-                         ensure_ascii=False, sort_keys=True))
-        return 0
-    if getattr(args, "preview_diff", None) and not getattr(args, "cmd", None):
-        project = _load_project(args.preview_diff)
-        seeds = seed_sources(project)
-        if not seeds:
-            print("no seed source recorded.")
-            return 0
-        print(format_diff(diff_facts(merged_source_facts(seeds), project_facts(project))))
-        return 0
     if args.json and not getattr(args, "cmd", None):
         project = _load_project(args.json)
         print(json.dumps(generate_files(project), indent=2, ensure_ascii=False))

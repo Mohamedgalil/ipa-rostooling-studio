@@ -23,7 +23,7 @@ Read this before anything else, because both are called "studio" and they are no
 
 | | What it is | Start it with |
 |---|---|---|
-| **The plugin** (everything below) | A Claude Code plugin: skill, linter, hooks, language servers, and `/ros-studio` — a **self-contained `file://` HTML editor** with no server and no network. | `/plugin install`, or `py scripts/ros_studio.py …` |
+| **The plugin** (everything below) | A Claude Code plugin: skill, linter, hooks, language servers, `/ros-plot` (a self-contained, read-only `.rossystem` viewer), and `ros_studio.py`, the deterministic generation/validation engine CoreSense Studio itself is built on. | `/plugin install`, or `py scripts/ros_studio.py …` |
 | **CoreSense Studio** | A **local HTTP service** with a project store on disk, a React front end, linked ROS 2 source repositories, and model checking. | `python scripts/studio_server.py --storage-root ~/ros-studio --port 0` |
 
 CoreSense Studio covers the project brief, the Architecture model graph, extracting components
@@ -148,7 +148,6 @@ reports 19+.
 hooks/hooks.json                PostToolUse linter for .ros2 and .rossystem (auto-discovered)
 commands/update-ros-catalog.md  slash command: refresh popular-ROS-packages reference (cheap agent)
 commands/ros-plot.md            slash command: render .rossystem models as one interactive HTML file (read-only)
-commands/ros-studio.md          slash command: interactive AUTHORING editor + deterministic generate/validate
 agents/ros-modeler.md           subagent, preloads the ros-model skill
 skills/ros-model/
   SKILL.md                      entry point: decision tree, hard rules, self-check
@@ -157,9 +156,8 @@ skills/ros-model/
   references/worked-examples.md  3 full transformations, failure catalogue, source-defect policy
 scripts/rosmodel_lint.py        static linter, 81 rules (.ros / .ros2 / .rossystem)
 scripts/ros_plot.py             /ros-plot backend: .rossystem -> self-contained interactive HTML (read-only)
-scripts/ros_studio.py           /ros-studio backend: init (seed) / render (editor HTML) / generate (+ lint, oracle)
+scripts/ros_studio.py           deterministic engine: init (seed) / generate (emit + lint, oracle) / diff
 scripts/_studio_common.py       shared HTML/CSS/JS primitives + emit vocabulary (imported by both ros_plot and ros_studio)
-scripts/_studio_editor.py       the /ros-studio editor page as one raw-string template
 scripts/README.md               rule reference + deviations + test evidence
 scripts/studio_server.py        CoreSense Studio: the local HTTP service (routes live in _route)
 scripts/studio_store.py         its project store: projects, revisions, evidence, recovery
@@ -170,8 +168,7 @@ scripts/studio_catalogue.py     the reusable component catalogue
 web/studio/                     its front end: plain scripts + a built React bundle (dist/)
 docs/coresense-studio.md        CoreSense Studio documentation — start here for the web app
 tests/roundtrip.py              semantic round-trip harness
-tests/studio_roundtrip.py       /ros-studio seed -> generate: round-trip, orphan gate, JS/Python parity
-tests/studio_parity.js          the editor's .rossystem preview vs the Python emitter, byte for byte
+tests/studio_roundtrip.py       ros_studio.py seed -> generate: round-trip, orphan gate, planted-field checks
 tests/fixtures/manifest.md      fixture inventory
 tests/regenerated/              adversarial regeneration outputs (4 corpus targets)
 tests/oracle/ask_oracle.py      drives the REAL language servers; 25 cases
@@ -253,18 +250,12 @@ py -3 scripts/rosmodel_lint.py out/my_pkg.ros2 out/my_system.rossystem
 py -3 tests/roundtrip.py compare corpus/my_pkg.ros2 out/my_pkg.ros2
 ```
 
-## /ros-studio — the authoring editor (supersedes /ros-plot for authoring)
+## ros_studio.py — deterministic generation and validation
 
-`/ros-plot` **reads** a `.rossystem`; `/ros-studio` **builds** one. The editor is the same kind of
-self-contained, no-network HTML page, but interactive: draggable nodes with kind-coloured ports, an
-inspector, connection drawing with live legality, a node catalogue, offline autocomplete, and a
-View ⇄ Edit toggle that also carries `/ros-plot`'s four read-only abstraction levels (System │
-Interfaces │ Full │ Deps). `/ros-plot` is **not** removed — it stays as the lightweight read-only
-path. Both share one primitives module (`scripts/_studio_common.py`: the palette + seven kind
-colours, the SVG arrowhead marker, the bezier edge, pointer-capture drag, theme toggle, grid layout)
-so the viewer and the editor can never drift.
-
-The browser only authors an in-memory project; the Python companion owns generation and validation:
+`/ros-plot` **reads** a `.rossystem`, read-only. `ros_studio.py` is the deterministic generation
+and validation engine underneath CoreSense Studio (see above) — it seeds a `project.json`, emits
+`.ros2` / `.rossystem` / companion `.ros` files from it, and validates the result. It has no UI of
+its own; CoreSense Studio is the interface for authoring and checking a model.
 
 ```bash
 # seed a project.json from an existing system (interface types from the sibling .ros2, message
@@ -275,10 +266,7 @@ py scripts/ros_studio.py init path/to/system.rossystem --out project.json
 py scripts/ros_studio.py init path/to/models/ --out project.json --name combined
 # ...or start blank:  py scripts/ros_studio.py init --out project.json
 
-# render the editor (autocomplete data embedded; does NOT auto-open — add --open if you want it)
-py scripts/ros_studio.py render project.json --out ros-studio.html
-
-# author in the browser, hit Commit (downloads project.json), then generate + validate:
+# emit + validate:
 py scripts/ros_studio.py generate project.json --outdir generated              # emits, lints, and asks
                                                                                # the real language server
                                                                                # when Java 19+ and the jar
@@ -287,27 +275,19 @@ py scripts/ros_studio.py generate project.json --outdir generated              #
 py scripts/ros_studio.py generate project.json --outdir generated --oracle     # REQUIRE the real server:
                                                                                # fail if it cannot be run
 py scripts/ros_studio.py generate project.json --outdir generated --no-oracle  # RM rules only, no report
-```
 
-Because Commit is a manual download, the page also holds the session itself: every mutating action
-snapshots the project onto a 50-deep undo stack (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y, with a burst of
-keystrokes in one field coalesced into one entry), the project is autosaved to `localStorage` under
-the system name, and closing the tab with work not yet committed asks first. A stored autosave is
-never applied silently: on load the page names it, shows both it and the seeded project, and makes
-you choose. `tests/studio_parity.js` (wired into `tests/studio_roundtrip.py`) keeps the editor's
-`.rossystem`, `.ros2` and `.ros` previews byte-identical to the Python emitters by pulling the
-shipped functions out of the *rendered* page and diffing. That last one matters because message
-FIELDS are authored only in the page: a spec whose body silently comes back empty parses, lints
-clean (RM080 is an INFO) and generates clean.
+# what changed since the seed, at the model level (nodes, exposures, connections, parameters):
+py scripts/ros_studio.py diff project.json
+```
 
 `generate` emits `.ros2` / `.rossystem` / companion `.ros` **deterministically** from the linter's
 own grammar vocabulary (block names, arrow pairs, quoting), always runs `rosmodel_lint`, and with
-`--oracle` stages catalogue dependencies (`collect_deps`) and asks the real server (`ask_oracle`). On
-a lint ERROR it re-renders the editor with the diagnostics injected onto the offending nodes as
-`<project>.error.html` and exits non-zero. The three autocomplete datasets come from
-`assets/type_index.json` (message/service/action types), `assets/node_index.json` +
-`references/popular-ros-packages.md` (package names) and `assets/node_index.json` (the node
-catalogue); each is guarded, so a stripped install still runs (autocomplete just narrows).
+`--oracle` stages catalogue dependencies (`collect_deps`) and asks the real server (`ask_oracle`).
+On a generation-gate or lint ERROR nothing is written and the diagnostics are printed; on an oracle
+rejection or an incomplete validation the reason is printed as a `NOTE` or `ERROR` on stdout/stderr
+rather than as a side file. CoreSense Studio imports this same module directly (`generate_files`,
+`validate_project`, `run_lint`, …), so the web app and this CLI can never disagree about what a
+model means.
 
 ---
 

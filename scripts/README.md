@@ -19,10 +19,11 @@ starting a JVM that dies inside itself and surfacing 45 seconds later as a timed
 handshake (`NO_INITIALIZE_RESPONSE`). `ROSMODEL_JAVA` now also falls back to `java` on **PATH**,
 as `.lsp.json` always did, before the hard-coded Adoptium path. `generate` runs the oracle **by
 default** when the preflight passes, `--no-oracle` opts out, `--oracle` makes it mandatory, and a
-jar that cannot run is reported on stdout, on stderr and in the Studio itself (a
-`<project>.notice.html` whose banner opens on load). `tests/oracle_gate.py` pins that whole failure
-path and needs no working jar to do it — it points `ROSMODEL_JAVA` at a nonexistent path, which is
-reproducible anywhere. See `commands/ros-studio.md` § *Validation* for the full rationale.
+jar that cannot run is reported loudly on stdout and stderr as a `NOTE` (or, with `--oracle`, an
+`ERROR`) rather than passing quietly. `tests/oracle_gate.py` pins that whole failure path and needs
+no working jar to do it — it points `ROSMODEL_JAVA` at a nonexistent path, which is reproducible
+anywhere. See the "oracle (real language server)" section of `ros_studio.py`'s `cmd_generate` for
+the full rationale.
 
 There is now a third caller besides the hook and `ros_studio.py generate`: **CoreSense Studio**,
 the local web app (`scripts/studio_server.py`, documented in
