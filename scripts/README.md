@@ -5,9 +5,32 @@ Work item **E1**, CoreSense x Humanoid (Fraunhofer IPA).
 A standalone Python checker for RosTooling model files. It accepts **`.ros`, `.ros2` and
 `.rossystem`**.
 
-It is no longer the *only* feedback available — Java 21 is installed and `tests/oracle/ask_oracle.py`
-drives the real language servers for `.ros`, `.ros2` and (since a `.rossystem` server was built
-locally) `.rossystem` too. The linter's role is now to give **fast, single-file, offline** feedback
+It is no longer the *only* feedback available — `tests/oracle/ask_oracle.py` drives the real
+language servers for `.ros`, `.ros2` and (since a `.rossystem` server was built locally)
+`.rossystem` too. **That needs a Java 21 runtime**: the jars are Java 21 bytecode and fail with
+`UnsupportedClassVersionError` on anything older, so check `java -version` and set `ROSMODEL_JAVA`
+if the default is older. Where no Java 21 is available the linter is the only check, and output
+must be described as linter-checked rather than oracle-validated.
+
+**You no longer have to check that by hand, and `ros_studio.py generate` no longer lets it pass
+quietly.** `ask_oracle.py --preflight` parses `java -version` and reports the real reason the
+oracle cannot run — *"…is Java 11, but the language server jar needs Java 19+"* — instead of
+starting a JVM that dies inside itself and surfacing 45 seconds later as a timed-out LSP
+handshake (`NO_INITIALIZE_RESPONSE`). `ROSMODEL_JAVA` now also falls back to `java` on **PATH**,
+as `.lsp.json` always did, before the hard-coded Adoptium path. `generate` runs the oracle **by
+default** when the preflight passes, `--no-oracle` opts out, `--oracle` makes it mandatory, and a
+jar that cannot run is reported on stdout, on stderr and in the Studio itself (a
+`<project>.notice.html` whose banner opens on load). `tests/oracle_gate.py` pins that whole failure
+path and needs no working jar to do it — it points `ROSMODEL_JAVA` at a nonexistent path, which is
+reproducible anywhere. See `commands/ros-studio.md` § *Validation* for the full rationale.
+
+There is now a third caller besides the hook and `ros_studio.py generate`: **CoreSense Studio**,
+the local web app (`scripts/studio_server.py`, documented in
+[`docs/coresense-studio.md`](../docs/coresense-studio.md)). Its "Check model" runs the generation
+gate, then this linter over the freshly generated files, then the oracle when Java allows — the
+same three stages, reported as three rows in the browser. Nothing about the rules below changes.
+
+The linter's role is now to give **fast, single-file, offline** feedback
 in the edit loop, and to cover the checks the oracle cannot make (house style, rossdl
 compatibility, provenance sentinels). Where the two disagree, **the oracle wins** — every ERROR in
 this table has been confirmed against it.
@@ -222,6 +245,7 @@ accepts both `'` and `"`, so the difference vanishes at parse time.
 | `RM044` | WARNING | Zero-corpus-support construct (`dependencies:`, `ns:`, `namespace:`) | profile §3 |
 | `RM045` | WARNING | `Struct` / `List` / `Base64` parameter type | grammar-subset §5.4, profile §3 |
 | `RM046` | INFO | `Array [` with a space before the bracket | profile rule 17 |
+| `RM095` | WARNING (`.ros2`) / ERROR (`.rossystem`) | Parameter value is a quoted string shaped like `[...]`/`{...}` instead of a real list | `CheckParameterValue` (validator-rules §2.6), added 2026-09-03 (**silent corruption**) |
 
 ### `.rossystem` structure
 
@@ -238,13 +262,15 @@ accepts both `'` and `"`, so the difference vanishes at parse time.
 | `RM058` | ERROR | Duplicate interface local name **within one node** | profile rule 28 |
 | `RM059` | WARNING | Top-level block order | profile rule 25 |
 | `RM060` | ERROR | Connection is not a 2-element list | `RosSystem.xtext:126-127`, validator-rules §3.4 |
-| `RM061` | WARNING | `subSystems:` used | profile §3, validator-rules §3.5 |
+| `RM061` | INFO | `subSystems:` used — demoted from WARNING 2026-09-03; the reuse checks RM090-RM093 apply, but presence alone is not a defect and must not be read as a reason to omit a requested subsystem (SKILL.md §8d) | profile §3, validator-rules §3.5 |
 | `RM062` | WARNING | `/` in a `.rossystem` node name | rossdl launch generation |
 | `RM063` | WARNING | `processes:` used | profile §3 |
 | `RM064` | INFO | Connected interfaces have differing trailing names | `MatchPortMsgs` (S5), advisory only |
 | `RM065` | WARNING | Connection endpoint name is owned by several nodes | profile rule 28 |
 | `RM066` | INFO | `fromFile:` contains the `TODO` placeholder sentinel | rossystem-syntax §2 derivation ladder (exercised by `tests/oracle/cases/tb3-fresh/`) |
 | `RM067` | INFO | Uppercase in a `.rossystem` node **label** | house style only — no validator |
+| `RM096` | WARNING | Non-sentinel `fromFile:` with no `# caller-supplied` / `# on disk:` provenance comment on the same line (files under `assets/rosmodelscatalog/` exempt) | SKILL.md rule 5, added 2026-09-03 |
+| `RM097` | WARNING (INFO when all closed) | Items the extractors could not read that are still open — counts `# FLAG`/`# OPEN`/`# UNRESOLVED`, and reports them against the `# EXTRACTOR-FLAGS: N` stamp the scripts write, so the original count survives any rewording | SKILL.md "Converting real source" + §8e, self-check 18 |
 
 `RM051` enforces the only three legal pairings, with `from` always the server/publisher side:
 
@@ -327,10 +353,144 @@ case — same `from:`, different label, possibly two genuine instances rather th
 | `build_node_index.py` | Rebuilds `assets/node_index.json` and `references/node-catalogue.md` from `assets/rosmodelscatalog/`. Run after `sync_catalogue.sh` changes anything. |
 | `collect_deps.py <model>... <case-dir>` | Lints the given model(s) with the catalogue enabled and copies every file their RM083/RM087 findings named into `<case-dir>` — the automated replacement for hand-copying `tests/oracle/cases/_deps/` files. |
 | `sync_catalogue.sh` | Re-copies both vendored catalogues from the local `material/code` checkouts, diffs against the vendored copy, and reports what changed. Does **not** rebuild the indexes or update `PROVENANCE.md` itself — both are printed as next steps when it detects a change. |
+| `extract_ros2_interfaces.py <path>... -o DIR` | **Phase 1** — turns raw ROS 2 source into draft `.ros2` node-interface models, deterministically — no LLM. See below. |
+| `extract_rossystem.py <launch>... --models DIR -o F` | **Phase 2** — turns ROS 2 launch files into a draft `.rossystem`. See below. |
+
+### `extract_ros2_interfaces.py` — source → draft `.ros2`
+
+```bash
+python extract_ros2_interfaces.py <ros2-package-or-workspace> -o ros_model_draft --json record.json
+```
+
+Walks every `package.xml` under the given paths, decides the language **per file** (`.py` vs
+`.cpp`/`.hpp`/`.cc`; `package.xml`'s `<build_type>` is only a hint, because a package can be
+mixed), and emits one `.ros2` per package named after the **declared** package name, per
+SKILL.md's output-layout rule.
+
+- **Python** is read with the stdlib `ast` module: `create_publisher`, `create_subscription`,
+  `create_service`, `create_client`, `ActionServer`/`ActionClient`, `declare_parameter` and
+  `declare_parameters`. Message classes are resolved through the file's own
+  `from pkg.msg import Type` imports (aliases included) and through `pkg.msg.Type` attribute
+  chains. Node names come from `super().__init__("name")`.
+- **C++** is read with **tree-sitter-cpp** (`pip install tree_sitter tree_sitter_cpp`), not
+  regex: the same six call kinds plus `rclcpp_action::create_server`/`create_client`, reading
+  the template argument for the type and the first pure string-literal argument for the name.
+  `using X = a::b::C;` / `typedef` aliases are collected package-wide, so
+  `create_publisher<RobotStatus_Msg>` resolves. Node names come from a
+  `class X : public rclcpp::Node` constructor's `Node("name")` initialiser.
+- **Types** resolve against `assets/type_index.json` first (the resolved vendored file is named
+  in a trailing comment, per SKILL.md §8c); then against `.msg`/`.srv`/`.action` files found in
+  the scanned tree (emitted as `# project-local, defined by …`); otherwise the reference is kept
+  and marked with a `# TODO unresolved:` comment rather than guessed.
+- **`generate_parameter_library`** is a real declaration source, not a gap. When `CMakeLists.txt`
+  names a params YAML, it is parsed and its parameters emitted with their declared types and
+  `default_value`s. Dynamic `__map_*` groups, whose real names are built at runtime from another
+  parameter's value, are flagged instead. (`custom_joint_trajectory_controller` declares nothing
+  via `declare_parameter()`; this recovers 16 real parameters it would otherwise be missing.)
+- **`--emit-msgs DIR`** writes a companion `.ros` per project-local message package the models
+  reference, transcribed from the package's own `.msg`/`.srv`/`.action` files, following
+  message-to-message references to closure. Without it, a model referencing project-local types
+  is **not loadable on its own** — an unresolved `type:` is a linking-layer ERROR. Per-field
+  defaults and bounded arrays have no `.ros` form and are dropped with a report (SKILL.md §8b).
+- **Package, artifact and node stay three distinct names** (SKILL.md §2a). The artifact is the
+  *build target* — `add_executable(...)`/`add_library(...)` in `CMakeLists.txt` (with
+  `${PROJECT_NAME}` resolved) or a `console_scripts` entry in `setup.py` — and the node is the
+  literal name the source constructs. Deriving the artifact from the node name instead collapses
+  two of the three, which is exactly what rule 2a warns against.
+- **A source-declared default is emitted as `default:`, not `value:`.** A compiled-in
+  `declare_parameter()` or `generate_parameter_library` default *is* a default (SKILL.md rule 9,
+  where `default:` is a member of `ParameterType` and sits immediately after `type:`), and this
+  leaves `value:` free for the deployed value, which belongs in the `.rossystem`.
+- **An empty-list default omits the slot** rather than writing `value: "[]"`. The list production
+  needs at least one element, so `[]` is a parse error and a quoted `"[]"` is a `ParameterString`
+  — i.e. a lie the linter flags as RM095. `default:` is optional, so saying nothing is the honest
+  form; the parameter is still declared, with a comment explaining why it has no default.
+- **A computed name is flagged with its evidence, never resolved.** When a topic name is built
+  from literals plus one identifier that is a constructor parameter, the flag reports the literal
+  values every *visible* construction site passes and the candidate names they produce — as
+  evidence, explicitly not as a declaration. Deciding whether the visible sites are all of them
+  is a completeness claim a per-package parser cannot make, and emitting a plausible subset would
+  turn a visible unknown into an invisible one.
+
+**Nothing is guessed.** A declaration is emitted only when its name *and* its type are literal in
+the source. A topic built from a parameter, an f-string, `get_name() + "/…"`, string
+concatenation or a launch-time remap becomes a wrapped `# FLAG` comment in the file header —
+kind, reason, `file:line`, and the source expression — for a human or an LLM to resolve. Header
+comments sit at column 0 *above* the model, so they never trip RM094.
+
+The generated files are passed through `rosmodel_lint.py` automatically (`--no-lint` to skip);
+a non-zero exit means a generated file has a lint ERROR.
+
+Two things it deliberately does **not** do:
+
+- **No `.rossystem`.** Inferring `connections:`/`subSystems:` needs cross-package topic matching
+  and architectural judgement, which is exactly what this script refuses to do. Phase 2 or a
+  manual/LLM step.
+- **No launch-file or config merging.** Node names overridden by `launch_ros`'s `name=`,
+  parameters set in a `controllers.yaml`, and controller instances spawned by
+  `controller_manager` are all invisible to a source-only reader. When a package's ROS calls sit
+  on a `get_node()` handle or an injected node with no literal name, the artifact falls back to
+  the package name and the file says so in a `# NOTE`. A package using
+  `generate_parameter_library` gets a `# NOTE` pointing at its YAML, since those parameters are
+  never `declare_parameter()` calls.
+
+`--emit-qos` adds `qos:`/`depth:` for literal integer depths. It is **off** by default: RM034
+warns against inventing those fields and no corpus model uses them. The depths are always in the
+`--json` record either way.
 
 `assets/roscommonobjects/PROVENANCE.md` and `assets/rosmodelscatalog/PROVENANCE.md` record each
 catalogue's source, pinned commit (where readable), and sync date — read those before assuming
 either vendored copy is current.
+
+### `extract_rossystem.py` — launch files → draft `.rossystem` (Phase 2)
+
+```bash
+python extract_rossystem.py <launch-file>... --models ros_model/rosnodes -o system.rossystem
+```
+
+Parses launch files with `ast` — **never executes them** — and emits the composition Phase 1
+deliberately leaves out.
+
+**The type/instance split is what makes this work without rewriting anything.** A `.rossystem`
+node is `"<label>": from: "<package>.<node>"`, where the label is free text and only `from:` is
+a cross-reference (rossystem-syntax.md §3). So a launch file's `name="g1_loco_motion"` over a
+source that says `Node("Loco_motion")` needs no rename anywhere: the label carries the
+deployment name, `from:` carries the type. One controller plugin spawned three times is three
+labels sharing one `from:`. Phase 1's files are never touched, so re-running Phase 1 cannot
+silently break a `.rossystem`'s references.
+
+- Follows `TimerAction` and `GroupAction`, resolves `var = Node(...)` assignments, and emits
+  **only** nodes reachable from `LaunchDescription([...])`, in that list's order (`RM040`
+  deliberately does not fire on a `.rossystem` `nodes:` block, so sorting it would silently
+  discard the bring-up sequence the order encodes).
+- Understands the ros2_control spawner idiom — `package="controller_manager",
+  executable="spawner", arguments=["left_arm_controller"]` — reading the implementation package
+  from `controllers.yaml`'s `controller_manager: ros__parameters: <name>: type:`. The controllers
+  file is located by resolving the launch file's own `controllers_file` argument through
+  `DeclareLaunchArgument` → `PathJoinSubstitution` → `FindPackageShare`, or given with
+  `--controllers-file`.
+- Resolves same-file `LaunchConfiguration("x")` one hop to its own `DeclareLaunchArgument`
+  default and **discloses it** on the value line as overridable on the command line. Launch
+  argument defaults are always *strings*, so values are converted against the `.ros2`'s declared
+  type — `"false"` under `type: Boolean` becomes `false`, never `true` by truthiness.
+- Emits a parameter override only when the target `.ros2` actually declares that parameter,
+  since `"artifact::param"` has to resolve. Otherwise it is flagged, not emitted.
+- **Never inlines a robot description.** The guard is on the parameter *name*, not on
+  `Command(...)` happening to be non-literal, so a future smarter resolver cannot start inlining
+  URDF (SKILL.md "When not to use").
+- A node resolving to neither a `--models` file nor `assets/node_index.json` is **skipped with a
+  `# FLAG`** rather than emitted with a dangling `from:` — an unresolved reference is a
+  linking-layer ERROR that stops the whole file loading, so one missing node beats a file that
+  will not open. A catalogue entry found under a different package name than the launch file
+  used (`moveit_ros_move_group` vs the catalogue's `move_group`) is emitted *with* a flag saying
+  so, never substituted silently.
+
+**`connections:` is never emitted.** SKILL.md hard rule 4, and `MatchPortMsgs` compares types by
+object identity. Candidate pairs (same interface name, same type string, legal direction,
+self-loops excluded) are computed, printed and written to the `--json` record for a human or an
+LLM to accept one at a time.
+
+Exit status is non-zero when anything was flagged — a partial model is a result, not a success.
 
 ---
 
@@ -439,7 +599,7 @@ conservative for that reason.
 ## Test evidence
 
 Everything below was **executed**. *Amended 2026-08-14:* the Java blocker referred to here is
-long resolved — Java 21 is installed, `tests/oracle/ask_oracle.py` drives the real language
+long resolved — given a Java 21 runtime, `tests/oracle/ask_oracle.py` drives the real language
 servers, and all 24 checked-in cases run on this machine (see the prerequisites table at the top
 of this file, and `tests/oracle/RESULTS.md`). Read the sentence below as "not run against the
 oracle *at the time these counts were taken*"; every ERROR in the rule table has since been
@@ -474,10 +634,19 @@ the script appears in this README and vice versa, with no orphans in either dire
 > `examples/turtlebot3_navigation.rossystem` — 0 new errors, 0 crashes, `--no-catalogue` confirmed
 > to suppress RM090-RM092 (RM093 is a pure grammar check and fires regardless).
 
+> *Amended 2026-09-03.* Two new rules, `RM095` and `RM096`, close gaps a live validation round
+> found: a quoted string shaped like a list (`value: "['a', 'b']"`) passed through where the
+> declared or requested type was a real list, and a confident, non-sentinel `fromFile:` path with
+> no stated provenance. `RM061` (`subSystems:` used) is demoted from WARNING to INFO in the same
+> pass — its old wording ("every corpus example is low-quality") had become a third nudge, beside
+> §8d and self-check 15, toward omitting a subsystem the caller actually asked to reuse; presence
+> alone was never itself a defect. Neither corpus count below (336-file or catalogued) has been
+> re-run against these two additions; the whole-corpus figures that follow predate them.
+
 ### Whole-corpus run — 336 files, 0 crashes
 
-**Re-measured 2026-08-14** against the current script. It emits **82** distinct ids -- RM000-RM094
-plus the `RM002B` and `RM008T` variants -- which is **81 rules**<!--@count:rules-->, RM000 being the internal
+**Re-measured 2026-08-14** against the current script. It emits **85** distinct ids -- RM000-RM097
+plus the `RM002B` and `RM008T` variants -- which is **84 rules**<!--@count:rules-->, RM000 being the internal
 read/parse failure rather than a rule. (RM094, the column-0 comment check, and the RM090/RM033
 severity corrections landed after this sweep and change none of its counts: no corpus file
 exhibits any of the three.) This supersedes the

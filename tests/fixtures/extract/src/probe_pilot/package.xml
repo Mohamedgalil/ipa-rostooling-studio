@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>probe_pilot</name>
+  <version>0.0.0</version>
+  <description>Fixture Python package for tests/extract_golden.py. Not a real robot driver.</description>
+  <maintainer email="nobody@example.invalid">fixture</maintainer>
+  <license>Apache-2.0</license>
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

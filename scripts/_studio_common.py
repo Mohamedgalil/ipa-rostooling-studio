@@ -41,6 +41,18 @@ TYPE_SEG_TO_ROS_BLOCK = {"msg": "msgs", "srv": "srvs", "action": "actions"}
 
 
 # ----------------------------------------------------------------------------------------
+# A user's explicit light/dark choice (wireTheme, below) is persisted to localStorage --
+# but reading it back inside wireTheme itself, which only runs from a <script> down in the
+# BODY, would paint the page in the OS theme first and then visibly flip it. This runs
+# synchronously in <head>, before the <style> block below is even parsed, so the
+# data-theme attribute -- and therefore which half of PALETTE_CSS applies -- is already
+# decided by the time anything paints. Shared here (not duplicated per page) so /ros-studio
+# and /ros-plot, which already share one localStorage bucket on a file:// origin, agree.
+THEME_BOOT_JS = r"""try{
+  var t=localStorage.getItem("rosStudio.theme");
+  if(t==="light"||t==="dark") document.documentElement.setAttribute("data-theme",t);
+}catch(e){}"""
+
 # CSS: the shared palette. This is the exact `:root` block ros_plot has always shipped
 # (light default + prefers-color-scheme dark + manual data-theme overrides), plus a couple
 # of editor-only tokens (--glow, --dim) that are harmless in the viewer. Everything after
@@ -60,6 +72,22 @@ PALETTE_CSS = r"""  :root{
     --k-as:#6E4BB0;  --k-as-bg:#E5DCF3;
     --k-ac:#A63A46;  --k-ac-bg:#F5DEE0;
     --k-param:#5E8069; --k-param-bg:#DDE8E0;
+    /* origin-system palette (light): WHICH SOURCE .rossystem a node was merged or imported
+       from. A different axis from the interaction kinds above -- a node has both -- so these
+       are used as a card border + tint while the kinds stay on the ports, and the two never
+       compete for the same pixel. Eight hues separated in the Okabe-Ito spirit: blue, orange,
+       green, purple, magenta, gold, teal, slate. No pair of ADJACENT indices is a red/green
+       pair, so the common colour-vision deficiencies never have to carry the distinction
+       alone -- and the legend labels every colour with its system name regardless, because
+       colour is the affordance here, never the only channel. */
+    --s0:#1F5FA8; --s0-bg:#DEE9F7;
+    --s1:#C2551A; --s1-bg:#F7E4D8;
+    --s2:#3F7D20; --s2-bg:#E2EFDA;
+    --s3:#7B4FA8; --s3-bg:#EBE1F5;
+    --s4:#B0157F; --s4-bg:#F7DCEC;
+    --s5:#8A6A00; --s5-bg:#F2EAD2;
+    --s6:#00776E; --s6-bg:#D8EDEA;
+    --s7:#5A6570; --s7-bg:#E4E8EB;
     --shadow:0 1px 2px rgba(16,25,23,.05),0 8px 24px -12px rgba(16,25,23,.18);
     --shadow-lift:0 2px 6px rgba(16,25,23,.10),0 14px 32px -14px rgba(16,25,23,.32);
     --display:"Palatino Linotype","Book Antiqua",Palatino,"Iowan Old Style",Georgia,serif;
@@ -80,6 +108,14 @@ PALETTE_CSS = r"""  :root{
     --k-as:#A78BE0;  --k-as-bg:#241B39;
     --k-ac:#D9707C;  --k-ac-bg:#35181C;
     --k-param:#8FB39B; --k-param-bg:#17251D;
+    --s0:#79ADE8; --s0-bg:#14243A;
+    --s1:#E9976A; --s1-bg:#33200F;
+    --s2:#93C97A; --s2-bg:#1B2A14;
+    --s3:#B99BE0; --s3-bg:#241B39;
+    --s4:#E48ABF; --s4-bg:#331428;
+    --s5:#CBAE55; --s5-bg:#2E2710;
+    --s6:#5FC0B4; --s6-bg:#0D2A27;
+    --s7:#A3AEB8; --s7-bg:#1E252B;
     --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.7);
     --shadow-lift:0 2px 8px rgba(0,0,0,.5),0 16px 34px -14px rgba(0,0,0,.85);
   }}
@@ -93,6 +129,14 @@ PALETTE_CSS = r"""  :root{
     --k-ss:#D9A94A; --k-ss-bg:#33290F; --k-sc:#C79362; --k-sc-bg:#2E2214;
     --k-as:#A78BE0; --k-as-bg:#241B39; --k-ac:#D9707C; --k-ac-bg:#35181C;
     --k-param:#8FB39B; --k-param-bg:#17251D;
+    --s0:#79ADE8; --s0-bg:#14243A;
+    --s1:#E9976A; --s1-bg:#33200F;
+    --s2:#93C97A; --s2-bg:#1B2A14;
+    --s3:#B99BE0; --s3-bg:#241B39;
+    --s4:#E48ABF; --s4-bg:#331428;
+    --s5:#CBAE55; --s5-bg:#2E2710;
+    --s6:#5FC0B4; --s6-bg:#0D2A27;
+    --s7:#A3AEB8; --s7-bg:#1E252B;
     --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.7);
     --shadow-lift:0 2px 8px rgba(0,0,0,.5),0 16px 34px -14px rgba(0,0,0,.85);
   }
@@ -106,6 +150,14 @@ PALETTE_CSS = r"""  :root{
     --k-ss:#B4841F; --k-ss-bg:#F7EAD0; --k-sc:#8C5A2B; --k-sc-bg:#F0E1D2;
     --k-as:#6E4BB0; --k-as-bg:#E5DCF3; --k-ac:#A63A46; --k-ac-bg:#F5DEE0;
     --k-param:#5E8069; --k-param-bg:#DDE8E0;
+    --s0:#1F5FA8; --s0-bg:#DEE9F7;
+    --s1:#C2551A; --s1-bg:#F7E4D8;
+    --s2:#3F7D20; --s2-bg:#E2EFDA;
+    --s3:#7B4FA8; --s3-bg:#EBE1F5;
+    --s4:#B0157F; --s4-bg:#F7DCEC;
+    --s5:#8A6A00; --s5-bg:#F2EAD2;
+    --s6:#00776E; --s6-bg:#D8EDEA;
+    --s7:#5A6570; --s7-bg:#E4E8EB;
     --shadow:0 1px 2px rgba(16,25,23,.05),0 8px 24px -12px rgba(16,25,23,.18);
     --shadow-lift:0 2px 6px rgba(16,25,23,.10),0 14px 32px -14px rgba(16,25,23,.32);
   }"""
@@ -179,13 +231,19 @@ JS_PRIMITIVES = r"""var STUDIO = (function(){
     });
   }
 
-  // Manual light/dark toggle for a standalone file (no host stamps data-theme).
+  // Manual light/dark toggle for a standalone file (no host stamps data-theme). THREE
+  // states, not two, and persisted: auto (follows the OS) -> light -> dark -> auto -> ...
+  // A plain two-way toggle plus persistence would opt the user OUT of "follow my OS"
+  // permanently the moment they clicked once, with no way back short of clearing storage.
+  // THEME_BOOT_JS (in <head>) is what makes an explicit choice actually stick on reload
+  // without a flash of the wrong theme; this only owns the write half.
   function wireTheme(btn){
     var root=document.documentElement;
     btn.addEventListener("click",function(){
       var cur=root.getAttribute("data-theme");
-      if(!cur){ cur=(window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light"; }
-      root.setAttribute("data-theme", cur==="dark"?"light":"dark");
+      var next=cur==="light"?"dark":(cur==="dark"?null:"light");
+      if(next) root.setAttribute("data-theme",next); else root.removeAttribute("data-theme");
+      try{ if(next) localStorage.setItem("rosStudio.theme",next); else localStorage.removeItem("rosStudio.theme"); }catch(e){}
     });
   }
 

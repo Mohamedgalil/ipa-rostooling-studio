@@ -61,10 +61,11 @@ var STUDIO = path.join(ROOT, "scripts", "ros_studio.py");
 var WANTED = ["splitLines", "indentOf", "splitComment", "cleanNote", "unq", "cmtSet",
   "parseRos2", "parseRos", "parseRossystem", "mergeParams", "seedFromFiles",
   "qd", "qs2", "nodeById", "ifaceById", "ifaceConnected", "exposureLabels",
-  "subState", "genSystem",
+  "subState", "genSystem", "generatedFiles",
   "handPkgNodes", "foldArtifacts", "localTypePkgs", "companionTypes", "companionPkgs",
   "typeAutoNote",
-  "pyFloat", "pyRepr", "fmtParamValue", "inferPtype", "artParamDecl", "sysParamFact",
+  "pyFloat", "pyRepr", "listItems", "fmtParamValue", "inferPtype", "artParamDecl",
+  "sysParamFact",
   "genQos", "genRos2", "genRos",
   "cmtClean", "cmtList", "cmtOf", "cmtBlock", "noteSuffix",
   "factStr", "unquoteEmitted", "paramFact", "qosFact", "ifaceFactKey", "projectFacts",
@@ -190,6 +191,7 @@ function loadShipped(html, project) {
     "var CATALOGUE = DATA.catalogue || {};\n" +
     "var CATTYPES = DATA.catalogueTypes || {};\n" +
     "var SYSTEMS = DATA.systems || {};\n" +
+    sliceVar(script, "ARRAY_TYPE_RE") + "\n" +
     sliceVar(script, "FACT_SECTIONS") + "\n" +
     sliceVar(script, "FACT_MISSING") + "\n" +
     sliceVar(script, "DIFF_OP_MARK") + "\n" +
@@ -397,9 +399,98 @@ function compareViewStates(projectPath, htmlPath, expectPath) {
   var html = fs.readFileSync(htmlPath, "utf8");
   var expected = fs.readFileSync(expectPath, "utf8");
   var refs = (project.subSystems || []).map(function (s) { return s.ref; });
-  if (!refs.length) return [];                 // nothing to collapse; not a failure
-
   var problems = [];
+
+  // project["view"] stopped being "the subsystem states" and became THE WHOLE VISUALIZATION --
+  // subsystem and package box positions, the abstraction level, edit/view mode, the kind filter,
+  // auto sides, the camera. Every one of those is a new key on a structure the emitter is
+  // handed, and the invariant they all have to satisfy is the same one the states below satisfy:
+  // no view can change an emitted byte.
+  //
+  // This runs for EVERY fixture, not just the ones with a subSystems: block, because these keys
+  // exist regardless of whether anything is collapsible -- the early return below used to skip
+  // the whole check for a plain project, which is most of them.
+  //
+  // Populated with deliberately NON-default values: a level that is not the default 3, view mode
+  // rather than edit, a filter hiding two kinds (the one that hides content), autoSides on, a
+  // camera nowhere near the origin, and positions for boxes that may not even exist here. If any
+  // of it reached the emitter -- or the fact tree behind `diff` -- this fails.
+  var fullView = {
+    subPos: { "some_ref": { x: 917, y: 431 }, "another": { x: 12, y: 88 } },
+    pkgPos: { "some_pkg": { x: 640, y: 205 } },
+    level: 1, mode: "view", autoSides: true,
+    hiddenKinds: ["pub", "sc", "param"],
+    camera: { k: 2.5, tx: -1180, ty: 640 }
+  };
+  [["populated view keys", fullView],
+   ["view keys on top of framed subsystems",
+    (function () {
+      var v = JSON.parse(JSON.stringify(fullView));
+      v.subsystems = {};
+      refs.forEach(function (r) { v.subsystems[r] = "framed"; });
+      return v;
+    })()]].forEach(function (st) {
+    var copy = JSON.parse(JSON.stringify(project));
+    copy.view = st[1];
+    var fns = loadShipped(html, copy);
+    if (fns.genSystem() !== expected) {
+      var d = firstDiff(expected, fns.genSystem());
+      problems.push(st[0] + " CHANGED the emitted .rossystem at " + (d || "(trailing bytes)")
+        + " -- the whole visualization lives under project.view and none of it may reach a byte");
+    }
+    var f = fns.projectFacts();
+    if ("view" in f) problems.push(st[0] + ": projectFacts() carries `view` -- the arrangement "
+      + "must stay out of the fact tree, or saving a layout reports as a model change");
+    Object.keys(fullView).forEach(function (k) {
+      if (k in f) problems.push(st[0] + ": projectFacts() carries view key `" + k + "`");
+    });
+  });
+
+  // ---- provenance is not content ----------------------------------------------------------
+  // `n.srcSystem` -- which source .rossystem a node was merged or imported from -- is a NEW node
+  // key, and a node key is a far more dangerous place to add something than project.view: the
+  // emitter walks nodes, and both fact trees describe them. It is excluded by construction
+  // (emit_rossystem/emit_ros2 write named keys, project_facts builds from an allow-list), which
+  // is exactly the kind of "nothing reads it" claim that stops being true one refactor later.
+  //
+  // Stamped on EVERY node here, including catalogue- and subsystem-backed ones, with a value
+  // that would be unmistakable in the output if it ever leaked.
+  var provenance = JSON.parse(JSON.stringify(project));
+  provenance.nodes.forEach(function (n, i) { n.srcSystem = "ORIGIN_LEAK_" + i; });
+  var pfns = loadShipped(html, provenance);
+  if (pfns.genSystem() !== expected) {
+    var dp = firstDiff(expected, pfns.genSystem());
+    problems.push("n.srcSystem CHANGED the emitted .rossystem at " + (dp || "(trailing bytes)")
+      + " -- provenance is a fact about where a node came from, never content");
+  }
+  if (JSON.stringify(pfns.projectFacts()).indexOf("ORIGIN_LEAK_") !== -1)
+    problems.push("n.srcSystem reached projectFacts() -- re-seeding a merged project would then "
+      + "report every node as changed");
+
+  // ...and the SAME claim on the Python side, which is a separate implementation and therefore a
+  // separate opportunity to read a view key. `diff` reduces both sides to project_facts(); if a
+  // saved arrangement leaked in there, `diff` would report "you changed the model" for a project
+  // whose only change was that someone dragged a box. project_facts() excludes `view` by
+  // building from an allow-list rather than by deleting keys, so this is a regression pin on
+  // that construction, not a restatement of it.
+  var vp = projectPath.replace(/\.json$/, "") + ".viewkeys.json";
+  var withView = JSON.parse(JSON.stringify(project));
+  withView.view = fullView;
+  withView.nodes.forEach(function (n, i) { n.srcSystem = "ORIGIN_LEAK_" + i; });
+  fs.writeFileSync(vp, JSON.stringify(withView, null, 2));
+  try {
+    var factsPlain = canonical(JSON.parse(runStudio(["--facts", projectPath])));
+    var factsView = canonical(JSON.parse(runStudio(["--facts", vp])));
+    if (factsPlain !== factsView)
+      problems.push("project_facts() CHANGED when project.view was populated and every node was "
+        + "given a srcSystem -- the Python fact tree is reading the arrangement or the "
+        + "provenance, so `diff` would report a drag, or a merge, as a model edit");
+  } finally {
+    try { fs.unlinkSync(vp); } catch (e) { }
+  }
+
+  if (!refs.length) return problems;            // nothing to collapse; not a failure
+
   var states = [
     ["all collapsed", "collapsed"],
     ["all framed", "framed"],
@@ -446,6 +537,26 @@ function checkPageInvariants(htmlPath) {
   if (/document\.body\.className\s*=/.test(script))
     problems.push("the page assigns document.body.className wholesale, which wipes the "
       + "responsive (`narrow`/`tiny`) and drawer classes -- use classList.toggle");
+
+  // ---- the guided tutorial's progress is the READER's, not the model's -------------------
+  // Which step of the walkthrough you are on, and whether you finished it, is a fact about the
+  // person reading -- not about the system being authored. It lives under its own localStorage
+  // key and never enters `project` at all, which is a stronger guarantee than a project.view
+  // slot would be: a view key is only excluded because both fact trees are built from an
+  // allow-list and someone remembered not to add it, whereas a key that is never written onto
+  // the project cannot leak into an emitted byte, into `diff`, or into a project.json handed to
+  // a colleague, by any route.
+  //
+  // That is cheap to state and cheap to break with one "while I am here" edit, so it is pinned
+  // both ways: the key has to still be there, and nothing may start writing the state onto the
+  // project instead.
+  if (!/rosStudio\.tour/.test(script))
+    problems.push("the tutorial's own localStorage key is gone -- its progress has to live "
+      + "outside `project`, or a saved project starts carrying who read what");
+  if (/project\s*(?:\.\s*view\s*)?(?:\.\s*tour\b|\[\s*["']tour["']\s*\])/.test(script))
+    problems.push("tutorial state is being written onto `project` -- progress through the "
+      + "walkthrough belongs to the reader, and a project.view slot would then have to be kept "
+      + "out of both fact trees by hand, forever");
 
   // The stylesheet and the code must not judge "is this narrow?" independently. They did once,
   // via @media (max-width:...) on one side and matchMedia on the other, and disagreed on a real
@@ -507,6 +618,42 @@ function compare(projectPath, htmlPath, expectPath, knownWrote) {
   }
   byExt("ros2", function () { return fns.handPkgNodes().order; }, fns.genRos2);
   byExt("ros", function () { return Object.keys(fns.companionTypes()); }, fns.genRos);
+
+  // ---- Save all's manifest ---------------------------------------------------------------
+  // "Save all" in the Commit modal downloads generatedFiles() straight out of the page, on the
+  // strength of the byte comparisons just above. But those compare CONTENT keyed by package,
+  // and Save all also has to get the FILENAMES right -- genSystem() being byte-perfect does not
+  // make "<system>.rossystem" the right name to save it under, and a wrong name is a file the
+  // user then hands to `generate` as a different model, or one that silently shadows another.
+  //
+  // So the whole manifest is held against the files `generate` reported writing: same set of
+  // names, same bytes under each name. The .rossystem is included by name here for the first
+  // time -- expectPath is found by extension elsewhere, which would not have caught renaming it.
+  //
+  // Against what generate WROTE, not against readdir(outdir): a project-local `subSystems:`
+  // target is STAGED into that directory unchanged, and staging is copying someone else's file
+  // off a disk this page cannot reach. Save all does not produce those and does not pretend to
+  // -- the Commit modal says so in as many words. Reading the directory instead made every
+  // subsystem fixture fail on exactly that difference, which is a real limitation to document
+  // rather than a bug to fix in the page.
+  var manifest = fns.generatedFiles();
+  var manifestNames = manifest.map(function (f) { return f[0]; }).sort();
+  var emitted = ["rossystem", "ros2", "ros"].reduce(function (acc, ext) {
+    return acc.concat((known[ext] || []).map(function (b) { return b + "." + ext; }));
+  }, []).sort();
+  if (emitted.length && manifestNames.join(",") !== emitted.join(","))
+    problems.push("Save all would write [" + manifestNames.join(", ") + "] but generate emitted ["
+      + emitted.join(", ") + "] -- the one-click save and the companion disagree about the file set");
+  manifest.forEach(function (f) {
+    var p = path.join(outdir, f[0]);
+    if (!fs.existsSync(p)) return;                       // already reported above
+    var want = fs.readFileSync(p, "utf8");
+    if (f[1] !== want) {
+      var dm = firstDiff(want, f[1]);
+      problems.push("Save all's " + f[0] + " differs from what generate wrote at "
+        + (dm || "(trailing bytes)"));
+    }
+  });
 
   // ---- the "changed since the seed" tab -------------------------------------------------
   // Three things are held here. (1) The editor's projectFacts() must equal the companion's
@@ -593,9 +740,15 @@ function buildInputs(fixture, work) {
   var gen = path.join(work, "gen");
   runStudio(["init", fixture, "--out", proj]);
   runStudio(["render", proj, "--out", html]);
-  var out = runStudio(["generate", proj, "--outdir", gen]);
+  // --no-oracle: these cases test the EMITTER against the Python emitter, byte for byte.
+  // Real-server validation is a different question, it is slow (a JVM start and an LSP
+  // handshake per call), and now that `generate` runs it by DEFAULT, leaving it on here
+  // would put minutes of language-server time into a parity run on any machine that has a
+  // JDK -- and would fail these cases on a server verdict they are not about.
+  var out = runStudio(["generate", proj, "--outdir", gen, "--no-oracle"]);
   return { project: proj, html: html, expect: generated(gen, fixture), fixture: fixture,
-           wrote: { ros2: wroteExt(out, "ros2"), ros: wroteExt(out, "ros") } };
+           wrote: { ros2: wroteExt(out, "ros2"), ros: wroteExt(out, "ros"),
+                    rossystem: wroteExt(out, "rossystem") } };
 }
 
 // A seeded project happens to arrive with each node's interfaces already in the emitter's
@@ -609,9 +762,15 @@ function permutedCase(base, work) {
   var proj = path.join(work, "p-permuted.json");
   var gen = path.join(work, "gen-permuted");
   fs.writeFileSync(proj, JSON.stringify(project, null, 2), "utf8");
-  var out = runStudio(["generate", proj, "--outdir", gen]);
+  // --no-oracle: these cases test the EMITTER against the Python emitter, byte for byte.
+  // Real-server validation is a different question, it is slow (a JVM start and an LSP
+  // handshake per call), and now that `generate` runs it by DEFAULT, leaving it on here
+  // would put minutes of language-server time into a parity run on any machine that has a
+  // JDK -- and would fail these cases on a server verdict they are not about.
+  var out = runStudio(["generate", proj, "--outdir", gen, "--no-oracle"]);
   return { project: proj, html: base.html, expect: generated(gen, base.fixture),
-           wrote: { ros2: wroteExt(out, "ros2"), ros: wroteExt(out, "ros") } };
+           wrote: { ros2: wroteExt(out, "ros2"), ros: wroteExt(out, "ros"),
+                    rossystem: wroteExt(out, "rossystem") } };
 }
 
 function main(argv) {

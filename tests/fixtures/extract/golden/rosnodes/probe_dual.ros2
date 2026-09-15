@@ -1,0 +1,24 @@
+# GENERATED DRAFT -- scripts/extract_ros2_interfaces.py
+# Source package: probe_dual
+#   package.xml declares: probe_dual  (build_type: ament_cmake)
+#   parsed as: cpp
+#
+# Only declarations whose name AND type are literal in the source are
+# emitted. Everything the extractor could not read literally is listed
+# below as a FLAG for manual or LLM review -- it is NOT missing, it is
+# deliberately not guessed.
+# EXTRACTOR-FLAGS: 0
+#
+# (none -- every ROS call found in this package was literal.)
+probe_dual:
+  artifacts:
+    probe_alpha:
+      node: probe_alpha_node
+      publishers:
+        '/probe/alpha':
+          type: 'std_msgs/msg/String' # assets/roscommonobjects/basic_msgs/ros_core.ros
+    probe_beta:
+      node: probe_beta_node
+      subscribers:
+        '/probe/beta':
+          type: 'std_msgs/msg/String' # assets/roscommonobjects/basic_msgs/ros_core.ros

@@ -26,6 +26,7 @@ Usage:
         their .ros type deps without the caller naming any of them.
 """
 
+import filecmp
 import os
 import shutil
 import sys
@@ -48,6 +49,7 @@ def collect(model_paths, case_dir):
     type_files, node_files = set(), set()
     processed = set()
     worklist = list(model_paths)
+    unparseable = []
 
     while worklist:
         path = worklist.pop()
@@ -56,7 +58,13 @@ def collect(model_paths, case_dir):
         processed.add(path)
 
         linter = Linter(path, use_catalogue=True)
-        linter.run()
+        findings = linter.run()
+        if any(f.rule == "RM008" for f in findings):
+            # A parse failure means needed_type_files/needed_node_files were never computed --
+            # this model's real dependencies are silently missing from the closure below, not
+            # genuinely zero. Report it instead of letting "No catalogue files needed" imply
+            # the model is self-contained when it was never actually read.
+            unparseable.append(path)
 
         for rel in linter.needed_type_files:
             if rel not in type_files:
@@ -68,11 +76,33 @@ def collect(model_paths, case_dir):
                 worklist.append(os.path.join(NODE_CATALOG_ROOT, rel))
 
     os.makedirs(case_dir, exist_ok=True)
+    # Snapshot what was already on disk BEFORE this run staged anything -- a project's own
+    # input file (e.g. a caller-supplied turtlesim.ros sitting next to a .ros2 that references
+    # it) can share a basename with a vendored catalogue file, and shutil.copyfile below would
+    # silently replace the project's file with the catalogue's, changing what gets validated
+    # without any message. Anything present here is untouchable by stage() below.
+    preexisting = set(os.listdir(case_dir)) if os.path.isdir(case_dir) else set()
     copied = []
     claimed = {}  # basename -> (root, rel) that already claimed it, for collision detection
 
     def stage(root, rel, kind):
         basename = os.path.basename(rel)
+        src = os.path.join(root, rel)
+        dst = os.path.join(case_dir, basename)
+        if basename in preexisting:
+            if os.path.isfile(dst) and filecmp.cmp(src, dst, shallow=False):
+                # Byte-identical to what we'd stage -- almost certainly this same catalogue
+                # file left over from a prior run of this script. Nothing to do, and nothing
+                # to warn about; re-running this script must stay idempotent.
+                claimed[basename] = (root, rel)
+                copied.append((kind, rel, dst))
+                return
+            print("WARNING: '%s' already exists in %s with DIFFERENT content than the "
+                  "catalogue file %s -- NOT overwritten. That's either a real project file "
+                  "this run must not clobber, or a stale copy from an earlier catalogue "
+                  "version; delete it yourself first if it's the latter."
+                  % (basename, case_dir, rel), file=sys.stderr)
+            return
         prior = claimed.get(basename)
         if prior is not None and prior != (root, rel):
             # ask_oracle.py's MODEL_GLOBS is a flat, non-recursive glob of case_dir, so two
@@ -88,8 +118,6 @@ def collect(model_paths, case_dir):
                   % (basename, prior[1], rel), file=sys.stderr)
             return
         claimed[basename] = (root, rel)
-        src = os.path.join(root, rel)
-        dst = os.path.join(case_dir, basename)
         shutil.copyfile(src, dst)
         copied.append((kind, rel, dst))
 
@@ -100,7 +128,7 @@ def collect(model_paths, case_dir):
         kind = "system" if rel.endswith(".rossystem") else "node"
         stage(NODE_CATALOG_ROOT, rel, kind)
 
-    return copied
+    return copied, unparseable
 
 
 def main(argv=None):
@@ -115,15 +143,26 @@ def main(argv=None):
         print("Model file(s) not found: %s" % ", ".join(missing), file=sys.stderr)
         return 1
 
-    copied = collect(model_paths, case_dir)
-    if not copied:
-        print("No catalogue files needed (nothing resolved, or catalogue indexes missing).")
-        return 0
+    copied, unparseable = collect(model_paths, case_dir)
 
-    for kind, rel, dst in copied:
-        print("%-5s %-55s -> %s" % (kind, rel, dst))
-    print("Copied %d file(s) into %s" % (len(copied), case_dir))
-    return 0
+    status = 0
+    if unparseable:
+        print("ERROR: %d model file(s) failed to parse (RM008) -- their real catalogue "
+              "dependencies were never computed, so this run's closure is INCOMPLETE, not "
+              "necessarily empty: %s" % (len(unparseable), ", ".join(unparseable)),
+              file=sys.stderr)
+        status = 1
+
+    if not copied:
+        print("No catalogue files needed (nothing resolved, or catalogue indexes missing)."
+              if not unparseable else
+              "No catalogue files staged from the files that DID parse.")
+    else:
+        for kind, rel, dst in copied:
+            print("%-5s %-55s -> %s" % (kind, rel, dst))
+        print("Copied %d file(s) into %s" % (len(copied), case_dir))
+
+    return status
 
 
 if __name__ == "__main__":

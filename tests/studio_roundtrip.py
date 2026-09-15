@@ -151,6 +151,108 @@ def ros_facts(path):
     return facts
 
 
+def _param_literal_shape(text):
+    """One `default:` literal reduced to its SHAPE plus its content, so a list that came back
+    as a string is not mistaken for the same fact.
+
+    The three shapes are genuinely different statements in the grammar and are the whole reason
+    this check exists:
+
+      list:a|b     a ParameterList   -- `["base_link", "odom"]` / `['base_link', 'odom']`
+      str:a        a ParameterString -- `'balanced'`, and also the WRONG `'["base_link"]'`
+      bare:a       an unquoted ParameterInteger / Double / Boolean -- `10`, `0.5`, `true`
+
+    Quote STYLE is deliberately normalised away (the source corpus writes `"x"`, the emitter
+    writes `'x'` -- docs/grammar-subset.md sec 5.5 says both parse, pick one), but
+    quoted-versus-bracketed is not, because that IS the defect being pinned.
+
+    That same quoted-versus-bare distinction is kept PER ELEMENT, not just on the literal as a
+    whole. `i.strip().strip("\"'")` used to collapse every element down to its bare text, so a
+    quoted string element and an unquoted number/bool element with the same digits compared
+    EQUAL: `Array[String] default: ["1", "2"]` and a regression that emitted
+    `Array[Integer]-shaped [1, 2]` both reduced to `list:1|2`. That is the exact code path
+    `_param_default_literal`/`_fmt_param_value` added for list elements (recursing through
+    `_fmt_param_value` per element by the array's declared element TYPE) -- so this guard, as
+    first written, could not have caught a regression in the one thing it exists to guard.
+    Confirmed by mutation: forcing every element to the String branch in both emitters (so
+    `Array[Integer] [1, 2, 3]` comes out `['1', '2', '3']`) passed silently under the old
+    per-element `.strip("\"'")`, and fails under this one.
+    """
+    def elem_shape(item):
+        item = item.strip()
+        if len(item) >= 2 and item[0] == item[-1] and item[0] in "\"'":
+            return "q:" + item[1:-1]
+        return "b:" + item
+
+    text = text.strip()
+    if text.startswith("[") and text.endswith("]"):
+        inner, buf, depth, quote = [], "", 0, None
+        for ch in text[1:-1]:
+            if quote:
+                buf += ch
+                if ch == quote:
+                    quote = None
+                continue
+            if ch in "\"'":
+                quote = ch
+                buf += ch
+                continue
+            if ch in "[{":
+                depth += 1
+            elif ch in "]}":
+                depth -= 1
+            elif ch == "," and depth <= 0:
+                inner.append(buf)
+                buf = ""
+                continue
+            buf += ch
+        inner.append(buf)
+        return "list:" + "|".join(elem_shape(i) for i in inner if i.strip())
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        return "str:" + text[1:-1]
+    return "bare:" + text
+
+
+def ros2_param_facts(path):
+    """{(package, artifact, param): "<type> = <shape>"} for every .ros2 artifact parameter.
+
+    Nothing else in this harness looked at the .ros2 DECLARATION side of a parameter: `facts()`
+    reads the .rossystem only, and the fact tree behind `diff` was blind to this loss on both
+    sides at once -- a dropped list default reads back as "no default" from the generated file
+    and compares EQUAL to a source default the seeder had also failed to read. That is exactly
+    how `default: ["base_link"]` becoming `default: ''` survived every green suite here and
+    surfaced only as the real language server rejecting the regenerated file.
+
+    Read textually, on the 2-space ladder the emitter writes, for the same reason ros_facts is:
+    a bug in the shared YAML reader must not be able to make this agree with the emitter about
+    a default neither of them kept. A YAML compose would also flatten the list literal back
+    into a sequence, which is the very distinction being checked.
+    """
+    out, pkg, art, param, in_params = {}, None, None, None, False
+    for raw in open(path, encoding="utf-8"):
+        code = raw.split("#")[0].rstrip()
+        if not code.strip():
+            continue
+        col = len(code) - len(code.lstrip(" "))
+        text = code.strip()
+        if col == 0:
+            pkg, art, param, in_params = text.rstrip(":"), None, None, False
+        elif col == 4 and text.endswith(":"):
+            art, param, in_params = text.rstrip(":").strip("\"'"), None, False
+        elif col == 6 and text.endswith(":"):
+            in_params = text.rstrip(":") == "parameters"
+            param = None
+        elif col == 8 and in_params and text.endswith(":"):
+            param = text.rstrip(":").strip("\"'")
+            out[(pkg, art, param)] = ""
+        elif col == 10 and param and text.startswith("type:"):
+            out[(pkg, art, param)] = text[5:].strip()
+        elif col == 10 and param and text.startswith("default:"):
+            out[(pkg, art, param)] = "%s = %s" % (
+                out.get((pkg, art, param), ""), _param_literal_shape(text[8:]))
+    return out
+
+
 def _stage_siblings(src_dir, work, exts):
     """Copy the neighbours the seeder opens -- the .ros2 files a node's from: resolves to, and
     the .rossystem files a subSystems: entry resolves to when the target is project-local rather
@@ -241,7 +343,7 @@ def check_roundtrip(src, work):
     if code != 0:
         return False, ["init failed (exit %d):\n%s" % (code, out)]
     outdir = os.path.join(work, "generated")
-    code, out = run(["generate", proj, "--outdir", outdir])
+    code, out = run(["generate", proj, "--outdir", outdir, "--no-oracle"])
     if code != 0:
         return False, ["generate failed (exit %d):\n%s" % (code, out)]
 
@@ -275,6 +377,22 @@ def check_roundtrip(src, work):
                             % (name, len(missing), len(rb), missing[:6]))
         if added:
             failures.append("%s: %d INVENTED -- %s" % (name, len(added), added[:6]))
+
+    # the .ros2 DECLARATION side of each parameter: its type and its default LITERAL. Only
+    # artifacts this project rebuilt are compared -- a file merely staged is someone else's
+    # model -- and only parameters the source declared, since an exposure the source carried
+    # only in the .rossystem legitimately grows a declaration here (_infer_ptype).
+    for name in sorted(os.listdir(outdir)):
+        if not name.endswith(".ros2") or not os.path.isfile(os.path.join(work, name)):
+            continue
+        pb = ros2_param_facts(os.path.join(work, name))
+        pa = ros2_param_facts(os.path.join(outdir, name))
+        for key in sorted(pb):
+            if key not in pa:
+                failures.append("%s: parameter %s.%s LOST" % ((name,) + key[1:]))
+            elif pa[key] != pb[key]:
+                failures.append("%s: parameter %s.%s changed -- source `%s`, emitted `%s`"
+                                % (name, key[1], key[2], pb[key], pa[key]))
     return not failures, failures
 
 
@@ -311,7 +429,7 @@ def check_orphan_gate(src, work):
     if code != 0:
         return False, ["init failed on the mutated file (exit %d)" % code]
     outdir = os.path.join(work, "orphan-generated")
-    code, out = run(["generate", proj, "--outdir", outdir])
+    code, out = run(["generate", proj, "--outdir", outdir, "--no-oracle"])
     fails = []
     if code == 0:
         fails.append("generate ACCEPTED an unresolvable arrow target (expected exit 1)")
@@ -391,7 +509,7 @@ def check_fields(src, work):
     if code != 0:
         return False, ["init failed on the planted fixture (exit %d):\n%s" % (code, out)]
     outdir = os.path.join(work, "fields-generated")
-    code, out = run(["generate", proj, "--outdir", outdir])
+    code, out = run(["generate", proj, "--outdir", outdir, "--no-oracle"])
     if code != 0:
         return False, ["generate failed on the planted fixture (exit %d):\n%s" % (code, out)]
 
@@ -460,9 +578,22 @@ def _anchor(code):
 
 
 def comment_facts(path):
-    """{(anchor, text)} for every comment LINE: its own line for a trailing comment, the next
-    code-bearing line for a standalone one, '<end of file>' when nothing follows."""
-    facts, pending = set(), []
+    """{(anchor, text, ordinal)} for every comment LINE: its own line for a trailing comment,
+    the next code-bearing line for a standalone one, '<end of file>' when nothing follows.
+
+    The ordinal is in the key for the same reason it is in ros_facts': a file may carry the SAME
+    comment on the same kind of line more than once, and a plain set collapses those into one
+    fact. A model whose launch-file extractor annotates every overridden parameter -- which is
+    what tests/fixtures/extract/golden does, twice with `value: true # from the launch file` --
+    then reads as ONE dropped comment while `init` correctly reports two, and the accounting
+    check below fails on a discrepancy that is the harness's, not the emitter's."""
+    facts, pending, counts = set(), [], {}
+
+    def add(anchor, text):
+        key = (anchor, text)
+        counts[key] = counts.get(key, 0) + 1
+        facts.add(key + (counts[key],))
+
     with open(path, encoding="utf-8") as handle:
         for raw in handle:
             code, note = split_comment(raw)
@@ -472,12 +603,12 @@ def comment_facts(path):
                 continue
             anchor = _anchor(code)
             if note is not None:
-                facts.add((anchor, note))
+                add(anchor, note)
             for text in pending:
-                facts.add((anchor, text))
+                add(anchor, text)
             pending = []
     for text in pending:
-        facts.add(("<end of file>", text))
+        add("<end of file>", text)
     return facts
 
 
@@ -485,9 +616,13 @@ def _kept(fact, after):
     """A source comment survived when the SAME anchor carries text that contains it. Containment,
     not equality: the emitter merges its own RM088/RM089 provenance into an authored trailing
     comment that does not already name the file, so the author's words come back with the
-    disclosure prepended."""
-    anchor, text = fact
-    return any(ga == anchor and text in gt for ga, gt in after)
+    disclosure prepended.
+
+    The ordinal is deliberately NOT matched: it exists to keep repeated comments distinct on the
+    source side, and requiring the Nth copy to survive as the Nth copy would fail a file whose
+    elements the emitter legitimately re-sorts."""
+    anchor, text = fact[0], fact[1]
+    return any(ga == anchor and text in gt for ga, gt, _n in after)
 
 
 def check_comments(src, work):
@@ -506,7 +641,7 @@ def check_comments(src, work):
     if code != 0:
         return False, ["init failed (exit %d):\n%s" % (code, out)]
     outdir = os.path.join(work, "comments-generated")
-    code, gen_out = run(["generate", proj, "--outdir", outdir])
+    code, gen_out = run(["generate", proj, "--outdir", outdir, "--no-oracle"])
     if code != 0:
         return False, ["generate failed (exit %d):\n%s" % (code, gen_out)]
 
@@ -529,7 +664,7 @@ def check_comments(src, work):
         after = comment_facts(os.path.join(outdir, cand[0]))
         for fact in sorted(comment_facts(source)):
             if not _kept(fact, after):
-                lost.append((base,) + fact)
+                lost.append((base, fact[0], fact[1]))
 
     m = DROPPED_RE.search(out)
     reported = int(m.group(1)) if m else 0
@@ -642,7 +777,7 @@ def check_multifile(case, work):
     if code != 0:
         return False, ["init over the directory failed (exit %d):\n%s" % (code, out)]
     outdir = os.path.join(work, "merged-generated")
-    code, gen_out = run(["generate", proj, "--outdir", outdir])
+    code, gen_out = run(["generate", proj, "--outdir", outdir, "--no-oracle"])
     if code != 0:
         return False, ["generate failed on the merged project (exit %d):\n%s" % (code, gen_out)]
 
@@ -677,6 +812,76 @@ def check_multifile(case, work):
     return not fails, fails
 
 
+def check_wrap(work):
+    """A project the editor produced by wrapping a selection into a new subsystem emits MORE
+    THAN ONE .rossystem, and the pieces have to agree with each other.
+
+    The invariant, and the whole reason this fixture exists: a `connections:` endpoint is a
+    LABEL STRING, and each file derives its own labels from its own node set. A connection that
+    crosses the new boundary is written by one file and has to resolve against an interface the
+    OTHER one declares -- so every endpoint anywhere in the output must name a label that
+    something in the output actually exposes. Checking that, rather than one known-bad case,
+    is what catches the next variant of it.
+
+    Returns (True|False|None, [lines]); None means SKIP."""
+    src = os.path.join(_HERE, "fixtures", "wrap", "wrapped.json")
+    if not os.path.isfile(src):
+        return None, ["skipped: tests/fixtures/wrap/wrapped.json is missing"]
+
+    proj = os.path.join(work, "wrapped.json")
+    shutil.copyfile(src, proj)
+    outdir = os.path.join(work, "generated")
+    code, gen_out = run(["generate", proj, "--outdir", outdir, "--no-oracle"])
+    if code != 0:
+        return False, ["generate failed on the wrapped project (exit %d):\n%s" % (code, gen_out)]
+
+    systems = sorted(f for f in os.listdir(outdir) if f.endswith(".rossystem"))
+    fails = []
+    if len(systems) < 2:
+        fails.append("expected the wrapped subsystem to be emitted as its own .rossystem too; "
+                     "got %s" % systems)
+
+    # who declares each label, and how many times -- a plain set could not tell "declared once"
+    # from "declared by two different nodes", and the second is an endpoint that resolves to
+    # both of them (RM065) which is the failure mode label-pinning exists to prevent.
+    owners, endpoints = {}, []
+    for name in systems:
+        got = facts(os.path.join(outdir, name))
+        for exp in got["exposures"]:
+            owners.setdefault(exp[0], []).append(name + ":" + exp[1] if len(exp) > 1 else name)
+        for conn in got["connections"]:
+            endpoints += [(name, conn[0]), (name, conn[1])]
+    for name, ep in endpoints:
+        if ep not in owners:
+            fails.append("%s: connection endpoint %r is declared by no emitted system "
+                         "(labels: %s)" % (name, ep, sorted(owners)))
+        elif len(owners[ep]) > 1:
+            fails.append("%s: connection endpoint %r is declared %d times (%s) — an endpoint "
+                         "has to resolve to exactly one interface"
+                         % (name, ep, len(owners[ep]), owners[ep]))
+
+    # Every hand-authored node in every emitted system needs its artifact in the .ros2 for that
+    # package. Emitting per-system into one filename-keyed dict used to let the last system
+    # written silently drop the artifacts only the other one knew about.
+    ros2 = {}
+    for f in os.listdir(outdir):
+        if f.endswith(".ros2"):
+            ros2[f[:-5]] = open(os.path.join(outdir, f), encoding="utf-8").read()
+    for name in systems:
+        for line in open(os.path.join(outdir, name), encoding="utf-8"):
+            m = re.match(r'\s*from:\s*"([^"]+)\.([^".]+)"', re.sub(r"\s+#.*$", "", line.rstrip()))
+            if not m:
+                continue
+            pkg, art = m.group(1), m.group(2)
+            if pkg in ros2 and not re.search(r"^\s+%s:" % re.escape(art), ros2[pkg], re.M):
+                fails.append("%s references %s.%s but %s.ros2 has no such artifact — another "
+                             "system's emission overwrote it" % (name, pkg, art, pkg))
+
+    if "0 error(s)" not in gen_out:
+        fails.append("rosmodel_lint did not report 0 errors on the wrapped output:\n%s" % gen_out)
+    return not fails, fails
+
+
 def _default_targets():
     """examples/ plus the checked-in fixtures. examples/ is gitignored demo content that other
     work rewrites under this harness; tests/fixtures/ is what a change to this repo is held to,
@@ -689,7 +894,12 @@ def _default_targets():
                  os.path.join(_HERE, "fixtures", "sublabels"),
                  os.path.join(_HERE, "fixtures", "hazards"),
                  os.path.join(_HERE, "fixtures", "params"),
-                 os.path.join(_HERE, "fixtures", "subsysgraph")):
+                 os.path.join(_HERE, "fixtures", "subsysgraph"),
+                 # the extractor's own golden output. It is a REAL extractor run, not a
+                 # hand-written witness, so it carries shapes nobody thought to write by hand --
+                 # among them `default: ["base_link"]`, whose silent loss to `default: ''` this
+                 # suite could not see because the fixture was not in this list at all.
+                 os.path.join(_HERE, "fixtures", "extract", "golden")):
         if not os.path.isdir(root):
             continue
         out += sorted(os.path.join(root, f) for f in os.listdir(root)
@@ -780,6 +990,23 @@ def main(argv):
                         print("    multi-file: %s" % line)
             finally:
                 shutil.rmtree(work, ignore_errors=True)
+
+        # Wrapping is the other whole-project operation with no single source .rossystem: its
+        # input is a project the EDITOR produced, and what it proves is cross-FILE (the two
+        # emitted systems agreeing about a connection that crosses between them).
+        print()
+        print("%-32s %-12s" % ("WRAP", "CROSS-FILE"))
+        print("-" * 90)
+        work = tempfile.mkdtemp(prefix="studio-wrap-")
+        try:
+            ok, why = check_wrap(work)
+            print("%-32s %-12s" % ("fixtures/wrap/", verdict(ok)))
+            if ok is False:
+                failures += 1                 # one failed CHECK, however many lines explain it
+            for line in why:
+                print("    wrap: %s" % line)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
     print()
     print("%d fixture(s), %d failure(s)" % (len(targets), failures))

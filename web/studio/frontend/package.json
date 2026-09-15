@@ -1,0 +1,18 @@
+{
+  "dependencies": {
+    "@dagrejs/dagre": "^3.1.1",
+    "@xyflow/react": "^12.11.6",
+    "lucide-react": "^1.44.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-resizable-panels": "^4.12.4"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "name": "coresense-studio-frontend",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/main.jsx --bundle --minify --format=iife --outfile=../dist/studio.js --loader:.woff2=file"
+  }
+}

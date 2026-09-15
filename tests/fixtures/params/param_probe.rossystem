@@ -39,6 +39,20 @@ param_probe:
         # in the .rossystem `value:` slot and must NOT rewrite the artifact's `default:`.
         - "loop_window": "tuner::window"
           value: 40
+        # A LIST override in the .rossystem `value:` slot, over an Array[String] declaration.
+        # The exposure side has no `type:` of its own (RosParameter has no such slot), so the
+        # type comes from the artifact and the value has to come back out as a real list, not
+        # as a quoted string shaped like one -- the defect RM095 names and oracle case
+        # 24-neg-list-as-string pins.
+        #
+        # "base_link,extra" is ONE element containing a comma, not two. The seeder used to read
+        # this whole slot through _node_repr, which strips each element's own quotes before
+        # re-joining with ", " -- so the comma INSIDE this element became indistinguishable
+        # from a comma BETWEEN elements, and the override silently grew a third element on
+        # every round-trip. rosmodel_lint and the real 3.1.0 server both accept the corrupted
+        # 3-element result, so nothing but this fixture would have caught it.
+        - "loop_frames": "tuner::frames"
+          value: ["base_link,extra", "map"]
     "logger":
       from: "param_pkg.logger"
       interfaces:

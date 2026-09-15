@@ -23,13 +23,25 @@ language-server oracle (opt-in).
         (message/service/action types, package names, node catalogue) embedded so
         autocomplete works offline.
 
-    ros_studio.py generate project.json [--outdir DIR] [--oracle] [--diff]
+    ros_studio.py generate project.json [--outdir DIR] [--oracle|--no-oracle] [--diff]
         Deterministically emit .ros2 / .rossystem / companion .ros (reusing rosmodel_lint's
-        vocabulary), then run rosmodel_lint over the result. With --oracle, stage catalogue
-        dependencies (collect_deps) and run the real language server (ask_oracle). On a
-        generation/lint ERROR, re-render the editor with the diagnostics injected onto the
-        offending nodes (written next to the project as <project>.error.html). With --diff,
-        also print the model-level diff against the seed source (see below).
+        vocabulary), then run rosmodel_lint over the result.
+
+        The real language server is then asked BY DEFAULT whenever it can run: catalogue
+        dependencies are staged (collect_deps) and ask_oracle drives the jar. rosmodel_lint's
+        RM rules are a deliberate approximation of the Xtext validator, so a run that consulted
+        only them has not been fully checked -- and used to say nothing about that. If the jar
+        or a Java 19+ runtime is missing, the reason is reported on stdout, on stderr, AND in
+        the editor's own error surface (<project>.notice.html, whose banner opens on load);
+        the run still exits 0, because the files were written and the lint passed.
+
+        --oracle REQUIRES the real server: not being able to run it is an error.
+        --no-oracle skips it entirely and reports nothing about it.
+
+        On a generation/lint ERROR, or a rejection by the real server, re-render the editor with
+        the diagnostics injected onto the offending nodes (written next to the project as
+        <project>.error.html). With --diff, also print the model-level diff against the seed
+        source (see below).
 
     ros_studio.py diff project.json [--against FILE.rossystem] [--json]
         What changed since the seed. Compares the GENERATED model against the .rossystem the
@@ -101,10 +113,82 @@ def _sanitise(text):
     return re.sub(r"[^A-Za-z0-9_]", "_", str(text))
 
 
+# `Array[String]` / `List[Double]` -- the bracketed form, which is the only one the JAR-era
+# grammar has (docs/grammar-subset.md sec 5.3: the older `'Array:'` + indent form was replaced
+# before the jar was built, and the token file carries 'Array', not 'Array:').
+_ARRAY_TYPE_RE = re.compile(r"^(?:Array|List)\s*\[\s*(.+?)\s*\]$")
+
+
+def _list_items(value):
+    """The ELEMENTS of a ParameterList literal, or None when there is nothing legal to write.
+
+    A `default:` under an `Array[...]` type is a real bracketed list (`ParameterList`), never a
+    quoted string that happens to look like one -- that is a `ParameterString`, which is the
+    defect RM095 reports on the .ros2 side and oracle case 24-neg-list-as-string pins on the
+    .rossystem side.
+
+    Elements are split here rather than parsed as YAML/JSON because each one is any
+    `ParameterValue` literal and is handed straight back to _fmt_param_value, which already
+    knows how to spell one for the element type. Quotes and nested brackets are respected so a
+    value containing a comma survives.
+
+    `[]` is NOT a legal literal -- the rule needs at least one element -- so an empty list and a
+    missing value are the same answer here: None, meaning "omit the slot".
+    """
+    if isinstance(value, (list, tuple)):
+        items = [str(v) for v in value]
+        return items or None
+    raw = ("" if value is None else str(value)).strip()
+    if not raw:
+        return None
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1]
+    items, buf, depth, quote = [], [], 0, None
+    for ch in raw:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+            continue
+        if ch in "\"'":
+            quote = ch
+            buf.append(ch)
+            continue
+        if ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+        elif ch == "," and depth <= 0:
+            items.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    items.append("".join(buf))
+    items = [i.strip() for i in items if i.strip()]
+    return items or None
+
+
 def _fmt_param_value(ptype, value):
-    """Typed value emission -- prevents the True/int and Double-without-.0 traps."""
+    """Typed value emission -- prevents the True/int and Double-without-.0 traps.
+
+    Returns None -- meaning "write no slot at all" -- only for an `Array[...]`/`List[...]` type
+    with no elements, because the grammar has no literal for an empty list.
+    """
     ptype = (ptype or "String").strip()
     raw = "" if value is None else str(value)
+    array = _ARRAY_TYPE_RE.match(ptype)
+    if array:
+        # This branch is the fix for silent list-default loss. Without it an `Array[String]`
+        # parameter fell through to the String tail below and came out as `default: ''` -- an
+        # empty ParameterString where a list belongs. rosmodel_lint reports 0 errors on that;
+        # the real 3.1.0 server rejects the file with `missing '[' at ''''`, which is a
+        # diagnostic nobody could trace back to a dropped default.
+        items = _list_items(value)
+        if items is None:
+            return None
+        elem = array.group(1)
+        return "[" + ", ".join(
+            _fmt_param_value(elem, _unquote_emitted(i)) or "" for i in items) + "]"
     if ptype == "Boolean":
         return "true" if re.match(r"^\s*(t|1|y|true)", raw, re.I) else "false"
     if ptype == "Integer":
@@ -573,6 +657,38 @@ def _compose(path, kind):
     return lint.root if ok else None
 
 
+def _param_default_literal(node):
+    """A `.ros2` parameter's `default:` node as the literal text the project carries.
+
+    A `ParameterList` default -- `default: ["base_link"]`, which EVERY `Array[...]` parameter
+    both extractors emit has -- composes as a YAML SEQUENCE, not a scalar. The old
+    `dn.value if is_scalar(dn) else None` therefore dropped it on the floor: `init` seeded
+    `"value": null` and `generate` re-spelled it as `default: ''`, an empty ParameterString
+    where a real list belongs. `rosmodel_lint` reports 0 errors on that (RM095 only sees a
+    QUOTED list-shaped string, not a missing one), so the loss surfaced only as the real
+    language server rejecting the regenerated file with `missing '[' at ''''` -- a diagnostic
+    with no visible connection to the parameter that caused it.
+
+    A sequence comes back as its bracketed literal, re-quoting each element in the style the
+    source used, which is byte-for-byte what the in-page parseRos2 reads off the same line.
+    """
+    if node is None:
+        return None
+    if L.is_scalar(node):
+        return node.value
+    if not L.is_sequence(node):
+        return None
+    parts = []
+    for item in node.value:
+        if not L.is_scalar(item):
+            return None                       # a nested struct: no slot for it, carry nothing
+        style = getattr(item, "style", None)
+        parts.append(_q_double(item.value) if style == '"'
+                     else _q_single(item.value) if style == "'"
+                     else item.value)
+    return "[" + ", ".join(parts) + "]" if parts else None
+
+
 def parse_ros2(path):
     """Map a .ros2 AmentPackage to {(package, nodeOrArtifact): artifact_record}. Each record
     carries the full interface set with types and the artifact parameters."""
@@ -632,7 +748,7 @@ def parse_ros2(path):
                         tn = L.mapping_get(pv, "type")
                         dn = L.mapping_get(pv, "default")
                         ptype = tn.value if L.is_scalar(tn) else None
-                        pdefault = dn.value if L.is_scalar(dn) else None
+                        pdefault = _param_default_literal(dn)
                     params.append({"name": ros_plot._strip_quotes(pk.value),
                                    "ptype": ptype or "String", "value": pdefault})
             rec = {"artifact": artifact, "node": node_name, "package": package,
@@ -1457,6 +1573,17 @@ def seed_from_many(paths, roots=None, name=None):
                              % (os.path.basename(path), n["label"], label))
             label_used.add(label)
             new["label"] = label
+            # Which source this node came from. A merge is the ONLY place that knows -- once the
+            # nodes are in one project they are indistinguishable, which is why a merged canvas
+            # read as one undifferentiated pile and why `label_system` renames (above) were the
+            # only surviving trace of where anything came from. The editor colours, filters and
+            # containerises by this; it is provenance, a peer of seededFromAll, not a view
+            # choice, so it lives on the node rather than under project["view"].
+            #
+            # It cannot reach an emitted byte: emit_rossystem/emit_ros2 write named keys, and
+            # both fact trees are built from an allow-list, so an extra node key is excluded by
+            # construction. tests/studio_parity.js pins that.
+            new["srcSystem"] = sysname
             new["ifaces"] = []
             for f in n.get("ifaces") or []:
                 nf = dict(f)
@@ -1722,11 +1849,60 @@ def _match_iface(node, label, kind):
     return None
 
 
+def _card_height(node):
+    """What the page's card for this node will be about that tall, before anything has drawn it.
+
+    Exactly the editor's nodeBox() fallback -- `56 + 22 * ifaces` -- plus the parameter rows,
+    which that fallback does not count because it is only ever consulted for a card the page is
+    about to measure properly anyway. Here there is nothing to measure: this runs in the
+    companion, before any browser has seen the project. An over-estimate merely leaves a gap; an
+    under-estimate overlaps two cards, so the parameter rows are counted.
+    """
+    return 56 + 22 * (len(node.get("ifaces") or []) + len(node.get("params") or []))
+
+
+def _card_width(node):
+    """What the page's card for this node will be about that wide, before anything has drawn
+    it. The stylesheet's min-width is 190px; past that, the widest UNCLIPPED line on the card
+    wins. The node title and every interface name/type truncate with an ellipsis (they have
+    to -- a 58-interface card is already the tall extreme _card_height exists for), but the
+    "package.node" line under the title does not, so a long package or node name is what
+    actually pushes a real card wider than the minimum. ~7.2px/char at the size that line
+    renders in, the same reasoning _card_height already applies to row height: an
+    over-estimate merely leaves a gap, an under-estimate overlaps the next column.
+    """
+    frm = "%s.%s" % (node.get("pkg") or "", node.get("node") or "")
+    return max(190, 40 + int(7.2 * len(frm)))
+
+
 def _grid_layout(nodes):
+    """Seed positions: a square-ish grid, each ROW spaced by the tallest card in it and each
+    COLUMN spaced by the widest.
+
+    The row pitch used to be a flat 240px, and the column pitch a flat 300px, whatever actually
+    landed in that row or column. A node's height is its interface count and real models are
+    full of nodes that go past 240px tall; a node's width follows its package/node NAME, and a
+    real catalogue is full of names past what 300px holds -- turtlebot3_navigation2 (the 14-node
+    composition the docs point at) puts 4 of its 14 cards overlapping a neighbour on first open
+    with a flat column pitch, for the same underlying reason the row fix exists: a card's actual
+    footprint was never consulted. `Auto layout` fixes it for a reader who knows to press it;
+    overlapping cards on open read as the tool being broken rather than as a layout wanting a
+    nudge, on both axes.
+    """
     cols = max(1, int(len(nodes) ** 0.5 + 0.9999))
+    gap_x, gap_y, y = 40, 30, 80
+    col_w = [0] * cols
     for i, n in enumerate(nodes):
-        n["x"] = 60 + (i % cols) * 300
-        n["y"] = 80 + (i // cols) * 240
+        col_w[i % cols] = max(col_w[i % cols], _card_width(n))
+    col_x = [60]
+    for w in col_w[:-1]:
+        col_x.append(col_x[-1] + w + gap_x)
+    for start in range(0, len(nodes), cols):
+        row = nodes[start:start + cols]
+        for i, n in enumerate(row):
+            n["x"] = col_x[i]
+            n["y"] = y
+        y += max(_card_height(n) for n in row) + gap_y
 
 
 def blank_project(name="new_system"):
@@ -1916,7 +2092,13 @@ def emit_ros2(package, git, art_records, companion_pkgs, pkg_comments=None):
                              + _note_suffix(pc.get("ros2Line")))
                 ptype, val = _art_param_decl(p)
                 lines.append("          type: " + ptype)
-                lines.append("          default: " + _fmt_param_value(ptype, val))
+                # `default:` is OPTIONAL on the ParameterType (Basics.xtext:77-80). An
+                # Array[...] with no elements has no legal literal -- `[]` is a parse error and
+                # a quoted '' is a ParameterString, i.e. a lie the real server rejects -- so the
+                # honest emission is no slot at all, the same call the extractors already make.
+                dv = _fmt_param_value(ptype, val)
+                if dv is not None:
+                    lines.append("          default: " + dv)
     return "\n".join(lines) + "\n"
 
 
@@ -2151,9 +2333,13 @@ def emit_rossystem(project):
                 lines.append("        - " + _q_double(lbl) + ": "
                              + _q_double("%s::%s" % (n["artifact"], p["name"]))
                              + _note_suffix(pcm.get("line")))
-                lines.append("          value: "
-                             + _fmt_param_value(p.get("ptype") or _infer_ptype(p.get("sysValue")),
-                                                p.get("sysValue")))
+                # RosParameter's `value:` is MANDATORY (RosSystem.xtext:78-82), so unlike the
+                # .ros2 `default:` this slot cannot be omitted. An Array exposure with nothing
+                # in it has no legal literal either way; `''` is what this has always written
+                # and the lint/oracle will say so, rather than the file failing to parse.
+                pval = _fmt_param_value(p.get("ptype") or _infer_ptype(p.get("sysValue")),
+                                        p.get("sysValue"))
+                lines.append("          value: " + (pval if pval is not None else "''"))
     # The system-level `parameters:` block sits between nodes: and connections: (rule 25).
     sys_params = project.get("params") or []
     if sys_params:
@@ -2180,10 +2366,13 @@ def emit_rossystem(project):
             p.get("default") if p.get("default") not in (None, "") else p.get("value"))
         lines.append("      type: " + ptype + _note_suffix(pcm.get("type")))
         if p.get("default") not in (None, ""):
-            lines.append("      default: " + _fmt_param_value(ptype, p.get("default")))
+            sdv = _fmt_param_value(ptype, p.get("default"))
+            if sdv is not None:
+                lines.append("      default: " + sdv)
         if p.get("value") not in (None, ""):
-            lines.append("      value: " + _fmt_param_value(ptype, p.get("value"))
-                         + _note_suffix(pcm.get("value")))
+            svv = _fmt_param_value(ptype, p.get("value"))
+            if svv is not None:
+                lines.append("      value: " + svv + _note_suffix(pcm.get("value")))
     if project["connections"]:
         lines.append("  connections:")
         for c in project["connections"]:
@@ -2381,6 +2570,32 @@ def validate_project(project):
                           % (f.get("name", "?"), f.get("kind", "?"), typ))
 
     glob_errs += _validate_types(project)
+
+    # A wrapped subsystem is a whole system this project will WRITE, not a reference to someone
+    # else's file -- so the gate has to hold it to the same standard. It did not, and wrapping
+    # was therefore a way to launder a blocking error into a clean generate: the checks above
+    # skip `backing != "hand"`, and after a wrap the outer copies are all "sub" while the real
+    # (hand) definitions sit unexamined inside `content`.
+    outer_name = (project.get("system") or {}).get("name") or "system"
+    seen_names = {outer_name}
+    for sub in _invented_subprojects(project):
+        ref = sub["system"].get("name") or "?"
+        # Same emitted filename twice = the second silently replaces the first, and the whole
+        # outer system can vanish that way (naming a wrapped subsystem after its own parent).
+        if ref in seen_names:
+            glob_errs.append("Subsystem '%s' has the same name as another system this project "
+                             "writes, so both would be emitted as '%s.rossystem' and one would "
+                             "overwrite the other. Rename the subsystem." % (ref, ref))
+            continue
+        seen_names.add(ref)
+        inner = validate_project(sub)
+        for m in inner["global"]:
+            glob_errs.append("subsystem '%s': %s" % (ref, m))
+        # Reported against the node id, which the OUTER project shares (the wrap keeps ids), so
+        # the editor can still route the diagnostic to a card the author can see.
+        for nid_, msgs in inner["byNode"].items():
+            for m in msgs:
+                flag(nid_, "in subsystem '%s': %s" % (ref, m))
     return {"global": glob_errs, "byNode": by_node}
 
 
@@ -2459,26 +2674,76 @@ def _validate_types(project):
     return out
 
 
-def generate_files(project):
-    """Return {relpath: content} for every file the project generates."""
-    files = {}
-    companions = _companion_types(project)
-    companion_pkgs = set(companions.keys())
+def _normalize_subproject(content, ref):
+    """Fill in the project-shaped fields emit_rossystem/emit_ros2/_emit_system_into expect,
+    from the self-contained `content` an in-browser "wrap in subsystem" carries. `content` is
+    already nodes/connections/packages/types/params lifted straight out of the outer project by
+    the Studio editor -- this only supplies the handful of top-level fields a bare extraction
+    would not think to set for itself."""
+    p = dict(content)
+    p["system"] = dict(p.get("system") or {})
+    p["system"].setdefault("name", ref)
+    p["system"].setdefault("fromFile", None)
+    p.setdefault("nodes", [])
+    p.setdefault("connections", [])
+    p.setdefault("packages", {})
+    p.setdefault("types", {})
+    p.setdefault("params", [])
+    p.setdefault("subSystems", [])
+    return p
 
-    # group hand-authored nodes by package -> one .ros2 each
-    by_pkg = {}
-    for n in project["nodes"]:
-        if n["backing"] == "hand" and n["pkg"]:
-            by_pkg.setdefault(n["pkg"], []).append(n)
+
+def _invented_subprojects(project):
+    """Every subSystems: entry the Studio editor extracted in-browser, as a project-shaped dict.
+    A reference to a PRE-EXISTING file has no `content` and is not one of these: its bytes are
+    someone else's and only get staged (see _stage_local_subsystems), never regenerated."""
+    return [_normalize_subproject(s["content"], s["ref"])
+            for s in (project.get("subSystems") or [])
+            if s.get("invented") and s.get("content")]
+
+
+def generate_files(project):
+    """Return {relpath: content} for every file the project generates.
+
+    One `.rossystem` per system -- the outer one plus each wrapped subsystem -- but the `.ros2`
+    and `.ros` files are emitted ONCE from all of them together, because a package is not owned
+    by a system. Wrapping two nodes of a three-node package leaves the third behind in the outer
+    project, and emitting per-system wrote `<pkg>.ros2` twice into one dict: the second write
+    won and the artifacts only the other system knew about were gone from the file. `generate`
+    still exited 0 -- a node referenced by a `from:` whose artifact is missing is only RM084, a
+    warning -- while the real language server rejects it outright.
+    """
+    systems = [project] + _invented_subprojects(project)
+
+    # a package's artifacts are the union across every system that declares one, so a node stays
+    # in its .ros2 no matter which side of a wrap it ended up on
+    by_pkg, pkg_meta = {}, {}
+    for sysproj in systems:
+        for n in sysproj["nodes"]:
+            if n["backing"] == "hand" and n["pkg"]:
+                by_pkg.setdefault(n["pkg"], []).append(n)
+        for pkg, entry in (sysproj.get("packages") or {}).items():
+            pkg_meta.setdefault(pkg, entry or {})       # first system to describe it wins
+
+    # likewise the companion .ros: the type may be referenced from either side of the wrap
+    companions = {}
+    for sysproj in systems:
+        for pkg, blocks in _companion_types(sysproj).items():
+            companions.setdefault(pkg, set()).update(blocks)
+    companion_pkgs = set(companions.keys())
+    all_types = {}
+    for sysproj in systems:
+        all_types.update(sysproj.get("types") or {})
+
+    files = {}
     for pkg, recs in sorted(by_pkg.items()):
-        entry = project.get("packages", {}).get(pkg) or {}
+        entry = pkg_meta.get(pkg) or {}
         files[pkg + ".ros2"] = emit_ros2(pkg, entry.get("fromGitRepo"), _fold_artifacts(recs),
                                          companion_pkgs, entry.get("comments"))
-
     for pkg, blocks in sorted(companions.items()):
-        files[pkg + ".ros"] = _companion_ros(pkg, blocks, project.get("types"))
-
-    files[project["system"].get("name", "system") + ".rossystem"] = emit_rossystem(project)
+        files[pkg + ".ros"] = _companion_ros(pkg, blocks, all_types)
+    for sysproj in systems:
+        files[sysproj["system"].get("name", "system") + ".rossystem"] = emit_rossystem(sysproj)
     return files
 
 
@@ -2534,9 +2799,13 @@ def _sys_param_fact(p):
         out.append("ns=%s" % p["ns"])
     out.append("type=%s" % ptype)
     if p.get("default") not in (None, ""):
-        out.append("default=%s" % _unquote_emitted(_fmt_param_value(ptype, p["default"])))
+        fdv = _fmt_param_value(ptype, p["default"])
+        if fdv is not None:
+            out.append("default=%s" % _unquote_emitted(fdv))
     if p.get("value") not in (None, ""):
-        out.append("value=%s" % _unquote_emitted(_fmt_param_value(ptype, p["value"])))
+        fvv = _fmt_param_value(ptype, p["value"])
+        if fvv is not None:
+            out.append("value=%s" % _unquote_emitted(fvv))
     return "; ".join(out)
 
 
@@ -2576,9 +2845,14 @@ def _unquote_emitted(s):
 def _param_fact(ptype, value):
     """`type` + `default` as one leaf, spelled the way the FILE spells it: the project side
     runs _fmt_param_value (which quotes a String) and then unquotes, because the source side
-    reads through a parser that already did."""
+    reads through a parser that already did.
+
+    An Array with no elements emits no `default:` line at all, so the source side reads back
+    None for it -- the leaf has to be the same empty string on both sides or `diff` would
+    report every such parameter as changed on every run."""
+    fv = _fmt_param_value(ptype, value)
     return "%s = %s" % (ptype or "String",
-                        _unquote_emitted(_fmt_param_value(ptype, value)))
+                        "" if fv is None else _unquote_emitted(fv))
 
 
 def _iface_fact_key(kind, name):
@@ -2708,9 +2982,27 @@ def project_facts(project):
                                                      f["name"])
         # keyed by the exposure LABEL, matching source_facts, which reads it back off the
         # `- "label": "artifact::name"` line the emitter now writes.
+        #
+        # A list-shaped sysValue is predicted through _fmt_param_value, exactly like the
+        # .ros2 declaration side already is via _param_fact -- because the emitter (line ~2317)
+        # re-quotes every element itself and does not necessarily keep the source's quote
+        # character. This raw _fact_str(sysValue) used to pass regardless, but only because
+        # ros_plot._node_repr (the seeder this project.json's sysValue came from) silently
+        # flattened a source list like ["base_link", "map"] into the STRING "[base_link, map]"
+        # -- and source_facts(), reading the generated file back through that same lossy
+        # _node_repr, flattened the actual ['base_link', 'map'] the emitter wrote into the
+        # identical string. Two independent bugs producing the same wrong text is not
+        # agreement; fixing _node_repr to preserve each element's quoting (so a comma INSIDE
+        # a string element survives) made that coincidence visible as a real predictor/emitter
+        # mismatch: source quotes with "double", the emitter always emits 'single'.
         for p in n.get("params") or []:
             if p.get("exposed"):
-                rec["parameters"][p.get("label") or p["name"]] = _fact_str(p.get("sysValue"))
+                sv = p.get("sysValue")
+                if isinstance(sv, str) and sv.strip()[:1] == "[" and sv.strip()[-1:] == "]":
+                    ptype = p.get("ptype") or _infer_ptype(sv)
+                    fv = _fmt_param_value(ptype, sv)
+                    sv = "" if fv is None else _unquote_emitted(fv)
+                rec["parameters"][p.get("label") or p["name"]] = _fact_str(sv)
         facts["nodes"][n["label"]] = rec
 
     for c in project["connections"]:
@@ -2920,9 +3212,17 @@ def merged_source_facts(paths):
 
 def run_lint(paths):
     """Run rosmodel_lint over the generated files; return (errors, warnings, infos, text)."""
+    # Build a registry of every msg/srv/action this SAME extraction batch defines, so a
+    # cross-file reference within it (package A's service field typed as package B's message,
+    # both generated together here) resolves locally instead of only against the small
+    # hand-curated vendored catalogue -- see collect_ros_local_specs() for why that matters.
+    local_specs = set()
+    for p in paths:
+        if p.endswith('.ros'):
+            local_specs |= L.collect_ros_local_specs(p)
     findings = []
     for p in paths:
-        lint = L.Linter(p, use_catalogue=True)
+        lint = L.Linter(p, use_catalogue=True, local_specs=local_specs)
         lint.run()
         findings.extend(lint.findings)
     errs = [f for f in findings if f.severity == L.ERROR]
@@ -2931,29 +3231,160 @@ def run_lint(paths):
     return errs, warns, infos, findings
 
 
+def _ask_oracle_path():
+    return os.path.join(os.path.dirname(_HERE), "tests", "oracle", "ask_oracle.py")
+
+
+def oracle_preflight():
+    """(available, reason). Can the real language server be asked on this machine?
+
+    Delegates to ask_oracle.py --preflight rather than re-deriving where java and the jar live:
+    two copies of that would drift the first time either moved, and this repo has the scar
+    tissue to prove it. Cheap -- it runs `java -version` and stats a file, no JVM start.
+    """
+    ask = _ask_oracle_path()
+    if not os.path.isfile(ask):
+        return False, "ask_oracle.py not found at %s" % ask
+    python = os.environ.get("ROSMODEL_PYTHON", sys.executable)
+    try:
+        proc = subprocess.run([python, ask, "--preflight"], capture_output=True, text=True,
+                              timeout=60)
+    except Exception as exc:
+        return False, "could not run ask_oracle.py --preflight: %s" % exc
+    text = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    text = text[len("FATAL: "):] if text.startswith("FATAL: ") else text
+    return proc.returncode == 0, text
+
+
 def run_oracle(outdir, model_paths):
-    """Stage catalogue deps then ask the real language server. Returns (ok, text)."""
+    """Stage catalogue deps then ask the real language server. Returns (ok, text, records).
+
+    Three things this used to get wrong, all of which made a broken oracle look like a clean
+    one -- which is the whole complaint: "if the jar is not runnable I want a clear error;
+    I have silent failures!"
+
+      1. proc.returncode was never checked. ask_oracle.py could print an ACCEPTED line and then
+         die, and the substring test below would still call it a pass.
+      2. The verdict was `"ACCEPTED" in out and "REJECTED" not in out` over stdout+stderr. That
+         is a text search over a stream that also carries diagnostic MESSAGES and a stderr tail,
+         so a model whose own text contained either word decided its own verdict.
+      3. ask_oracle.py returns 0 even when every case failed to run: NO_INITIALIZE_RESPONSE and
+         MISSING_JAR are per-case *statuses*, and a case that never got a diagnostic back still
+         printed "ACCEPTED — 0 error(s)". A server that timed out was indistinguishable from a
+         model with nothing wrong with it.
+
+    So the verdict now comes from the structured results.json -- per-case `status` plus the
+    actual diagnostic records -- and a status that is not OK is a failure, not a silent pass.
+    """
     try:
         import collect_deps
     except Exception as exc:
-        return False, "collect_deps unavailable: %s" % exc
-    oracle_dir = os.path.join(os.path.dirname(_HERE), "tests", "oracle")
-    ask = os.path.join(oracle_dir, "ask_oracle.py")
+        return False, "collect_deps unavailable: %s" % exc, []
+    ask = _ask_oracle_path()
     if not os.path.isfile(ask):
-        return False, "ask_oracle.py not found at %s" % ask
+        return False, "ask_oracle.py not found at %s" % ask, []
     try:
         collect_deps.collect(model_paths, outdir)
     except Exception as exc:
-        return False, "dep staging failed: %s" % exc
+        return False, "dep staging failed: %s" % exc, []
     python = os.environ.get("ROSMODEL_PYTHON", sys.executable)
+    # --results into the OUTPUT directory, never the default. ask_oracle.py defaults to
+    # tests/oracle/results.json, which is the checked-in 19-case regression record: a
+    # `generate --oracle` run would quietly overwrite it with this project's single case, and
+    # its own guard against that only triggers when the file already has uncommitted changes.
+    #
+    # `--results=PATH`, ONE token, not `--results PATH`. ask_oracle.main() collects its case
+    # directories as `[a for a in sys.argv[1:] if not a.startswith("-")]`, so a separate value
+    # does not start with a dash and is swept up as a second CASE -- which it then reports as
+    # `STATUS: NO_FILES`, turning every run into a spurious "could not validate 2 case(s)".
+    # Its _results_path() accepts both spellings; only the joined one is invisible to that
+    # filter. (Found by running it: the failure is silent in the sense that matters -- the
+    # oracle still ran correctly, it just also judged a JSON file.)
+    res = os.path.join(outdir, "oracle_results.json")
     try:
-        proc = subprocess.run([python, ask, outdir], capture_output=True, text=True,
-                              timeout=300)
+        proc = subprocess.run([python, ask, outdir, "--results=" + res],
+                              capture_output=True, text=True, timeout=300)
     except Exception as exc:
-        return False, "oracle invocation failed: %s" % exc
+        return False, "oracle invocation failed: %s" % exc, []
     out = proc.stdout + ("\n" + proc.stderr if proc.stderr else "")
-    ok = "ACCEPTED" in out and "REJECTED" not in out
-    return ok, out
+
+    records = None
+    try:
+        with open(res, "r", encoding="utf-8") as handle:
+            records = json.load(handle)
+    except Exception:
+        records = None
+
+    if proc.returncode != 0:
+        return False, out + ("\n\noracle process exited %d." % proc.returncode), []
+    if not records:
+        return False, out + ("\n\noracle wrote no results to %s -- it did not get far enough to "
+                             "judge anything, so this run has NOT been validated by the real "
+                             "language server." % res), []
+    bad = [r for r in records if r.get("status") != "OK"]
+    if bad:
+        detail = "; ".join("%s: %s" % (r.get("case", "?"), r.get("status", "?")) for r in bad)
+        return False, out + ("\n\noracle could not validate %d case(s) -- %s. A case that never "
+                             "received diagnostics is NOT a clean model; it is a server that did "
+                             "not answer." % (len(bad), detail)), []
+    errs = [d for r in records for d in r.get("diagnostics", []) if d.get("severity") == "ERROR"]
+    diags = [d for r in records for d in r.get("diagnostics", [])]
+    return not errs, out, diags
+
+
+def oracle_diagnostics(records, project):
+    """Oracle diagnostic records -> the same {"global", "byNode"} shape the linter's findings
+    already use, so they land on the node cards instead of staying on the console.
+
+    Mapping, honestly bounded. A diagnostic carries {file, line, severity, message} -- and `file`
+    is a BASENAME with no column, because ask_oracle drops range.start.character. Two routes:
+
+      * the FILE. generate writes `<pkg>.ros2`, `<pkg>.ros` and `<system>.rossystem`, so for the
+        first two the stem IS the package name and maps to that package's nodes with no string
+        guessing. This is the reliable half.
+      * the MESSAGE, for `.rossystem` diagnostics, which name a node or an interface when they
+        are reference errors ("Couldn't resolve reference to Node 'pkg.artifact'") and name
+        nothing at all when they are parser errors ("mismatched input 'msgs:'"). Same substring
+        scan the lint mapper uses, and it inherits the same limits.
+
+    Anything that maps to neither goes to `global`, and the caller puts those in the BANNER --
+    project["diagnostics"]["global"] is carried into the page but nothing renders it, so a
+    diagnostic left there alone would be invisible. Losing an unmapped ERROR silently is exactly
+    the failure this feature exists to remove.
+    """
+    by_node = {}
+    unmatched = []
+    labels = {n["label"]: n["id"] for n in project["nodes"] if n.get("label")}
+    pkgs = {}
+    for n in project["nodes"]:
+        if n.get("pkg"):
+            pkgs.setdefault(n["pkg"], []).append(n["id"])
+    for d in records:
+        sev = d.get("severity")
+        if sev not in ("ERROR", "WARNING"):
+            continue
+        fname = os.path.basename(d.get("file") or "")
+        stem, ext = os.path.splitext(fname)
+        msg = "oracle %s %s:%s %s" % (sev, fname, d.get("line"), (d.get("message") or "").strip())
+        hits = []
+        if ext in (".ros2", ".ros") and stem in pkgs:
+            hits = pkgs[stem]
+        if not hits:
+            for lbl, nid_ in sorted(labels.items(), key=lambda kv: -len(kv[0])):
+                if lbl and lbl in (d.get("message") or ""):
+                    hits = [nid_]
+                    break
+        if not hits:
+            for pkg, ids in pkgs.items():
+                if pkg and pkg in (d.get("message") or ""):
+                    hits = ids
+                    break
+        if hits:
+            for nid_ in hits:
+                by_node.setdefault(nid_, []).append(msg)
+        else:
+            unmatched.append(msg)
+    return {"global": unmatched, "byNode": by_node}
 
 
 # ========================================================================================
@@ -3055,7 +3486,8 @@ def load_autocomplete():
 # Editor HTML
 # ========================================================================================
 
-def render_editor(project, diagnostics=None, banner=None):
+def render_editor(project, diagnostics=None, banner=None, banner_title=None,
+                  banner_sev=None):
     ac = load_autocomplete()
     if diagnostics:
         project = dict(project)
@@ -3118,10 +3550,17 @@ def render_editor(project, diagnostics=None, banner=None):
             "nameKeywords": sorted(L.ROS_FIELD_NAME_KEYWORDS),
         },
         "banner": banner,
+        # Not every banner is a failed generation. An oracle that could not RUN leaves the
+        # generated files valid and the lint clean -- calling that "Generation failed" in the
+        # status chip is simply untrue, and a page that overstates one thing gets believed less
+        # about the next. The companion says which kind it is; the page stops guessing.
+        "bannerTitle": banner_title,
+        "bannerSev": banner_sev,
         "acWarnings": ac["warnings"],
     }
     data = json.dumps(payload, ensure_ascii=False)
     return (_EDITOR_TEMPLATE
+            .replace("/*__THEME_BOOT__*/", C.THEME_BOOT_JS)
             .replace("/*__PALETTE_CSS__*/", C.PALETTE_CSS)
             .replace("/*__JS_PRIMITIVES__*/", C.JS_PRIMITIVES)
             .replace("/*__DATA__*/null", data)), ac["warnings"]
@@ -3330,16 +3769,140 @@ def cmd_generate(args):
         for n in notes:
             print("\n  note: %s" % n)
 
-    if args.oracle:
-        print("\n--- oracle (real language server) ---")
-        # a staged subSystems: target is walked too -- it can carry catalogue references of its
-        # own that collect_deps still has to vendor in before the server sees the directory.
-        ok, text = run_oracle(outdir, written + staged)
-        print(text)
-        if not ok:
-            print("oracle did NOT return a clean ACCEPTED.", file=sys.stderr)
-            return 1
+    # ---- the real language server ---------------------------------------------------------
+    # This used to be opt-in, and that was the root cause behind "the validation misses errors
+    # the jar would catch". rosmodel_lint's RM rules are a deliberate, documented APPROXIMATION
+    # of the Xtext validator -- the oracle exists precisely BECAUSE they cannot cover everything
+    # (an action server typed with a message rather than an action being exactly that shape of
+    # gap) -- yet a plain `generate` consulted only the approximation and said nothing about it.
+    # A clean run printed "0 error(s)" and exited 0 having never asked the authority.
+    #
+    # So it is now ON by default whenever it can actually run, `--no-oracle` opts out, and the
+    # one case that must never be quiet -- it cannot run -- is reported in three places at once.
+    want_oracle = args.oracle is not False
+    required = args.oracle is True          # --oracle was passed explicitly: "I require this"
+    oracle_note = None
+    if want_oracle:
+        available, why = oracle_preflight()
+        if available:
+            print("\n--- oracle (real language server) ---")
+            print("  %s" % why)
+            # SAY SOMETHING BEFORE BLOCKING. run_oracle() starts a JVM, waits out an LSP
+            # handshake and then waits per file: measured at 53s for a 2-node model and 107s
+            # for a 45-node one, and it printed NOTHING for the whole of it. A minute of dead
+            # terminal is indistinguishable from a hang, and this landed on by default in the
+            # same change -- so the first thing most users would ever see of the oracle is the
+            # tool apparently freezing at the moment it is doing the most valuable thing it
+            # does. The flush matters: stdout is block-buffered when `generate` is piped, which
+            # is how the studio and the hooks run it, so an unflushed line arrives with the
+            # verdict and is worth nothing.
+            print("  asking the real language server for a second opinion on %d file(s) — "
+                  "it starts a JVM and answers per file, so expect roughly a minute "
+                  "(--no-oracle skips it)" % len(written))
+            sys.stdout.flush()
+            # a staged subSystems: target is walked too -- it can carry catalogue references of
+            # its own that collect_deps still has to vendor in before the server sees it.
+            ok, text, records = run_oracle(outdir, written + staged)
+            print(text)
+            odiag = oracle_diagnostics(records, project)
+            if not ok:
+                n_err = sum(len(v) for v in odiag["byNode"].values()) + len(odiag["global"])
+                # "Rejected" and "could not finish" are DIFFERENT ANSWERS and must not share a
+                # message. A server that crashed or never answered produces no diagnostics, and
+                # announcing "REJECTED this model (0 diagnostic(s))" for it would be the same
+                # class of misreport this whole change exists to remove -- blaming the model for
+                # a broken tool, with nothing to act on.
+                if n_err:
+                    banner = ("The real language server REJECTED this model.\n\n"
+                              "These are errors rosmodel_lint's RM rules cannot all catch — the "
+                              "deterministic rules are an approximation of the Xtext validator, "
+                              "which is why the oracle exists.\n\n"
+                              + "\n".join(odiag["global"]))
+                    title, msg = ("Rejected by the language server",
+                                  "the real language server rejected this model "
+                                  "(%d diagnostic(s))" % n_err)
+                else:
+                    banner = ("Real-server validation started but did not complete, so this "
+                              "model has NOT been validated.\n\nIt returned no diagnostics — "
+                              "this is a broken or unanswering server, not a verdict on your "
+                              "model.\n\n%s" % text)
+                    title, msg = ("Validation did not complete",
+                                  "the real language server did not complete "
+                                  "(no diagnostics returned)")
+                err_html = _write_error_html(project, args.project, banner, diagnostics=odiag,
+                                             title=title, sev="err")
+                print("\nERROR: %s; re-rendered editor -> %s" % (msg, err_html), file=sys.stderr)
+                return 1
+            # ACCEPTED, but the server may still have said something. Oracle WARNINGs were
+            # computed and then dropped on the floor here -- odiag was only ever consumed on the
+            # rejection path -- so a run the server accepted *with warnings* left them in the
+            # console and nowhere else. That is the same "the console is not the studio" gap the
+            # jar-failure notice exists to close, one branch over.
+            n_warn = sum(len(v) for v in odiag["byNode"].values()) + len(odiag["global"])
+            if n_warn:
+                note = _write_error_html(
+                    project, args.project,
+                    "The real language server ACCEPTED this model, with %d warning(s).\n\n"
+                    "They are on the flagged nodes. Warnings are not errors — nothing is "
+                    "blocked — but they come from the authority, not from the approximate "
+                    "RM rules, so they are worth reading.\n\n%s"
+                    % (n_warn, "\n".join(odiag["global"])),
+                    diagnostics=odiag, title="Accepted, with warnings", sev="warn",
+                    suffix=".notice.html")
+                print("\nNOTE: %d oracle warning(s); re-rendered editor -> %s" % (n_warn, note))
+        else:
+            # NOT silent, and not a bare stack trace. The user's words were "if the jar is not
+            # runnable I want a clear error in the studio"; the console alone is not the studio,
+            # so this also goes into the page's own error surface via `banner`, which
+            # buildStatus() turns red and which the page auto-opens on load.
+            oracle_note = (
+                "Real-server validation did NOT run.\n\n%s\n\n"
+                "What that means: the results below come only from rosmodel_lint's RM rules, "
+                "which are a deliberate approximation of the real Xtext validator and cannot "
+                "catch everything it would — an action server declared with a message type "
+                "rather than an action type is the standard example.\n\n"
+                "How to fix it: set ROSMODEL_JAVA to a Java 19+ binary, or build the language "
+                "server jar per build/README.md. Re-run `generate` afterwards.\n\n"
+                "To silence this deliberately, pass --no-oracle." % why)
+            print("\n--- oracle (real language server) ---")
+            print("  NOT RUN: %s" % why.replace("\n", "\n  "))
+            print("  Lint results above are plugin-only and cannot catch everything the real "
+                  "validator would.", file=sys.stderr)
+            if required:
+                # --oracle was asked for by name. Refusing to run it is then a failure, not a
+                # degradation to be shrugged off.
+                print("\nERROR: --oracle was requested but the real language server could not "
+                      "be run.", file=sys.stderr)
+                _write_error_html(project, args.project, oracle_note,
+                                  title="Validation could not run", sev="err")
+                return 1
+
+    # A jar that could not run is a warning, not a failed generation: the files ARE written and
+    # the lint DID pass. But the page must say so, or "validated" silently means "half
+    # validated" -- so the editor is re-rendered with the notice even on an otherwise clean run.
+    if oracle_note:
+        note_html = _write_error_html(project, args.project, oracle_note,
+                                      title="Validation incomplete", sev="warn",
+                                      suffix=".notice.html")
+        print("\nNOTE: re-rendered the editor carrying this notice -> %s" % note_html)
     return 0
+
+
+def _write_error_html(project, project_path, banner, diagnostics=None,
+                      title=None, sev=None, suffix=".error.html"):
+    """Re-render the editor beside the project with a banner it will show on load.
+
+    `suffix` exists because not every one of these is an error. A run whose files were written
+    and whose lint was clean, but which could not reach the real language server, is a NOTICE --
+    writing that to `<project>.error.html` would be a file whose own name misreports it, and
+    would also overwrite the genuine error page from a previous failing run.
+    """
+    html, _ = render_editor(project, diagnostics=diagnostics, banner=banner,
+                            banner_title=title, banner_sev=sev)
+    path = os.path.splitext(os.path.abspath(project_path))[0] + suffix
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(html)
+    return path
 
 
 def _generated_facts(project):
@@ -3471,7 +4034,19 @@ def main(argv=None):
     p_gen = sub.add_parser("generate", help="emit files, lint, optionally ask the oracle")
     p_gen.add_argument("project")
     p_gen.add_argument("--outdir", default=None)
-    p_gen.add_argument("--oracle", action="store_true")
+    # Tri-state on purpose, and the default is None rather than True/False:
+    #   None   -> run the oracle if it can run, warn loudly (everywhere) if it cannot
+    #   True   -> --oracle, "I require it": failing to run it is an ERROR
+    #   False  -> --no-oracle, "do not ask", and nothing is reported
+    # store_true's default of False could not express "try, but do not fail the build over a
+    # missing JDK", which is the behaviour that makes default-on safe to ship.
+    p_gen.add_argument("--oracle", dest="oracle", action="store_true", default=None,
+                       help="require the real language server; fail if it cannot be run "
+                            "(it is already attempted by default when Java and the jar "
+                            "are available)")
+    p_gen.add_argument("--no-oracle", dest="oracle", action="store_false",
+                       help="skip real-server validation entirely and report only "
+                            "rosmodel_lint's deterministic RM rules")
     p_gen.add_argument("--diff", action="store_true",
                        help="also print the model-level diff against the seed source")
     p_gen.set_defaults(func=cmd_generate)

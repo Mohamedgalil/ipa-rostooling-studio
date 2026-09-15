@@ -395,6 +395,21 @@ internal and invisible to the parent; the third crosses.
 Without this run, "collapse a subsystem to one box" and "frame its internals" would have been
 built against a corpus in which no subsystem has any internals worth drawing.
 
+## Run 7 — 2026-09-03, a list value written as a quoted string
+
+`case 24-neg-list-as-string` — a minimal `Array[String]` parameter, exposed from a `.rossystem`
+node with its value written as the quoted string `"['a', 'b']"` instead of a real list
+`["a", "b"]`. **REJECTED, 1E** — `Expect a list of elements; format { , , }`.
+
+This is not a synthetic worst case. A live validation round of the `ros-model` skill found this
+exact defect in a real generated file: the skill had transcribed a `type:Array [String]` /
+`value: "['x', 'y']"` pair verbatim from a real project's own (defective) `.ros2` source, following
+its documented "preserve the source literal" guidance to the letter — the guidance had no
+exception for a source that is simply wrong. This run confirms the real server does reject the
+copy, which justifies `RM095` as ERROR on the `.rossystem` side (`rosmodel_lint.py`) and closes the
+gap: SKILL.md §8 and `skills/ros-model/references/rossystem-syntax.md` §5 now say the
+declared/requested type wins and the string form must be converted, not preserved.
+
 ## Still not covered
 
 - ~~**`.rossystem` — entirely.**~~ **Closed 2026-07-21** by the locally built

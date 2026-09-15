@@ -17,6 +17,34 @@ validator rule table and an enforced emission profile.
 
 ---
 
+## Two tools live in this repository
+
+Read this before anything else, because both are called "studio" and they are not the same thing.
+
+| | What it is | Start it with |
+|---|---|---|
+| **The plugin** (everything below) | A Claude Code plugin: skill, linter, hooks, language servers, and `/ros-studio` — a **self-contained `file://` HTML editor** with no server and no network. | `/plugin install`, or `py scripts/ros_studio.py …` |
+| **CoreSense Studio** | A **local HTTP service** with a project store on disk, a React front end, linked ROS 2 source repositories, and model checking. | `python scripts/studio_server.py --storage-root ~/ros-studio --port 0` |
+
+CoreSense Studio covers the project brief, the Architecture model graph, extracting components
+from real ROS 2 source repositories, and checking a model. It does **not** do deployment,
+containerization, live ROS telemetry or robot simulation — that is a separate, confidential tool.
+
+It imports `ros_studio.py` as its generation and validation engine, so both halves emit through the
+same emitter and the same linter. Full documentation: **[`docs/coresense-studio.md`](docs/coresense-studio.md)**.
+
+Two things that trip people up on first contact, repeated here so they are not buried:
+
+- The front end's React half is **built**. Changes to `web/studio/frontend/src/*.jsx` do nothing
+  until you run `npm run build` in `web/studio/frontend/`. The plain scripts next to it
+  (`web/studio/app.js` and friends) need no build.
+- "Resolve with coding agent" shells out to a coding-agent CLI **already installed on your
+  machine** — `codex`, `claude` or `gemini` on `PATH`. There is no API key and no bundled agent.
+  With none of them installed the feature fails cleanly with a message saying so, and the rest of
+  the app is unaffected.
+
+---
+
 ## Prerequisites — read this first
 
 | Requirement | Needed for | Status on this machine |
@@ -28,7 +56,7 @@ validator rule table and an enforced emission profile.
 ### ✅ There is a working oracle — use it
 
 `tests/oracle/ask_oracle.py` drives the real RosTooling language servers over stdio and reports
-their diagnostics. All 25 cases<!--@count:oracle_cases--> currently behave as documented; the
+their diagnostics. All 26 cases<!--@count:oracle_cases--> currently behave as documented; the
 rejections are negative controls that confirm the hard exclusions, plus three that settled the
 `from:` reference form. The per-case verdicts live with the runs that produced them, in
 [`tests/oracle/RESULTS.md`](tests/oracle/RESULTS.md).
@@ -133,6 +161,14 @@ scripts/ros_studio.py           /ros-studio backend: init (seed) / render (edito
 scripts/_studio_common.py       shared HTML/CSS/JS primitives + emit vocabulary (imported by both ros_plot and ros_studio)
 scripts/_studio_editor.py       the /ros-studio editor page as one raw-string template
 scripts/README.md               rule reference + deviations + test evidence
+scripts/studio_server.py        CoreSense Studio: the local HTTP service (routes live in _route)
+scripts/studio_store.py         its project store: projects, revisions, evidence, recovery
+scripts/studio_runtime.py       coding-agent handoff + the headless flag-resolution job system
+scripts/studio_repositories.py  linking/fetching ROS source repos, *.repos deps, Git submodules
+scripts/studio_source.py        static extraction of ROS contracts from source
+scripts/studio_catalogue.py     the reusable component catalogue
+web/studio/                     its front end: plain scripts + a built React bundle (dist/)
+docs/coresense-studio.md        CoreSense Studio documentation — start here for the web app
 tests/roundtrip.py              semantic round-trip harness
 tests/studio_roundtrip.py       /ros-studio seed -> generate: round-trip, orphan gate, JS/Python parity
 tests/studio_parity.js          the editor's .rossystem preview vs the Python emitter, byte for byte
@@ -243,8 +279,14 @@ py scripts/ros_studio.py init path/to/models/ --out project.json --name combined
 py scripts/ros_studio.py render project.json --out ros-studio.html
 
 # author in the browser, hit Commit (downloads project.json), then generate + validate:
-py scripts/ros_studio.py generate project.json --outdir generated            # emits + rosmodel_lint
-py scripts/ros_studio.py generate project.json --outdir generated --oracle    # + real language server
+py scripts/ros_studio.py generate project.json --outdir generated              # emits, lints, and asks
+                                                                               # the real language server
+                                                                               # when Java 19+ and the jar
+                                                                               # are available -- and says
+                                                                               # loudly when they are not
+py scripts/ros_studio.py generate project.json --outdir generated --oracle     # REQUIRE the real server:
+                                                                               # fail if it cannot be run
+py scripts/ros_studio.py generate project.json --outdir generated --no-oracle  # RM rules only, no report
 ```
 
 Because Commit is a manual download, the page also holds the session itself: every mutating action

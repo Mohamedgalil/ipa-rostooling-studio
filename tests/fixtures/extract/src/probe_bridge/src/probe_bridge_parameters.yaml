@@ -1,0 +1,14 @@
+probe_bridge_node:
+  # REGRESSION FIXTURE: the default is the STRING "false", not the YAML boolean false, under a
+  # declared bool type. Python truthiness makes a non-empty string true, so a naive reader emits
+  # `default: true` here -- the exact opposite of what the source says, and nothing downstream
+  # can tell. gpl_value() must render this as `false`.
+  enable_probe:
+    type: bool
+    default_value: "false"
+  rate_hz:
+    type: double
+    default_value: 20.0
+  frames:
+    type: string_array
+    default_value: ["base_link"]

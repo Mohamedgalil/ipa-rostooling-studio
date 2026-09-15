@@ -1,0 +1,58 @@
+# GENERATED DRAFT -- scripts/extract_rossystem.py
+# Launch file(s) read (parsed with ast, never executed):
+#   tests/fixtures/extract/src/probe_bringup/launch/probe.launch.py
+# Node interfaces read from: <OUT>/rosnodes
+#
+# A node label below is the DEPLOYMENT instance name (the launch file's name=, or a controller
+# instance); from: is the node TYPE as the .ros2 declares it. They differ on purpose and neither
+# file was rewritten to make them match.
+#
+# connections: is deliberately absent. SKILL.md hard rule 4 forbids synthesising a connection
+# the source did not declare, and MatchPortMsgs compares types by object identity, so a pairing
+# inferred from matching names is unverifiable. 1 candidate pair(s) were computed and are listed
+# in the run's --json record; accept them one at a time.
+#
+# CAUTION -- these nodes resolved to the vendored catalogue rather than to a model built from
+# this project's own source: robot_state_publisher. Their interfaces: below are the catalogue's
+# general model of that node, which can be broader or narrower than what this deployment
+# actually uses (the catalogued rviz2, for instance, is Nav2-specific). They resolve and
+# validate; whether each port is really present here is not something a launch file can tell
+# you.
+# EXTRACTOR-FLAGS: 0
+probe:
+  fromFile: "probe_bringup/launch/probe.launch.py" # on disk: <ROOT>/tests/fixtures/extract/src/probe_bringup/launch/probe.launch.py
+  nodes:
+    "probe_bridge":
+      from: "probe_bridge.probe_bridge_main" # project-local, see probe_bridge.ros2
+      interfaces:
+        - "/probe/status_pub": pub-> "probe_bridge_node::/probe/status"
+        - "/probe/reset_sub": sub-> "probe_bridge_node::/probe/reset"
+      parameters:
+        - "enable_probe": "probe_bridge_node::enable_probe"
+          value: true # from the launch file
+        - "interface": "probe_bridge_node::interface"
+          value: "eth1" # from the launch file
+    "probe_pilot":
+      from: "probe_pilot.probe_pilot" # project-local, see probe_pilot.ros2
+      interfaces:
+        - "/probe/enable_pub": pub-> "probe_pilot_node::/probe/enable"
+        - "/probe/status_sub": sub-> "probe_pilot_node::/probe/status"
+      parameters:
+        - "enabled": "probe_pilot_node::enabled"
+          value: true # from the launch file
+        - "period_sec": "probe_pilot_node::period_sec"
+          value: 0.25 # from the launch file
+    "probe_alpha":
+      from: "probe_dual.probe_alpha_node" # project-local, see probe_dual.ros2
+      interfaces:
+        - "/probe/alpha_pub": pub-> "probe_alpha::/probe/alpha"
+    "robot_state_publisher":
+      from: "robot_state_publisher.robot_state_publisher" # assets/rosmodelscatalog/common/robot_state_publisher.ros2
+      interfaces:
+        - "robot_description_pub": pub-> "robot_state_publisher::robot_description"
+        - "tf_pub": pub-> "robot_state_publisher::tf"
+        - "tf_static_pub": pub-> "robot_state_publisher::tf_static"
+        - "joint_states_sub": sub-> "robot_state_publisher::joint_states"
+      parameters:
+        - "use_sim_time": "robot_state_publisher::use_sim_time"
+          value: false # from the launch file, launch-arg default (use_sim_time) -- overridable on the command line

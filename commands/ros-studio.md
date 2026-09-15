@@ -1,6 +1,6 @@
 ---
 description: Author RosTooling models in an interactive self-contained editor, then deterministically generate .ros2/.rossystem/.ros and validate them against the real language server, via scripts/ros_studio.py.
-argument-hint: "init [file.rossystem | dir ...] | render project.json [--open] | generate project.json [--oracle] | diff project.json"
+argument-hint: "init [file.rossystem | dir ...] | render project.json [--open] | generate project.json [--oracle | --no-oracle] | diff project.json"
 allowed-tools: Bash, Read, Glob
 ---
 
@@ -17,6 +17,9 @@ lightweight read-only path — the editor also embeds those four read-only abstr
 The page has no network access (it opens as a local `file://`), and every file the companion
 writes is generated deterministically from `rosmodel_lint`'s own grammar vocabulary, so the
 emitter and the checker can never disagree.
+
+A first-time user has a guided walkthrough in the page itself — **Tutorial** in the topbar; see
+**The guided tutorial** below.
 
 ## How to run it
 
@@ -121,12 +124,114 @@ The subcommands form the authoring loop:
   RM050 on every endpoint the subsystem provides, and the real language server reports
   "Couldn't resolve reference to Node …" and then a *same-type* error on the connection two
   lines further down. Lint still covers only the files this project wrote; a staged file is
-  someone else's model. With `--oracle`, it stages catalogue dependencies (`collect_deps`)
-  and asks the **real** language server (`tests/oracle/ask_oracle.py`, needs Java). On a
-  generation/lint ERROR it re-renders the editor with the diagnostics injected onto the
-  offending nodes, next to the project as `<project>.error.html`, and exits non-zero.
-  `--diff` additionally prints the section below.
+  someone else's model. It then stages catalogue dependencies (`collect_deps`) and asks the
+  **real** language server — see **Validation** below. On a generation/lint ERROR it re-renders
+  the editor with the diagnostics injected onto the offending nodes, next to the project as
+  `<project>.error.html`, and exits non-zero. `--diff` additionally prints the section below.
 - **`diff project.json`** — *what changed since the seed*. See below.
+
+## Validation — two checkers, and one of them is the authority
+
+`generate` runs **two** checks, and it matters which is which:
+
+- **`rosmodel_lint`** (the RM rules) is deterministic, fast, offline, and a deliberate
+  **approximation** of the real Xtext validator. It cannot cover everything — that is stated
+  throughout `STATUS.md` and `scripts/README.md`, and it is the entire reason the oracle exists.
+- **the oracle** is the real language server jar (`tests/oracle/ask_oracle.py`). It is the
+  authority. It catches what the approximation cannot — an action server declared with a
+  *message* type rather than an action type being the standard example.
+
+**The oracle now runs by default.** It used to be opt-in behind `--oracle`, which meant most runs
+consulted only the approximation and *said nothing about not having asked the authority*: a clean
+run printed `0 error(s)` and exited 0. That is the root cause behind "the validation misses errors
+the jar would catch".
+
+| invocation | behaviour |
+|---|---|
+| `generate P` | asks the real server **if it can run**; if it cannot, says so loudly everywhere and still exits 0 (the files were written, the lint passed) |
+| `generate P --oracle` | *requires* the real server — failing to run it is an **error**, exit non-zero |
+| `generate P --no-oracle` | deliberate opt-out; RM rules only, and nothing is reported about the oracle |
+
+**A jar that cannot run is never silent.** Whether Java is missing, too old, or the jar was never
+built, the reason appears in three places: on stdout, on stderr, and — the part that matters,
+since "silent" was the complaint — **inside the Studio's own error surface**, as a
+`<project>.notice.html` whose banner the page opens automatically on load. It names the binary it
+found, why it is unusable, what that means (the results you *are* seeing are plugin-only and
+cannot catch everything), and how to fix it (`ROSMODEL_JAVA`, or build the jar). Never a bare
+stack trace, never nothing.
+
+That page is `.notice.html`, **not** `.error.html`: the generation succeeded and the lint was
+clean, so a file whose own name says "error" would misreport it — and would overwrite the genuine
+error page from a previous failing run. For the same reason the banner carries its own title and
+severity now instead of the page hard-coding "Generation failed"; a page that overstates one thing
+gets believed less about the next.
+
+**It says so before it blocks.** Starting a JVM, waiting out an LSP handshake and then waiting
+per file takes tens of seconds — measured 53s for a 2-node model, 107s for a 45-node one — and it
+used to print nothing at all for the duration, which on a default-on check is indistinguishable
+from a hang. `generate` now prints what it is about to do, how long to expect, and how to skip it,
+flushed (stdout is block-buffered when `generate` is piped, which is how the studio and the hooks
+run it). The wait itself also got shorter without getting weaker: the `initialize` drain in
+`ask_oracle.py` was a fixed 45-second sleep with no early exit, even though its caller's only test
+is "did a response arrive". It now stops when one does — a server that never answers still waits
+the whole window and still reports `NO_INITIALIZE_RESPONSE`. Measured on the same 4-file model:
+65s → 24s, identical verdict.
+
+**A version check, not just an existence check.** The jar is built with `Build-Jdk-Spec: 21` and
+the launcher needs Java 19+, but nothing in the repo ever checked that — the requirement lived
+only in prose. An older JVM passed the `exists()` test, started, and died inside the JVM with
+`UnsupportedClassVersionError`; what the caller saw was the 45-second initialize wait timing out
+as `NO_INITIALIZE_RESPONSE`, a message about the LSP handshake for what is really "your Java is
+too old". `ask_oracle.py --preflight` now parses `java -version` and says the true thing. It is
+also the single place that knows where java and the jar live — `ros_studio.py` asks it rather than
+re-deriving those paths, because two copies would drift the first time either moved.
+
+`ROSMODEL_JAVA` also falls back to whatever `java` is on **PATH** before the hard-coded Adoptium
+path it used to default to — which is what `.lsp.json` has always done, and why a machine with a
+perfectly good JDK could be told `java not found at C:\Users\mae\...`, a path from someone else's
+laptop.
+
+**Three ways the old code turned a broken oracle into a clean verdict**, all fixed, all pinned by
+`tests/oracle_gate.py`:
+
+1. `proc.returncode` was never checked, so `ask_oracle.py` could print an `ACCEPTED` line and
+   then die and still be read as a pass;
+2. the verdict was `"ACCEPTED" in out and "REJECTED" not in out` over stdout **plus stderr** — a
+   text search across a stream that also carries diagnostic *messages*, so a model whose own text
+   contained either word decided its own verdict;
+3. `ask_oracle.py` exits 0 even when every case failed to run, because `NO_INITIALIZE_RESPONSE`
+   and `MISSING_JAR` are per-case *statuses* — and a case that never received diagnostics still
+   printed `ACCEPTED — 0 error(s)`. A server that never answered was indistinguishable from a
+   model with nothing wrong with it.
+
+The verdict now comes from the structured `results.json` records — per-case `status` plus the
+actual diagnostics — and a status that is not `OK` is a failure, not a pass. Those results are
+written into the **output directory**, never `ask_oracle.py`'s default of `tests/oracle/results.json`,
+which is this repo's checked-in 19-case regression record: a `generate --oracle` run used to
+overwrite it with its own single case.
+
+**Oracle diagnostics reach the node cards**, not just the console. `oracle_diagnostics()` maps the
+records into the same `{"global", "byNode"}` shape the linter's findings already use, so they get
+the same warning badge, inspector section and Issues-rail entry. The mapping is honestly bounded,
+because a record carries `{file, line, severity, message}` and *no column* (`ask_oracle` discards
+`range.start.character`):
+
+- by **file**, the reliable half — `generate` writes `<pkg>.ros2` and `<pkg>.ros`, so the stem *is*
+  the package name and maps to that package's nodes with no string guessing;
+- by **message**, for `.rossystem` diagnostics, which name a node or interface when they are
+  reference errors (`Couldn't resolve reference to Node 'pkg.artifact'`) and name nothing at all
+  when they are parser errors (`mismatched input 'msgs:'`). Same substring scan the lint mapper
+  uses, with the same limits.
+
+Anything that maps to neither goes into the **banner**, not into `project.diagnostics.global` —
+that list is carried into the page but nothing renders it on the companion path, so a diagnostic
+left there alone would be invisible, which is the failure this whole feature exists to remove.
+
+`tests/oracle_gate.py` pins the whole failure path, and needs **no working jar** to do it — it
+points `ROSMODEL_JAVA` at a path that does not exist, which is reproducible anywhere. The
+test suites themselves pass `--no-oracle`: they check the emitter byte for byte, and leaving the
+oracle on would put minutes of language-server time into a parity run on any machine with a JDK,
+and fail those cases on a server verdict they are not about.
 
 ## `diff` — what changed since the seed
 
@@ -238,6 +343,21 @@ Two traps worth knowing, both of which were live bugs:
   is `no viable alternative at input '"..."'` from the real server. The rule cannot express an
   actual namespace string at all, which is why RM044 records zero corpus support.
 
+**A list default is a list, not a string.** An `Array[...]`/`List[...]` type's `default:` is a
+bracketed `ParameterList` (`default: ['base_link', 'odom']`). It composes as a YAML *sequence*,
+which the seeder used to skip because it only read scalars there — so the value was seeded as
+`null` and re-emitted as `default: ''`, an empty `ParameterString` where a list belongs. The
+linter reports 0 errors on that (RM095 only fires on a *quoted* list-shaped string, and this one
+had been emptied first); the real server rejects the file with `missing '['`. Both sides now carry
+the literal and re-spell each element by the element type. A list with no elements has no legal
+literal — `[]` is a parse error — so the optional `default:` slot is **omitted** rather than
+filled with a lie, which is what both extractors already do. `RosParameter`'s `value:` is
+mandatory and keeps its empty-string fallback for that degenerate case.
+`tests/fixtures/params/` carries one witness per element type, and
+`studio_roundtrip.py`'s `ros2_param_facts()` compares each default's *shape* (`list:` vs `str:`
+vs bare) source-against-generated, because reducing both sides to "no default" is exactly how
+this survived every green suite.
+
 A parameter known only as an exposure has no declared type, but the `.ros2` this project writes
 for a hand-backed artifact requires one. The type is **inferred from the override value**
 (`false` → `Boolean`, `40` → `Integer`, `0.5` → `Double`, otherwise `String`) rather than
@@ -246,6 +366,83 @@ defaulted to `String`, which used to retype every such parameter and turn `value
 
 Both slots are held to the real 3.1.0 language server by `tests/oracle/cases/22-parameters`
 (ACCEPTED, 0E/0W) and to a lossless round-trip by `tests/fixtures/params/`.
+
+## Where a node came from — colour, legend, and the System level
+
+A project composed from several sources — `init`'s multi-file merge, or the editor's **Import** —
+used to lose the one fact that made it readable: *which system each node came from*. Once merged
+they were one undifferentiated pile of cards, and the only surviving trace of the boundary was a
+rename in `init`'s diagnostics.
+
+`project.json` now records it per node as **`srcSystem`**, stamped by `seed_from_many`'s pass A
+(where the source is still identifiable) and by the in-page importer. An imported `project.json`
+that already carries origins of its own keeps them rather than being flattened onto the importing
+file's name — the node really did come from that system.
+
+`srcSystem` is **provenance, not view state and not content.** It sits on the node, a peer of
+`seededFromAll`, because it is a fact about the model's history rather than a drawing choice. It
+cannot reach an emitted byte: `emit_rossystem`/`emit_ros2` write named keys and both fact trees
+build from an allow-list, so an extra node key is excluded by construction. `tests/studio_parity.js`
+stamps an unmistakable value on **every** node — including catalogue- and subsystem-backed ones —
+re-emits, and fails if it appears in the `.rossystem`, in `projectFacts()`, or in the companion's
+`project_facts()`. That last one matters most: a leak there would make `diff` report every node of
+a merged project as changed.
+
+Three things use it, and **all three are inert unless there is more than one source system** — a
+blank or single-source project looks exactly as it did:
+
+- **Colour.** Each source system gets one of eight hues, applied as a card border, a 5px left
+  edge and a tinted header. The palette lives beside the interaction-kind one in
+  `_studio_common.py` and is defined in all four theme blocks (light, `prefers-color-scheme:
+  dark`, and both explicit `data-theme` overrides). It is a **different axis** from the kind
+  colours — a node has both — so origin owns the card and kind keeps the ports, and the two never
+  compete for the same pixel. Hues are separated in the Okabe-Ito spirit (blue, orange, green,
+  purple, magenta, gold, teal, slate), and no adjacent pair relies on red-vs-green. More than
+  eight systems wrap; the legend still names each one. The origin colour is written *above*
+  `.sel`/`.hasdiag`/`.issue-e` in the stylesheet so selection and diagnostics win the border
+  back — where a card came from matters less than "this one is selected" or "the server rejected
+  this one" — while the left edge keeps saying it regardless.
+- **A legend that filters.** A **Source systems** section in the rail, following the **Show
+  kinds** pattern: one row per system with its swatch, its name and its node count, and a
+  checkbox that hides that system's nodes. Hiding takes the **edges** with it, exactly as the
+  kind filter does — a filter that hid the cards and kept the wires would draw edges into empty
+  space. Colour is never the only channel: every row is labelled and counted, so the legend reads
+  correctly with no colour vision at all. The section is rebuilt on every render, because Import
+  can add a system at any time and a legend that missed it would be worse than none.
+- **Containers at the System level.** Level 1 already hid every interface row, so a merged
+  project at the level whose *name* promises system-scale grouping was the level that showed it
+  least: a heap of bare name cards. Each source system is now one box there, its ports being the
+  exposure labels its members declare, wired ones solid and unwired dimmed.
+
+**The containers are the subsystem machinery on a different axis, not a parallel one.**
+`groupPorts()` — "one row per exposure label across this set of nodes, with every (node,
+interface) pair behind it" — was lifted out of `subPorts()` and is now shared by both, so
+`subPorts(ref)` is a one-line call. Keeping a second copy is the shape `STATUS.md` keeps
+recording: two implementations of one rule that agree until someone fixes only one. The
+invisible-stacked-port trick is carried over for the same reason it exists for subsystems —
+`drawEdges()` resolves an endpoint by querying `[data-n][data-i]`, so every pair behind a
+collapsed row still needs an element or its edge silently disappears.
+
+That uncovered a **real bug in `portCenter()`**, which this fixes for both groupings: its
+fallback looked only for the member's own `.node[data-n=…]` card. At level 1 every port is
+hidden, so the width test fails; and a member inside a container is not rendered at all, so the
+card lookup fails too. Both misses meant the edge was silently dropped — at the one level whose
+whole job is showing how the groups connect. It now falls back to whichever container is standing
+in for that node, so the wire lands on the group. Verified in a browser: two cross-system
+connections survive the switch from Full to System and re-route onto the boxes.
+
+A node can be *both* "from source system X" and part of a `backing:"sub"` reference. Those are two
+different groupings and nesting them is **not attempted**: a `backing:"sub"` node has a null
+origin and stays inside the subsystem machinery that already owns it. That is also why wrapping a
+selection needs no special handling — wrap mutates the node in place, so its `srcSystem` survives
+untouched and simply stops being consulted while it is a sub member.
+
+Container positions live in `project.view.sysPos` and the per-system filter in
+`project.view.systemShown`, so both round-trip with the rest of the visualization; dragging a
+container is a view change, never an edit, and never enters the undo history. Boxes are first
+placed in a row ordered by their members' centroid — centroids of overlapping groups overlap too,
+and two boxes stacked on each other is strictly worse than a row that needs one drag — starting
+below the floating find control, whose canvas footprint was measured rather than guessed.
 
 ## Subsystems — one level of abstraction
 
@@ -320,8 +517,16 @@ Nine nodes fit on a fixed grid; dozens do not. The canvas therefore has:
   `/odom`" is one query. Matches are outlined and everything else recedes; Enter / Shift+Enter
   step through them and scroll each into view.
 - **Auto layout** — a layered (Sugiyama-style) arrangement that follows connection direction:
-  sources on the left, sinks on the right, four barycentre sweeps to cut crossings, isolated
-  nodes in a trailing column. Feedback edges (a controller subscribing to what it drives) are
+  sources on the left, sinks on the right, four barycentre sweeps to cut crossings. Isolated
+  nodes are laid out separately, as a **grid** to the right of the graph — one trailing *column*
+  is what it used to be, and on a merged project with 41 unwired nodes out of 45 that column ran
+  6120px tall, **Fit** answered 13%, and it dragged the connected layers off-centre with it
+  (every layer is centred against the tallest one). The grid's column height is
+  `sqrt(totalHeight × averageWidth)`, i.e. the √n rule measured in pixels rather than in cards —
+  a node box is about 230×150, so √n *columns* of a card twice as tall as it is wide still comes
+  out three times wider than tall. Where the connected part is taller, its height is used
+  instead. Same project, same button: 2700×1302, Fit 73%. Feedback edges (a controller
+  subscribing to what it drives) are
   detected and excluded from the *layering* only; they are still drawn. Node sizes are measured
   off the rendered boxes rather than estimated, because a node's height is its interface count.
   Node `x`/`y` live in `project.json`, so a layout is a normal **undoable** edit (`Ctrl+Z`), and
@@ -384,6 +589,54 @@ file, and its comments live there. The
 be written — `tests/studio_parity.js` holds all three previews to the Python emitter's bytes, and
 the fourth tab, **changed since the seed**, to `diff`'s.
 
+## Starting from a real ROS 2 repository
+
+**From ROS 2 source…** in the rail (beside **Add** / **From catalogue…**) covers the case the
+editor previously had no answer for: you have a source repo, not a model.
+
+**It does not run the pipeline, and does not pretend to.** This page is a `file://` document with
+no network and no way to spawn a process — it cannot invoke Python, full stop. A button that
+looked like it imported a repo and silently did nothing would be worse than no button. So it does
+the part it genuinely can: you type the paths you know, and it assembles the **exact,
+correctly-ordered, correctly-flagged** commands, with a copy control and a note saying you run
+them in a terminal — or paste them to Claude Code and ask it to.
+
+The pipeline is the one `skills/ros-model/SKILL.md` documents under *Converting real source*, and
+every flag comes from the two extractors' own argparse. `tests/extract_golden.py` runs steps 1 and
+2 exactly this way, which is executable ground truth rather than prose:
+
+1. `extract_ros2_interfaces.py <src> -o <out>/rosnodes --emit-msgs <out>/msgs --json …`
+2. `extract_rossystem.py <launch…> --models <out>/rosnodes -o <out>/<system>.rossystem --workspace <src> --json …`
+3. `ros_studio.py init <out>/<system>.rossystem --out <out>/project.json`
+
+Four things the panel exists to get right, each of which is a way this goes wrong by hand:
+
+- **Step 1's `-o` and step 2's `--models` must be the same directory.** `ModelIndex` does a flat
+  `os.listdir()` of `--models`, and a wrong path **fails silently** — there are simply no local
+  models, so every launch node resolves against the vendored catalogue or is skipped with a
+  `# FLAG`. Both are derived from one **output directory** field rather than asked for twice, and
+  the generated block says so in a comment.
+- **The launch file cannot be guessed.** Nothing discovers it, and a real repo usually has
+  several. It is a required field, and until you fill it the commands carry a `<FILL-IN>`
+  placeholder rendered in red — visually distinct from every real value, and left *unquoted* so
+  the shell fails loudly on it rather than silently accepting a plausible-looking path. Several
+  launch files are accepted (they are `nargs="+"`); the **first** decides `fromFile:` and the
+  default system name, which the field's hint says.
+- **Optional flags appear only when you fill them in.** `--system-name` and `--controllers-file`
+  are real and documented, but emitting them empty would be inventing a value. `--controllers-file`
+  is auto-discovered from the launch arguments when it can be; the hint says to pass it when the
+  extractor reports it could not.
+- **A non-zero exit mid-pipeline is normal.** Step 2 exits non-zero whenever it flags anything and
+  step 1 does on a lint ERROR — *a partial model is a result, not a failure* — so the note tells
+  you to read the reports rather than stop. It also names the `${CLAUDE_PLUGIN_ROOT}` trap: the
+  variable is set when the plugin is installed and unset inside the repo, where the paths are
+  plain `scripts/…`, which is exactly what a "No such file or directory" on step 1 means.
+
+Paths are POSIX-single-quoted when they need it, so a directory with a space survives the copy.
+Verified by running the generated commands unmodified against `tests/fixtures/extract/src`: all
+three steps exit 0 and produce a `project.json` of 4 nodes and 9 interfaces that `generate`
+re-emits cleanly.
+
 ## Opening files in the page
 
 The page can now **read** models, not just write them. **Open** in the topbar (or drag files onto
@@ -415,12 +668,81 @@ written (the `.ros2` artifact comments, and every node a catalogued `subSystems:
 Loading replaces the current project, so it asks first when there are unsaved changes, and the
 load itself is undoable.
 
+## The saved visualization
+
+`project.json` used to record only *part* of what a reader had arranged: node `x`/`y`, and
+`project.view.subsystems`. Everything else was a plain JS variable that died with the tab — the
+subsystem box positions (`subPos`), the Deps view's package boxes (`pkgPos`), the abstraction
+level, the Edit/View mode, the **Show kinds** filter, **auto sides**, the camera. So a layout
+built over ten minutes survived a reload only by accident, and **Auto layout** — which clears
+`subPos`/`pkgPos` by design — threw the rest away with no way back.
+
+All of it now lives under `project["view"]` and round-trips:
+
+| key | what it holds |
+|---|---|
+| `subsystems` | collapsed / framed, per `subSystems:` reference (unchanged) |
+| `subPos` · `pkgPos` | where the subsystem and package boxes were dragged to |
+| `level` · `mode` | which of System │ Interfaces │ Full │ Deps, and Edit vs View |
+| `hiddenKinds` | the **Show kinds** filter, including the `param` pseudo-kind |
+| `autoSides` | the port-side toggle |
+| `camera` | `k`/`tx`/`ty` — where the reader was standing |
+
+Two lines are drawn deliberately, because "restore everything always" is the wrong answer twice:
+
+- **Layout is undoable; preferences are not.** `Ctrl+Z` after **Auto layout** restores `subPos`
+  and `pkgPos` along with the node positions it already restored — that is the complaint this
+  fixes. It does *not* rewind the level, mode or filter you happen to be looking through, because
+  a view was never an edit (the same line `secOpen` already draws for collapsed sections).
+- **The camera is saved but only restored by an explicit load.** A `project.json` carrying one
+  opens exactly where it was saved; one carrying none still gets the fit-on-open pass, so a
+  freshly seeded project is unaffected.
+
+`autoSides` and `hiddenKinds` remain localStorage preferences *as well*, and the project's value
+wins when a project carries one — so a filter follows you between projects, but a saved
+arrangement is still the arrangement you saved.
+
+**None of it can reach an emitted byte.** Both fact trees build from an allow-list of model keys
+rather than by deleting presentation ones, so a key added here is excluded by construction. That
+is asserted rather than argued: `tests/studio_parity.js`'s `compareViewStates()` now emits under a
+*populated* view — a non-default level, View mode, a filter hiding two kinds, `autoSides` on, a
+camera far from the origin, positions for boxes that may not exist — for **every** fixture rather
+than only the ones with a `subSystems:` block, byte-compares the `.rossystem`, and checks that
+neither `projectFacts()` nor the companion's `project_facts()` grew any of the keys. A project
+with a populated `view` and one without must produce identical `--facts` output, or `diff` would
+report dragging a box as a model change.
+
 ## The commit hand-off
 
-Inside the editor, **Commit** opens a modal that downloads the `project.json` (a Blob via a
-`<a download>`, which works on `file://`) with a pre-selected `<textarea>` copy fallback. The
-user saves it, returns, and says "done"; you then run `generate` on that file to produce and
-validate the real files.
+Inside the editor, **Commit** opens a modal with two ways out.
+
+**Save all files** downloads what `generate` would emit — the `<system>.rossystem`, every
+`<pkg>.ros2`, every companion `<pkg>.ros`, and the `project.json` — as one browser download each.
+This is the direct path the manual round-trip existed to work around, and it is safe in the
+specific sense that matters here: the page is still a `file://` document with no network and no
+filesystem API, nothing is overwritten, and the browser's own download UI is the confirmation
+step. (A burst of programmatic downloads is what makes a browser stop honouring them, so they are
+staggered; Chrome asks once to allow multiple downloads.)
+
+It rests on a property this repo already proves rather than on a new emitter: `tests/studio_parity.js`
+holds `genSystem()`/`genRos2()`/`genRos()` to the Python emitter's **bytes** for every fixture, so
+the previews are the generated files, not an approximation. That test now also pins the
+**manifest** — the filenames and the file *set*, not just the content keyed by package — because
+`genSystem()` being byte-perfect does not make `<system>.rossystem` the right name to save it
+under, and a wrong name is a file the user hands back to `generate` as a different model.
+
+Two things Save all deliberately does **not** do, and the modal says so:
+
+- it does not lint and it does not ask the language server — `generate` is still the path to the
+  **verdict**, and only it can re-render the editor with diagnostics on the offending nodes;
+- it cannot produce a staged project-local `subSystems:` target. Staging is copying someone
+  else's file off a disk this page cannot read. That is why the parity check compares Save all's
+  manifest against the files `generate` reported *writing* rather than against its output
+  directory, which also holds what it *staged*.
+
+**project.json only** is the original hand-off, unchanged: a Blob via an `<a download>` (which
+works on `file://`) with a pre-selected `<textarea>` copy fallback. The user saves it, returns,
+and says "done"; you then run `generate` on that file to produce and validate the real files.
 
 Because that hand-off is manual, the page keeps the session safe on its own:
 
@@ -436,6 +758,79 @@ Because that hand-off is manual, the page keeps the session safe on its own:
 
 If the user reports the page asking to restore something unexpected, that is a previous session's
 autosave for the same system name — "Discard and use the seeded project" clears it.
+
+## The guided tutorial
+
+Everything above is true and none of it is in the page. Someone opening `ros-studio.html` for
+the first time sees a blank canvas, four abstraction levels, a rail of filters and a **Commit**
+button, and nothing on screen says which of those is the first move. **Tutorial** in the topbar
+is a sixteen-step walkthrough that answers that by having them *build* something.
+
+**It is a coach mark, not a slide deck.** There is no scrim and nothing is modal: the reader
+drives the real editor and the panel follows. Each step rings the actual element it is about —
+`#addCat`, a `.port` on a real card, the `expose` checkbox in the inspector, `#autoLayout`,
+`#commit` — with a ring that is `pointer-events:none`, because on most steps the click it is
+pointing at *is* the step. Ten of the sixteen are **do** steps that wait on a real change to
+`project` (a node with that `pkg` exists; a connection joins those two nodes; that interface's
+`exposed` is true) rather than on a Next button, and every one of them also offers **Skip** —
+a completion test is a guess about what the reader meant, and a walkthrough that can wedge on a
+guess is one people close. Positioning reuses `makeTypeahead`'s scheme (`position:fixed` on
+`document.body`, placed from `getBoundingClientRect()`, clamped to the viewport) so it floats
+free of the canvas's zoom/pan transform and the inspector's `overflow:auto`; a second scheme
+would have drifted from that one the first time either was fixed.
+
+**The worked example is `tb3_teleop`**: `turtlebot3_teleop.teleop_keyboard` publishing `cmd_vel`
+into `turtlebot3_node.turtlebot3_node`'s `cmd_vel`, both `geometry_msgs/msg/Twist`. Both nodes
+are catalogue entries (`assets/rosmodelscatalog/robots/turtlebot3/turtlebot3_teleop.ros2` and
+`assets/rosmodelscatalog/robots/turtlebot3/robot/turtlebot3_node.ros2`), so every interface name
+and message type the walkthrough puts on screen is one the vendored `.ros2` really declares.
+
+Deliberately **not** the catalogued `turtlebot` composition, which is the obvious candidate and
+the wrong one: per the table under **What a subsystem view can show you today** it has 3 nodes,
+7 interfaces and **zero** internal connections. A first tutorial whose example cannot
+demonstrate wiring would teach the one thing this editor exists for by not doing it.
+
+The sixteen steps run: name the system → open the catalogue → instantiate the teleop → read what
+the card is saying → instantiate the base → **drag the wire** → **expose `odom` without wiring
+it** → read the Issues rail → **Auto layout** → the four levels and `project.view` → **Commit** →
+**Save all files** → what only `generate` can tell you → **From ROS 2 source…** → done. The copy
+is the same material as this file, in the same voice, at step granularity — the `exposed`-is-not-
+connectivity split, why a catalogue node arrives fully unexposed, why the drop is refused unless
+kinds *and* types agree, why both ends being called `cmd_vel` comes out as `cmd_vel_pub` /
+`cmd_vel_sub` rather than as RM009, and why the oracle runs by default.
+
+**It offers itself exactly once**, and only on a blank canvas with no companion banner and no
+autosave-restore prompt up — page load is the one moment with no interaction to lose, and that
+moment already has an owner when either of those is showing. Closing it records the offer as
+made; the topbar button is the way back, resuming where you stopped.
+
+**Its state is not the model's.** Which step you are on and whether you finished live under one
+`localStorage` key (`rosStudio.tour`) and never enter `project` at all. That is a stronger
+guarantee than a `project.view` slot: a view key is excluded from the fact trees only because
+they are built from an allow-list and nobody added it, whereas state that is never written onto
+the project cannot reach an emitted byte, `diff`, or a `project.json` handed to a colleague by
+any route. The walkthrough reads `project` and never writes it — the only things it does on the
+reader's behalf are opening a collapsed rail section, a drawer, or centring the camera, all
+views. `tests/studio_parity.js`'s `checkPageInvariants` pins both halves: the key must still
+exist, and nothing may start writing the state onto `project`.
+
+Two implementation notes worth keeping:
+
+- **Two clocks, and the split is not cosmetic.** The ring rides `requestAnimationFrame`, because
+  the steps that point at a port let you drag the card under it and a ring lagging a drag reads
+  as a rendering bug. "Has this step been done yet?" rides a plain 250 ms interval instead,
+  because rAF is throttled to a standstill whenever the browser decides the tab is not painting
+  — measured at one frame per half-second in a window that had lost focus. Driving the model
+  check off rAF meant "waiting for a connection" never turned into "done" for a reader with
+  another window in front, which reads as the tutorial being broken.
+- **Reduced motion and keyboard**, on the same terms as the rest of the page. The stylesheet's
+  blanket `prefers-reduced-motion` rule kills transitions but not *animations*, so the ring's
+  pulse is turned off by name and degrades to the static border and wash that carry the actual
+  meaning. The card is a `role="region"` with an inner `aria-live="polite"` wrapper that is
+  built once and refilled per step — a live region that is itself replaced announces nothing —
+  and it takes focus once on open and never again on a step change, since most steps ask for a
+  click somewhere else. On a narrow viewport it stops following and docks to the bottom edge,
+  where it cannot cover the control it is asking you to press.
 
 ## Reporting back
 
