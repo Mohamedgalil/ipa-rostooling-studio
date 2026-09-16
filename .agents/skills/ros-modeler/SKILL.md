@@ -1,22 +1,19 @@
 ---
 name: ros-modeler
-description: Authors and repairs RosTooling model files (.ros2, .rossystem) for the Fraunhofer IPA ROS 2 modelling toolchain. Use when asked to generate, edit, or fix a .ros2 package model or a .rossystem system-composition model, or to reconcile such a file with grammar or validator diagnostics.
-model: sonnet
-effort: medium
-maxTurns: 30
-tools: Read, Write, Edit, Glob, Grep, Skill
-skills:
-  - ros-model
+description: Pre-flight checklist of the 12 rules that most often silently corrupt a RosTooling .ros2/.rossystem model (wrong quoting, wrong member order, silently-mistyped booleans/doubles, illegal nesting). Use immediately before emitting or editing such a file, IN ADDITION TO the `ros-model` skill, never instead of it — this is a checklist, not the specification.
 ---
 
 You author RosTooling DSL files for the Fraunhofer IPA ROS 2 modelling toolchain. Two file
 types are in scope: `.ros2` (an `AmentPackage` — one ROS package, its artifacts, nodes and
 interfaces) and `.rossystem` (a system composition wiring node instances together).
 
-The `ros-model` skill is preloaded. It carries the pinned grammar subset, the validator rule
-table and the normative emission profile. It is the authority. Do not reason from general ROS
-or YAML intuition — these grammars are indentation-sensitive Xtext grammars that only
-superficially resemble YAML.
+**Before emitting or editing anything, read `.agents/skills/ros-model/SKILL.md` and the files
+in its `references/` folder.** That skill carries the pinned grammar subset, the validator
+rule table and the normative emission profile; it is the authority for anything not restated
+here. This file is a pre-flight checklist of the rules most likely to silently corrupt a
+model, not a substitute for reading the specification. Do not reason from general ROS or YAML
+intuition — these grammars are indentation-sensitive Xtext grammars that only superficially
+resemble YAML.
 
 ## Non-negotiable rules
 
@@ -89,14 +86,16 @@ it). A single, flat `subSystems:` entry is fine and tested — see rule 12. Use 
 ## Verification posture
 
 `.ros2` files get a real but stale oracle — the shipped Xtext language server, pinned to a
-2024-08-01 build. If the LSP component is running, treat its diagnostics as authoritative for
-`.ros2` and fix what it reports.
+2024-08-01 build. If it is running, treat its diagnostics as authoritative for `.ros2` and fix
+what it reports.
 
-`.rossystem` has **no language server at all** — none was ever built. Its only check is the
-`rosmodel_lint.py` PostToolUse hook, which is a modelled reimplementation of
-`RosSystemValidator`, not the real thing. When that hook blocks, fix the file and rewrite it;
-the hook fires *after* the write, so the bad content is already on disk and only a follow-up
-edit clears it.
+`.rossystem` has **no language server at all** — none was ever built. Its only check is
+`scripts/rosmodel_lint.py`, a modelled reimplementation of `RosSystemValidator`, not the real
+thing. In Claude Code that runs automatically after every write via a `PostToolUse` hook;
+nothing here re-runs it for you, so run it yourself
+(`"${ROSMODEL_PYTHON:-python3}" scripts/rosmodel_lint.py FILE...`) after writing or editing a
+model, and again after fixing anything it reports — a blocked check means the bad content is
+still on disk until a follow-up edit clears it.
 
 Never claim a file has been validated against the real toolchain unless you have actually seen
 diagnostics come back. Say "emitted per the pinned profile, not executed" instead.
@@ -104,6 +103,6 @@ diagnostics come back. Say "emitted per the pinned profile, not executed" instea
 ## Working style
 
 Read before writing — check whether the target file, and any `.ros2` file a `.rossystem`
-references, already exists. Prefer Edit over Write on existing files so you do not silently
-drop content. When information needed to fill a field is genuinely absent, ask rather than
-invent a topic name, message type or package name.
+references, already exists. Prefer an in-place edit over a full rewrite on existing files so
+you do not silently drop content. When information needed to fill a field is genuinely absent,
+ask rather than invent a topic name, message type or package name.
