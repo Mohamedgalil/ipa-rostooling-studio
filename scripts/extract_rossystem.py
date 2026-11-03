@@ -878,8 +878,11 @@ def connection_candidates(sys_draft):
     """Name+type matches, for a human to accept. NEVER emitted (SKILL.md hard rule 4)."""
     out = []
     by_name = {}
+    label_counts = {}
     for node in sys_draft.nodes:
         for iface in node["interfaces"]:
+            lbl = iface["label"]
+            label_counts[lbl] = label_counts.get(lbl, 0) + 1
             target_name = iface["target"].split("::", 1)[1]
             by_name.setdefault(target_name, []).append((node, iface))
     for name, entries in sorted(by_name.items()):
@@ -892,8 +895,15 @@ def connection_candidates(sys_draft):
                     continue
                 if from_iface["type"] != to_iface["type"]:
                     continue
+                from_label = from_iface["label"]
+                to_label = to_iface["label"]
+                from_conn = ("%s.%s" % (from_node["label"], from_label)
+                             if label_counts.get(from_label, 0) > 1 else from_label)
+                to_conn = ("%s.%s" % (to_node["label"], to_label)
+                           if label_counts.get(to_label, 0) > 1 else to_label)
                 out.append({
-                    "from": from_iface["label"], "to": to_iface["label"],
+                    "from": from_conn, "to": to_conn,
+                    "from_interface": from_label, "to_interface": to_label,
                     "topic": name, "type": from_iface["type"],
                     "from_node": from_node["label"], "to_node": to_node["label"],
                 })

@@ -655,6 +655,9 @@ ROS2_NODE_BLOCKS = [
     "parameters",
 ]
 
+# Ros2.xtext:69-74 LifecycleState enum
+LIFECYCLE_STATES = ("Unconfigured", "Inactive", "Active", "Finalized")
+
 # Ros2.xtext AmentPackage members, in grammar-fixed order (rule 21).
 AMENT_PACKAGE_KEYS = ["fromGitRepo", "artifacts", "dependencies"]
 
@@ -2166,15 +2169,31 @@ class Linter(object):
     def check_ros2_artifact_body(self, art_key, node):
         self.check_duplicate_keys(node, "artifact '%s'" % art_key.value)
 
+        is_lifecycle = False
+        lifecycle_node = mapping_get(node, "lifecycle")
+        if lifecycle_node is not None:
+            if not is_scalar(lifecycle_node) or lifecycle_node.value.lower() not in ("true", "false"):
+                self.error(node_line(lifecycle_node), "RM033",
+                           "lifecycle value '%s' is not a boolean."
+                           % getattr(lifecycle_node, "value", lifecycle_node),
+                           "lifecycle admits only 'true' or 'false' (Ros2.xtext:33).")
+            elif is_quoted(lifecycle_node):
+                self.error(node_line(lifecycle_node), "RM033",
+                           "lifecycle value '%s' is quoted." % lifecycle_node.value,
+                           "lifecycle takes boolean0 (true/false bare keyword), not a quoted string.")
+            elif lifecycle_node.value.lower() == "true":
+                is_lifecycle = True
+
         blocks_present = []
         for key, val in mapping_items(node):
             if not is_scalar(key):
                 continue
             name, line = key.value, node_line(key)
 
-            if name == "node":
-                self.check_ros_names_position(val, "Node name")
-                self.check_name_conventions(val, "Node name", "RM012", WARNING)
+            if name in ("node", "lifecycle"):
+                if name == "node":
+                    self.check_ros_names_position(val, "Node name")
+                    self.check_name_conventions(val, "Node name", "RM012", WARNING)
                 continue
 
             if name in ROS2_FORBIDDEN_SPEC_BLOCKS:
@@ -2200,7 +2219,7 @@ class Linter(object):
                     if name == "parameters":
                         self.check_ros2_parameter(entry_key, entry_val)
                     else:
-                        self.check_ros2_interface(name, entry_key, entry_val)
+                        self.check_ros2_interface(name, entry_key, entry_val, is_lifecycle=is_lifecycle)
 
         if "node" not in mapping_keys(node):
             self.error(node_line(art_key), "RM038",
@@ -2224,7 +2243,7 @@ class Linter(object):
                       "or variable), so no real ROS name looks like this and nothing will "
                       "connect to it. Resolve it under SKILL.md 8e, or rename it by hand.")
 
-    def check_ros2_interface(self, block, key, val):
+    def check_ros2_interface(self, block, key, val, is_lifecycle=False):
         self.check_estring_quoting(key, "Interface", require_quotes=True)
         if is_scalar(key):
             self.check_placeholder_name(str(key.value), node_line(key))
@@ -2255,11 +2274,32 @@ class Linter(object):
                     self.check_type_catalogue(type_node.value, node_line(type_node))
 
         for extra in keys:
-            if extra not in ("type", "ns", "qos"):
+            if extra not in ("type", "ns", "active_in", "qos"):
                 self.error(node_line(mapping_get_pair(val, extra)[0]), "RM036",
                            "Unknown key '%s:' in interface '%s'." % (extra, key.value),
-                           "An interface admits only type:, ns:, qos: in that order "
-                           "(Ros2.xtext:49-112).")
+                           "An interface admits only type:, ns:, active_in:, qos: in that order "
+                           "(Ros2.xtext:105-175).")
+            elif extra == "active_in":
+                act_node = mapping_get(val, "active_in")
+                if not is_lifecycle:
+                    self.error(node_line(mapping_get_pair(val, "active_in")[0]), "RM036",
+                               "'active_in:' declared on interface '%s' of non-lifecycle node." % key.value,
+                               "'active_in:' is only valid on lifecycle nodes (declared with 'lifecycle: true').")
+                elif not is_sequence(act_node):
+                    self.error(node_line(act_node if act_node else key), "RM033",
+                               "'active_in:' value must be a bracketed list of LifecycleState values.",
+                               "Allowed values: %s (Ros2.xtext:69-74)." % ", ".join(LIFECYCLE_STATES))
+                else:
+                    for item in act_node.value:
+                        if not is_scalar(item) or item.value not in LIFECYCLE_STATES:
+                            val_str = getattr(item, "value", str(item))
+                            self.error(node_line(item), "RM033",
+                                       "Lifecycle state '%s' is not permitted." % val_str,
+                                       "Allowed values: %s (Ros2.xtext:69-74)." % ", ".join(LIFECYCLE_STATES))
+                        elif is_quoted(item):
+                            self.error(node_line(item), "RM033",
+                                       "Lifecycle state '%s' is quoted." % item.value,
+                                       "These are grammar keywords, not EStrings; quoting one is a parse error.")
 
         if "ns" in keys:
             self.warn(node_line(mapping_get_pair(val, "ns")[0]), "RM044",
@@ -2267,10 +2307,10 @@ class Linter(object):
                       "0 occurrences across all 253 corpus .ros2 files "
                       "(emission-profile sec 3). Avoid.")
 
-        self.check_ordering([k for k in keys if k in ("type", "ns", "qos")],
-                            ["type", "ns", "qos"], node_line(key), "RM039",
+        self.check_ordering([k for k in keys if k in ("type", "ns", "active_in", "qos")],
+                            ["type", "ns", "active_in", "qos"], node_line(key), "RM039",
                             "Interface member",
-                            "Ros2.xtext:49-112 fixes the order type: -> ns: -> qos: "
+                            "Ros2.xtext:105-175 fixes the order type: -> ns: -> active_in: -> qos: "
                             "(emission-profile rule 23).")
 
         if "qos" in keys:
@@ -3252,12 +3292,32 @@ class Linter(object):
                                             node_line(from_node))
 
     def resolve_endpoint(self, interfaces, name, node, role):
-        """Resolve a connection endpoint name to its interface record, or None."""
+        """Resolve a connection endpoint name to its interface record, or None.
+
+        Supports:
+        1. Qualified names: <node>.<interface>, <node>::<interface>,
+           <subsystem>.<node>.<interface>, or <subsystem>::<node>::<interface>.
+        2. Short unqualified names: <interface> (valid when unique across the system).
+        """
+        if "." in name or "::" in name:
+            sep = "::" if "::" in name else "."
+            prefix, _, iface_name = name.rpartition(sep)
+            prefix = prefix.replace("::", ".")
+            candidates = interfaces.get(iface_name, [])
+            matched = [
+                c for c in candidates
+                if c["node"] == prefix or c["node"].endswith("." + prefix) or prefix.endswith("." + c["node"])
+            ]
+            if matched:
+                return matched[0]
+            return None
+
         candidates = interfaces.get(name)
         if not candidates:
             return None
         if len(candidates) > 1:
             owners = ", ".join(sorted(set(c["node"] for c in candidates)))
+            qualified_examples = ", ".join("'%s.%s'" % (c["node"], name) for c in candidates[:2])
             self.warn(node_line(node), "RM065",
                       "Connection '%s' endpoint '%s' is declared in %d nodes (%s)."
                       % (role, name, len(candidates), owners),
@@ -3265,8 +3325,9 @@ class Linter(object):
                       "endpoint name owned by several nodes is ambiguous at link time. "
                       "Declaring the same local name in different nodes is fine on its own "
                       "(Corpus B does it throughout) -- it only becomes a problem once a "
-                      "connection references it. Disambiguate by kind prefix, as Corpus B does "
-                      "with sub_clock / sub_bond (emission-profile rule 28).")
+                      "connection references it. Under qualified scoping, disambiguate by "
+                      "prefixing the node name: %s (or rename the interfaces)."
+                      % qualified_examples)
         return candidates[0]
 
     def check_connection_direction(self, from_iface, to_iface, from_name, to_name, line):

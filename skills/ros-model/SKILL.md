@@ -315,8 +315,9 @@ Both endpoints must resolve to the *same* spec object, so emit byte-identical `t
 both ends.
 
 Use only the `RosSystemConnection` form, `- [from_label , to_label]`, referencing interface **labels
-declared in the same file**. The `RosConnection` alternative triggers a `ClassCastException` in
-three separate validator methods.
+declared in the same file** (or qualified as `<node>.<interface>` / `<subsystem>.<node>.<interface>`
+to disambiguate when multiple nodes declare identical interface names). The `RosConnection`
+alternative triggers a `ClassCastException` in three separate validator methods.
 
 **Never synthesise a `connections:` block that the source did not declare.** When transcribing an
 existing system that has no `connections:`, emit none — even when pub/sub pairs look obvious.
@@ -713,7 +714,8 @@ be the reader's only signal that nothing needed it.
 | Rule | Mandatory order |
 |---|---|
 | `AmentPackage` | `fromGitRepo:` → `artifacts:` → `dependencies:` |
-| `.ros2` interface | `type:` → `ns:` → `qos:` |
+| `.ros2` node | `node:` → `lifecycle:` (optional) → interface/parameter blocks |
+| `.ros2` interface | `type:` → `ns:` → `active_in:` → `qos:` (`active_in:` only valid on lifecycle nodes) |
 | `.ros2` parameter | `type:` → **`default:`** → `ns:` → `value:` → `qos:` |
 | `.rossystem` node | `from:` → `namespace:` → `interfaces:` → `parameters:` |
 | `.rossystem` **system-level** parameter | `ns:` → `type:` → `default:` → `value:` (no `qos:`) |

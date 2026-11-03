@@ -41,11 +41,15 @@ These cause hard errors or silent semantic corruption. Never violate them.
    live in `.ros` files.
 7. Grammar-fixed member order: `AmentPackage` is `fromGitRepo:` → `artifacts:` →
    `dependencies:`; a `.rossystem` node is `from:` → `namespace:` → `interfaces:` →
-   `parameters:`; an interface is `type:` → `ns:` → `qos:`; a `.ros2` parameter is `type:` →
-   `ns:` → `value:` → `qos:`. Violating any of these is a parse error.
+   `parameters:`; an interface is `type:` → `ns:` → `active_in:` → `qos:` (`active_in:` is
+   valid only when the node has `lifecycle: true`); a `.ros2` parameter is `type:` → `ns:` →
+   `value:` → `qos:`. Violating any of these is a parse error.
 8. Connections: `from` is always the server/publisher. Only `pub->`/`sub->`, `ss->`/`sc->`,
    `as->`/`ac->` pair legally, and both endpoints must carry byte-identical `type:` strings —
-   the validator compares object identity, not type names.
+   the validator compares object identity, not type names. Endpoints may be short interface names
+   if unique across the system, or qualified as `<node>.<interface>` (or
+   `<subsystem>.<node>.<interface>`) to disambiguate when multiple nodes declare identical
+   interface names.
 9. `from:` in a `.rossystem` is `<packageName>.<nodeName>` — the **node**, never the artifact —
    read from the target model's contents, never from the `.ros2` filename (these differ in 76 of
    253 corpus files). In the same file, arrow and parameter targets are
