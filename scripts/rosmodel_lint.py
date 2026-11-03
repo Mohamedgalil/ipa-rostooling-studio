@@ -36,6 +36,7 @@ Exit status: 1 if any ERROR-severity finding was produced, else 0.
 import argparse
 import difflib
 import glob
+import hashlib
 import io
 import json
 import os
@@ -74,75 +75,446 @@ SEVERITY_ORDER = {ERROR: 0, WARNING: 1, INFO: 2}
 _ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "assets")
 _TYPE_INDEX_PATH = os.path.join(_ASSETS_DIR, "type_index.json")
 _NODE_INDEX_PATH = os.path.join(_ASSETS_DIR, "node_index.json")
-_type_index_cache = {"loaded": False, "value": None}
-_node_index_cache = {"loaded": False, "value": None}
+_CATALOG_SKIP_DIRS = {".git", "__pycache__", "node_modules"}
+_CATALOG_SPEC_BLOCK_KIND = {"msgs": "msg", "srvs": "srv", "actions": "action"}
+_CATALOG_BUNDLE_ORDER = ("nav2_msgs", "basic_msgs")
+
+_base_type_index_cache = {"loaded": False, "value": None}
+_base_node_payload_cache = {"loaded": False, "nodes": None, "systems": None}
+_shared_overlay_cache = {"key": None, "value": None}
+_type_index_cache = {"token": None, "value": None}
+_node_index_cache = {"token": None, "value": None}
+_system_index_cache = {"token": None, "value": None}
+
+
+def get_shared_catalogue_dir():
+    """Return the shared catalogue root directory.
+
+    Honours ROSMODEL_CATALOGUE_DIR when set; otherwise defaults to
+    ~/.rostooling/catalogue_repos (managed by RosCatalogueManager).
+    """
+    env_dir = os.environ.get("ROSMODEL_CATALOGUE_DIR", "").strip()
+    if env_dir:
+        return os.path.abspath(os.path.expanduser(env_dir))
+    return os.path.expanduser("~/.rostooling/catalogue_repos")
+
+
+def _read_custom_catalogue_folders(cat_dir):
+    cfg_path = os.path.join(cat_dir, "catalogue_config.json")
+    if not os.path.isfile(cfg_path):
+        return []
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            data = json.load(f)
+        out = []
+        for item in data.get("customFolders") or []:
+            p = item.get("path") if isinstance(item, dict) else (item if isinstance(item, str) else None)
+            if p:
+                ap = os.path.abspath(os.path.expanduser(p))
+                if os.path.isdir(ap) and ap not in out:
+                    out.append(ap)
+        return out
+    except (IOError, OSError, ValueError, TypeError):
+        return []
+
+
+def _dir_has_model_files(root, exts, exclude_subdirs=()):
+    if not os.path.isdir(root):
+        return False
+    excluded = set(exclude_subdirs) | _CATALOG_SKIP_DIRS
+    for cur_root, dirs, files in os.walk(root):
+        if os.path.abspath(cur_root) == os.path.abspath(root):
+            dirs[:] = [d for d in dirs if d not in excluded]
+        else:
+            dirs[:] = [d for d in dirs if d not in _CATALOG_SKIP_DIRS]
+        for fname in files:
+            if fname.endswith(exts):
+                return True
+    return False
+
+
+def resolve_shared_type_roots(cat_dir=None):
+    """Return shared catalogue directories containing .ros message/service/action specs."""
+    cat_dir = cat_dir or get_shared_catalogue_dir()
+    roots, seen_real = [], set()
+
+    def _add(p):
+        rp = os.path.realpath(p)
+        if rp not in seen_real:
+            seen_real.add(rp)
+            roots.append(p)
+
+    if os.path.isdir(cat_dir):
+        for repo_sub in ("ros_common_objects", "RosCommonObjects"):
+            nested = os.path.join(cat_dir, repo_sub, "de.fraunhofer.ipa.ros.communication.objects")
+            direct = os.path.join(cat_dir, repo_sub)
+            if _dir_has_model_files(nested, (".ros",)):
+                _add(nested)
+            elif _dir_has_model_files(direct, (".ros",)):
+                _add(direct)
+        if not roots and _dir_has_model_files(
+                cat_dir, (".ros",), exclude_subdirs=("ros_models_catalog", "RosModelsCatalog")):
+            _add(cat_dir)
+        for cf in _read_custom_catalogue_folders(cat_dir):
+            if _dir_has_model_files(cf, (".ros",)):
+                _add(cf)
+    return roots
+
+
+def resolve_shared_node_roots(cat_dir=None):
+    """Return shared catalogue directories containing .ros2 or .rossystem models."""
+    cat_dir = cat_dir or get_shared_catalogue_dir()
+    roots, seen_real = [], set()
+
+    def _add(p):
+        rp = os.path.realpath(p)
+        if rp not in seen_real:
+            seen_real.add(rp)
+            roots.append(p)
+
+    if os.path.isdir(cat_dir):
+        for repo_sub in ("ros_models_catalog", "RosModelsCatalog"):
+            cand = os.path.join(cat_dir, repo_sub)
+            if _dir_has_model_files(cand, (".ros2", ".rossystem")):
+                _add(cand)
+        if not roots and _dir_has_model_files(
+                cat_dir, (".ros2", ".rossystem"),
+                exclude_subdirs=("ros_common_objects", "RosCommonObjects")):
+            _add(cat_dir)
+        for cf in _read_custom_catalogue_folders(cat_dir):
+            if _dir_has_model_files(cf, (".ros2", ".rossystem")):
+                _add(cf)
+    return roots
+
+
+def group_ros_file(nodes):
+    """Yield (pkg_name, kind, spec_name) for every spec declared in one parsed .ros file."""
+    pkgs, cur = [], None
+    for node in nodes:
+        if node["depth"] == 0:
+            cur = {"head": node, "body": []}
+            pkgs.append(cur)
+        elif cur is not None:
+            cur["body"].append(node)
+
+    for pkg in pkgs:
+        head_text = pkg["head"]["text"]
+        if not head_text.endswith(":"):
+            continue
+        pkg_name = head_text[:-1].strip().strip("\"'")
+        if not pkg_name:
+            continue
+
+        body = pkg["body"]
+        if not body:
+            continue
+        base = min(n["depth"] for n in body)
+        for i, node in enumerate(body):
+            if node["depth"] != base:
+                continue
+            key = node["text"].split(":", 1)[0].strip()
+            if key not in _CATALOG_SPEC_BLOCK_KIND:
+                continue
+            kind = _CATALOG_SPEC_BLOCK_KIND[key]
+
+            block_depth = node["depth"]
+            inner = []
+            for later in body[i + 1:]:
+                if later["depth"] <= block_depth:
+                    break
+                inner.append(later)
+            if not inner:
+                continue
+            spec_depth = min(n["depth"] for n in inner)
+            for spec_node in inner:
+                if spec_node["depth"] != spec_depth:
+                    continue
+                spec_name = spec_node["text"].rstrip(":").strip()
+                if " " in spec_name.strip("\"'"):
+                    continue
+                spec_name = spec_name.strip("\"'")
+                if spec_name:
+                    yield pkg_name, kind, spec_name
+
+
+def scan_type_roots(roots, bundle_order=_CATALOG_BUNDLE_ORDER):
+    """Index .ros files across one or more roots; returns (index, per_package)."""
+    index = {}
+    per_package = {}
+    visited_files = set()
+
+    def _visit_ros_file(fpath, rel_file):
+        real = os.path.realpath(fpath)
+        if real in visited_files:
+            return
+        visited_files.add(real)
+        try:
+            with open(fpath, encoding="utf-8", errors="replace") as f:
+                lines = f.read().splitlines()
+        except (IOError, OSError):
+            return
+        nodes = parse_ros_indent(lines)
+        for pkg_name, kind, spec_name in group_ros_file(nodes):
+            key = "%s/%s/%s" % (pkg_name, kind, spec_name)
+            if key not in index:
+                index[key] = {"kind": kind, "file": rel_file}
+            pkg_entry = per_package.setdefault(pkg_name, {"file": rel_file, "specs": {}})
+            pkg_entry["specs"].setdefault(kind, [])
+            if spec_name not in pkg_entry["specs"][kind]:
+                pkg_entry["specs"][kind].append(spec_name)
+
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for bundle in bundle_order:
+            bundle_dir = os.path.join(root, bundle)
+            if not os.path.isdir(bundle_dir):
+                continue
+            for fname in sorted(os.listdir(bundle_dir)):
+                if fname.endswith(".ros"):
+                    _visit_ros_file(os.path.join(bundle_dir, fname), "%s/%s" % (bundle, fname))
+        for cur_root, dirs, files in os.walk(root):
+            dirs[:] = [d for d in sorted(dirs) if d not in _CATALOG_SKIP_DIRS]
+            for fname in sorted(files):
+                if not fname.endswith(".ros"):
+                    continue
+                fpath = os.path.join(cur_root, fname)
+                rel_file = os.path.relpath(fpath, root).replace(os.sep, "/")
+                _visit_ros_file(fpath, rel_file)
+
+    return index, per_package
+
+
+def _shared_catalogue_fingerprint(cat_dir, type_roots, node_roots):
+    h = hashlib.sha256()
+    cfg = os.path.join(cat_dir, "catalogue_config.json")
+    if os.path.isfile(cfg):
+        try:
+            st = os.stat(cfg)
+            h.update(("cfg:%d:%d\n" % (st.st_mtime_ns, st.st_size)).encode("utf-8"))
+        except OSError:
+            pass
+    seen = set()
+    for root in list(type_roots) + list(node_roots):
+        if not os.path.isdir(root):
+            continue
+        for cur_root, dirs, files in os.walk(root):
+            dirs[:] = [d for d in sorted(dirs) if d not in _CATALOG_SKIP_DIRS]
+            for fname in sorted(files):
+                if not fname.endswith((".ros", ".ros2", ".rossystem")):
+                    continue
+                fpath = os.path.join(cur_root, fname)
+                rp = os.path.realpath(fpath)
+                if rp in seen:
+                    continue
+                seen.add(rp)
+                try:
+                    st = os.stat(fpath)
+                    h.update(("%s:%d:%d\n" % (rp, st.st_mtime_ns, st.st_size)).encode("utf-8"))
+                except OSError:
+                    continue
+    return h.hexdigest()
+
+
+def _load_shared_catalogue_overlay():
+    """Return ('none', None) or (token, {'types': dict, 'nodes': dict, '_systems': list})."""
+    env_override = os.environ.get("ROSMODEL_CATALOGUE_DIR", "").strip()
+    cat_dir = get_shared_catalogue_dir()
+    type_roots = resolve_shared_type_roots(cat_dir)
+    node_roots = resolve_shared_node_roots(cat_dir)
+
+    if not type_roots and not node_roots:
+        # Check for a pre-built catalogue_index.json if present without raw model repos
+        idx_candidates = [os.path.join(cat_dir, "catalogue_index.json")]
+        if not env_override:
+            idx_candidates.append(os.path.expanduser("~/.rostooling/catalogue_index.json"))
+        for idx_path in idx_candidates:
+            if os.path.isfile(idx_path):
+                try:
+                    st = os.stat(idx_path)
+                    mem_key = ("index_file", idx_path, st.st_mtime_ns, st.st_size)
+                    if _shared_overlay_cache["key"] == mem_key:
+                        return mem_key, _shared_overlay_cache["value"]
+                    with open(idx_path, encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, dict) and any(k in data for k in ("types", "nodes", "_systems", "systems")):
+                        val = {
+                            "types": data.get("types") or {},
+                            "nodes": data.get("nodes") or {},
+                            "_systems": data.get("_systems") or data.get("systems") or [],
+                        }
+                        _shared_overlay_cache["key"] = mem_key
+                        _shared_overlay_cache["value"] = val
+                        return mem_key, val
+                except (IOError, OSError, ValueError):
+                    pass
+        return ("none", cat_dir), None
+
+    fp = _shared_catalogue_fingerprint(cat_dir, type_roots, node_roots)
+    mem_key = ("repos", cat_dir, fp, HAVE_YAML)
+    if _shared_overlay_cache["key"] == mem_key:
+        return mem_key, _shared_overlay_cache["value"]
+
+    cache_file = (
+        os.path.join(cat_dir, ".catalogue_index_cache.json")
+        if env_override
+        else os.path.expanduser("~/.rostooling/catalogue_index.json")
+    )
+    if os.path.isfile(cache_file):
+        try:
+            with open(cache_file, encoding="utf-8") as f:
+                cached = json.load(f)
+            if (isinstance(cached, dict)
+                    and cached.get("_fingerprint") == fp
+                    and cached.get("_have_yaml") is bool(HAVE_YAML)):
+                val = {
+                    "types": cached.get("types") or {},
+                    "nodes": cached.get("nodes") or {},
+                    "_systems": cached.get("_systems") or [],
+                }
+                _shared_overlay_cache["key"] = mem_key
+                _shared_overlay_cache["value"] = val
+                return mem_key, val
+        except (IOError, OSError, ValueError):
+            pass
+
+    types_map, _ = scan_type_roots(type_roots) if type_roots else ({}, {})
+    nodes_map, systems_list = {}, []
+    if node_roots:
+        bni = _build_node_index_module()
+        if bni is not None and hasattr(bni, "scan_node_roots"):
+            nodes_map, systems_list = bni.scan_node_roots(node_roots)
+
+    val = {"types": types_map, "nodes": nodes_map, "_systems": systems_list}
+    try:
+        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+        tmp_file = cache_file + ".tmp.%d" % os.getpid()
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "_fingerprint": fp,
+                "_have_yaml": bool(HAVE_YAML),
+                "types": types_map,
+                "nodes": nodes_map,
+                "_systems": systems_list,
+            }, f, sort_keys=True)
+        os.replace(tmp_file, cache_file)
+    except (IOError, OSError):
+        pass
+
+    _shared_overlay_cache["key"] = mem_key
+    _shared_overlay_cache["value"] = val
+    return mem_key, val
+
+
+def _load_base_type_index():
+    if not _base_type_index_cache["loaded"]:
+        _base_type_index_cache["loaded"] = True
+        try:
+            with open(_TYPE_INDEX_PATH, encoding="utf-8") as f:
+                _base_type_index_cache["value"] = json.load(f).get("types")
+        except (IOError, OSError, ValueError):
+            _base_type_index_cache["value"] = None
+    return _base_type_index_cache["value"]
+
+
+def _load_base_node_payload():
+    if not _base_node_payload_cache["loaded"]:
+        _base_node_payload_cache["loaded"] = True
+        try:
+            with open(_NODE_INDEX_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+            _base_node_payload_cache["nodes"] = data.get("nodes")
+            _base_node_payload_cache["systems"] = data.get("_systems")
+        except (IOError, OSError, ValueError):
+            _base_node_payload_cache["nodes"] = None
+            _base_node_payload_cache["systems"] = None
+    return _base_node_payload_cache["nodes"], _base_node_payload_cache["systems"]
 
 
 def load_type_index():
-    if not _type_index_cache["loaded"]:
-        _type_index_cache["loaded"] = True
-        try:
-            with open(_TYPE_INDEX_PATH, encoding="utf-8") as f:
-                _type_index_cache["value"] = json.load(f).get("types")
-        except (IOError, OSError, ValueError):
-            _type_index_cache["value"] = None
+    token, overlay = _load_shared_catalogue_overlay()
+    if _type_index_cache["token"] != token:
+        base = _load_base_type_index()
+        ov_types = (overlay or {}).get("types") or {}
+        if base is None and not ov_types:
+            merged = None
+        else:
+            merged = dict(base or {})
+            for k, v in ov_types.items():
+                if k not in merged:
+                    merged[k] = v
+        _type_index_cache["token"] = token
+        _type_index_cache["value"] = merged
     return _type_index_cache["value"]
 
 
 def load_node_index():
-    if not _node_index_cache["loaded"]:
-        _node_index_cache["loaded"] = True
-        try:
-            with open(_NODE_INDEX_PATH, encoding="utf-8") as f:
-                _node_index_cache["value"] = json.load(f).get("nodes")
-        except (IOError, OSError, ValueError):
-            _node_index_cache["value"] = None
+    token, overlay = _load_shared_catalogue_overlay()
+    if _node_index_cache["token"] != token:
+        base, _ = _load_base_node_payload()
+        ov_nodes = (overlay or {}).get("nodes") or {}
+        if base is None and not ov_nodes:
+            merged = None
+        else:
+            merged = {
+                k: {
+                    "file": v.get("file"),
+                    "artifact": v.get("artifact"),
+                    "interfaces": dict(v.get("interfaces") or {}),
+                }
+                for k, v in (base or {}).items()
+            }
+            for k, v in ov_nodes.items():
+                if k not in merged:
+                    merged[k] = v
+                elif isinstance(v, dict) and v.get("interfaces"):
+                    merged[k]["interfaces"].update(v["interfaces"])
+        _node_index_cache["token"] = token
+        _node_index_cache["value"] = merged
     return _node_index_cache["value"]
 
 
-_system_index_cache = {"loaded": False, "value": None}
+def _register_system_entries(by_name, entries):
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("system") or entry.get("name")
+        if not name:
+            continue
+        record = {
+            "file": entry.get("file"),
+            "nodes": entry.get("nodes") or {},
+            "connections": entry.get("connections") or [],
+            "hasOwnSubsystems": bool(entry.get("hasOwnSubsystems")),
+        }
+        by_name.setdefault(name, record)
+        base = os.path.splitext(os.path.basename(entry.get("file") or ""))[0]
+        if base:
+            by_name.setdefault(base, record)
 
 
 def load_system_index():
     """{"<system name or file basename>": {"file", "nodes": {label: {"from", "interfaces"}},
     "connections": [[fromLabel, toLabel], ...], "hasOwnSubsystems"}}, built lazily from
-    node_index.json's "_systems" list
-    (scripts/build_node_index.py). A system entry whose source file didn't parse as a
-    mapping (or predates the richer index) has no "system" key and is skipped -- callers
-    see it as simply unresolved, same as a system name that was never catalogued at all.
+    node_index.json's "_systems" list (plus any shared catalogue .rossystem models).
 
     Keyed by both the system's declared name AND its file's basename (without extension),
     matching how corpus 'subSystems:' references are sometimes written -- ros_plot.py's
     link_subsystems() does the same dual lookup for its own (unrelated) purpose. The
     declared name always wins a collision: it is registered first and basename aliases
     use setdefault, so a basename never shadows a real system name."""
-    if not _system_index_cache["loaded"]:
-        _system_index_cache["loaded"] = True
-        try:
-            with open(_NODE_INDEX_PATH, encoding="utf-8") as f:
-                raw_systems = json.load(f).get("_systems") or []
-            by_name = {}
-            for entry in raw_systems:
-                name = entry.get("system")
-                if not name:
-                    continue
-                record = {
-                    "file": entry.get("file"),
-                    "nodes": entry.get("nodes") or {},
-                    # the referenced system's OWN connections. Nothing in linting or emission
-                    # reads them -- checkIfInterfaceInSystem looks only at `interfaces:` -- but
-                    # the studio's subsystem views cannot draw the inside of a subsystem
-                    # without them. Absent on an index built before they were recorded.
-                    "connections": entry.get("connections") or [],
-                    "hasOwnSubsystems": bool(entry.get("hasOwnSubsystems")),
-                }
-                by_name.setdefault(name, record)  # first file wins, same policy as nodes
-                base = os.path.splitext(os.path.basename(entry.get("file") or ""))[0]
-                if base:
-                    by_name.setdefault(base, record)
-            _system_index_cache["value"] = by_name
-        except (IOError, OSError, ValueError):
+    token, overlay = _load_shared_catalogue_overlay()
+    if _system_index_cache["token"] != token:
+        _, base_systems = _load_base_node_payload()
+        ov_systems = (overlay or {}).get("_systems") or []
+        if base_systems is None and not ov_systems:
             _system_index_cache["value"] = None
+        else:
+            by_name = {}
+            _register_system_entries(by_name, base_systems or [])
+            _register_system_entries(by_name, ov_systems)
+            _system_index_cache["value"] = by_name
+        _system_index_cache["token"] = token
     return _system_index_cache["value"]
 
 
@@ -282,6 +654,9 @@ ROS2_NODE_BLOCKS = [
     "actionclients",
     "parameters",
 ]
+
+# Ros2.xtext:69-74 LifecycleState enum
+LIFECYCLE_STATES = ("Unconfigured", "Inactive", "Active", "Finalized")
 
 # Ros2.xtext AmentPackage members, in grammar-fixed order (rule 21).
 AMENT_PACKAGE_KEYS = ["fromGitRepo", "artifacts", "dependencies"]
@@ -1794,15 +2169,31 @@ class Linter(object):
     def check_ros2_artifact_body(self, art_key, node):
         self.check_duplicate_keys(node, "artifact '%s'" % art_key.value)
 
+        is_lifecycle = False
+        lifecycle_node = mapping_get(node, "lifecycle")
+        if lifecycle_node is not None:
+            if not is_scalar(lifecycle_node) or lifecycle_node.value.lower() not in ("true", "false"):
+                self.error(node_line(lifecycle_node), "RM033",
+                           "lifecycle value '%s' is not a boolean."
+                           % getattr(lifecycle_node, "value", lifecycle_node),
+                           "lifecycle admits only 'true' or 'false' (Ros2.xtext:33).")
+            elif is_quoted(lifecycle_node):
+                self.error(node_line(lifecycle_node), "RM033",
+                           "lifecycle value '%s' is quoted." % lifecycle_node.value,
+                           "lifecycle takes boolean0 (true/false bare keyword), not a quoted string.")
+            elif lifecycle_node.value.lower() == "true":
+                is_lifecycle = True
+
         blocks_present = []
         for key, val in mapping_items(node):
             if not is_scalar(key):
                 continue
             name, line = key.value, node_line(key)
 
-            if name == "node":
-                self.check_ros_names_position(val, "Node name")
-                self.check_name_conventions(val, "Node name", "RM012", WARNING)
+            if name in ("node", "lifecycle"):
+                if name == "node":
+                    self.check_ros_names_position(val, "Node name")
+                    self.check_name_conventions(val, "Node name", "RM012", WARNING)
                 continue
 
             if name in ROS2_FORBIDDEN_SPEC_BLOCKS:
@@ -1828,7 +2219,7 @@ class Linter(object):
                     if name == "parameters":
                         self.check_ros2_parameter(entry_key, entry_val)
                     else:
-                        self.check_ros2_interface(name, entry_key, entry_val)
+                        self.check_ros2_interface(name, entry_key, entry_val, is_lifecycle=is_lifecycle)
 
         if "node" not in mapping_keys(node):
             self.error(node_line(art_key), "RM038",
@@ -1852,7 +2243,7 @@ class Linter(object):
                       "or variable), so no real ROS name looks like this and nothing will "
                       "connect to it. Resolve it under SKILL.md 8e, or rename it by hand.")
 
-    def check_ros2_interface(self, block, key, val):
+    def check_ros2_interface(self, block, key, val, is_lifecycle=False):
         self.check_estring_quoting(key, "Interface", require_quotes=True)
         if is_scalar(key):
             self.check_placeholder_name(str(key.value), node_line(key))
@@ -1883,11 +2274,32 @@ class Linter(object):
                     self.check_type_catalogue(type_node.value, node_line(type_node))
 
         for extra in keys:
-            if extra not in ("type", "ns", "qos"):
+            if extra not in ("type", "ns", "active_in", "qos"):
                 self.error(node_line(mapping_get_pair(val, extra)[0]), "RM036",
                            "Unknown key '%s:' in interface '%s'." % (extra, key.value),
-                           "An interface admits only type:, ns:, qos: in that order "
-                           "(Ros2.xtext:49-112).")
+                           "An interface admits only type:, ns:, active_in:, qos: in that order "
+                           "(Ros2.xtext:105-175).")
+            elif extra == "active_in":
+                act_node = mapping_get(val, "active_in")
+                if not is_lifecycle:
+                    self.error(node_line(mapping_get_pair(val, "active_in")[0]), "RM036",
+                               "'active_in:' declared on interface '%s' of non-lifecycle node." % key.value,
+                               "'active_in:' is only valid on lifecycle nodes (declared with 'lifecycle: true').")
+                elif not is_sequence(act_node):
+                    self.error(node_line(act_node if act_node else key), "RM033",
+                               "'active_in:' value must be a bracketed list of LifecycleState values.",
+                               "Allowed values: %s (Ros2.xtext:69-74)." % ", ".join(LIFECYCLE_STATES))
+                else:
+                    for item in act_node.value:
+                        if not is_scalar(item) or item.value not in LIFECYCLE_STATES:
+                            val_str = getattr(item, "value", str(item))
+                            self.error(node_line(item), "RM033",
+                                       "Lifecycle state '%s' is not permitted." % val_str,
+                                       "Allowed values: %s (Ros2.xtext:69-74)." % ", ".join(LIFECYCLE_STATES))
+                        elif is_quoted(item):
+                            self.error(node_line(item), "RM033",
+                                       "Lifecycle state '%s' is quoted." % item.value,
+                                       "These are grammar keywords, not EStrings; quoting one is a parse error.")
 
         if "ns" in keys:
             self.warn(node_line(mapping_get_pair(val, "ns")[0]), "RM044",
@@ -1895,10 +2307,10 @@ class Linter(object):
                       "0 occurrences across all 253 corpus .ros2 files "
                       "(emission-profile sec 3). Avoid.")
 
-        self.check_ordering([k for k in keys if k in ("type", "ns", "qos")],
-                            ["type", "ns", "qos"], node_line(key), "RM039",
+        self.check_ordering([k for k in keys if k in ("type", "ns", "active_in", "qos")],
+                            ["type", "ns", "active_in", "qos"], node_line(key), "RM039",
                             "Interface member",
-                            "Ros2.xtext:49-112 fixes the order type: -> ns: -> qos: "
+                            "Ros2.xtext:105-175 fixes the order type: -> ns: -> active_in: -> qos: "
                             "(emission-profile rule 23).")
 
         if "qos" in keys:
@@ -2880,12 +3292,32 @@ class Linter(object):
                                             node_line(from_node))
 
     def resolve_endpoint(self, interfaces, name, node, role):
-        """Resolve a connection endpoint name to its interface record, or None."""
+        """Resolve a connection endpoint name to its interface record, or None.
+
+        Supports:
+        1. Qualified names: <node>.<interface>, <node>::<interface>,
+           <subsystem>.<node>.<interface>, or <subsystem>::<node>::<interface>.
+        2. Short unqualified names: <interface> (valid when unique across the system).
+        """
+        if "." in name or "::" in name:
+            sep = "::" if "::" in name else "."
+            prefix, _, iface_name = name.rpartition(sep)
+            prefix = prefix.replace("::", ".")
+            candidates = interfaces.get(iface_name, [])
+            matched = [
+                c for c in candidates
+                if c["node"] == prefix or c["node"].endswith("." + prefix) or prefix.endswith("." + c["node"])
+            ]
+            if matched:
+                return matched[0]
+            return None
+
         candidates = interfaces.get(name)
         if not candidates:
             return None
         if len(candidates) > 1:
             owners = ", ".join(sorted(set(c["node"] for c in candidates)))
+            qualified_examples = ", ".join("'%s.%s'" % (c["node"], name) for c in candidates[:2])
             self.warn(node_line(node), "RM065",
                       "Connection '%s' endpoint '%s' is declared in %d nodes (%s)."
                       % (role, name, len(candidates), owners),
@@ -2893,8 +3325,9 @@ class Linter(object):
                       "endpoint name owned by several nodes is ambiguous at link time. "
                       "Declaring the same local name in different nodes is fine on its own "
                       "(Corpus B does it throughout) -- it only becomes a problem once a "
-                      "connection references it. Disambiguate by kind prefix, as Corpus B does "
-                      "with sub_clock / sub_bond (emission-profile rule 28).")
+                      "connection references it. Under qualified scoping, disambiguate by "
+                      "prefixing the node name: %s (or rename the interfaces)."
+                      % qualified_examples)
         return candidates[0]
 
     def check_connection_direction(self, from_iface, to_iface, from_name, to_name, line):

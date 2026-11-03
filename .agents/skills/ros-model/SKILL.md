@@ -109,9 +109,12 @@ python scripts/extract_rossystem.py <launch-file> \
     --models <project>/rosnodes -o <project>/<system>.rossystem --json <project>/system_record.json
 ```
 
-Paths above are relative to the workspace root (this repo). If the first invocation fails with
-"No such file or directory", check you are running from the workspace root — it is not a reason
-to skip the step.
+Paths above are relative to the workspace root (this repo). When installed as a Python package via
+`pip install -e .`, the same tools are directly available on `PATH` as `extract-ros2-interfaces`
+and `extract-rossystem` (alongside `rosmodel-lint`, `ros-studio`, `ros-plot`, and
+`coresense-studio`). If the first invocation fails with "No such file or directory", check you are
+running from the workspace root or use the installed CLI entry points — it is not a reason to skip
+the step.
 
 `scripts/README.md` documents what each reads and emits; it is the authority, so do not restate
 it from memory. The short version: everything that is literal in the source, already cited.
@@ -311,8 +314,9 @@ Both endpoints must resolve to the *same* spec object, so emit byte-identical `t
 both ends.
 
 Use only the `RosSystemConnection` form, `- [from_label , to_label]`, referencing interface **labels
-declared in the same file**. The `RosConnection` alternative triggers a `ClassCastException` in
-three separate validator methods.
+declared in the same file** (or qualified as `<node>.<interface>` / `<subsystem>.<node>.<interface>`
+to disambiguate when multiple nodes declare identical interface names). The `RosConnection`
+alternative triggers a `ClassCastException` in three separate validator methods.
 
 **Never synthesise a `connections:` block that the source did not declare.** When transcribing an
 existing system that has no `connections:`, emit none — even when pub/sub pairs look obvious.
@@ -710,7 +714,8 @@ be the reader's only signal that nothing needed it.
 | Rule | Mandatory order |
 |---|---|
 | `AmentPackage` | `fromGitRepo:` → `artifacts:` → `dependencies:` |
-| `.ros2` interface | `type:` → `ns:` → `qos:` |
+| `.ros2` node | `node:` → `lifecycle:` (optional) → interface/parameter blocks |
+| `.ros2` interface | `type:` → `ns:` → `active_in:` → `qos:` (`active_in:` only valid on lifecycle nodes) |
 | `.ros2` parameter | `type:` → **`default:`** → `ns:` → `value:` → `qos:` |
 | `.rossystem` node | `from:` → `namespace:` → `interfaces:` → `parameters:` |
 | `.rossystem` **system-level** parameter | `ns:` → `type:` → `default:` → `value:` (no `qos:`) |
@@ -885,10 +890,13 @@ disk.
   `extract_ros2_interfaces.py` / `extract_rossystem.py` has already passed it once. Re-run it after
   your §8e edits — those are hand edits like any other.
 
-- **Static linter**: `scripts/rosmodel_lint.py`. Checks everything above that is decidable in
-  one file.
+- **Static linter**: `scripts/rosmodel_lint.py` (or `rosmodel-lint` when installed via
+  `pip install -e .`). Checks everything above that is decidable in one file, consulting shared
+  `~/.rostooling/catalogue_repos/` models (or `ROSMODEL_CATALOGUE_DIR`) when synced and falling
+  back to `assets/type_index.json` and `assets/node_index.json`.
 
   ```
+  rosmodel-lint <file>...
   python scripts/rosmodel_lint.py <file>...
   ```
 
@@ -997,6 +1005,29 @@ disk.
 
 - **When the linter and the oracle disagree, the oracle wins.** The linter is a reimplementation;
   the oracle is the toolchain. Report a file as validated only if you actually ran it.
+
+## Headless MCP Server & CLI Entry Points
+
+When the `rostooling-mcp` Model Context Protocol server (`rostooling-languages` binary
+`rostooling-mcp`, `--jar <path>` or `ROSMODEL_JAR` / `ROSMODEL_JAVA` / `ROSMODEL_CATALOGUE_DIR`)
+is connected, agents can validate models against the real Xtext Language Server and run ROS 2 code
+generation directly without opening VS Code:
+
+- **`validate_ros_model`** — validates syntax, cross-file `type:` / `from:` references, arrow
+  targets, and Xtext validator constraints on `.ros`, `.ros2`, or `.rossystem` files (use alongside
+  fast static `rosmodel-lint`).
+- **`generate_ros2_wrappers`** — generates C++ (`cpp`), Python (`python`), or Hybrid (`both`) ROS 2
+  node wrappers, runners, `CMakeLists.txt`, and starter domain logic templates from a `.ros2` model
+  into `src-gen/`.
+- **`generate_rossystem_code`** — generates ROS 2 launch/bringup packages (`<system>.launch.py`,
+  `ComposableNodeContainer` wiring, parameter YAMLs, and diagrams) from a `.rossystem` model into
+  `src-gen/`.
+- **`build_ros2_package`** — builds generated packages in the target ROS 2 workspace via
+  `colcon build`.
+
+Installing this repository with `pip install -e .` provides six CLI entry points on `PATH`:
+`rosmodel-lint`, `ros-plot`, `extract-ros2-interfaces`, `extract-rossystem`, `ros-studio`, and
+`coresense-studio`.
 
 Full detail on demand: `references/ros2-syntax.md`, `references/rossystem-syntax.md`,
 `references/worked-examples.md`.

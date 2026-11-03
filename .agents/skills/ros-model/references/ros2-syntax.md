@@ -68,6 +68,7 @@ Artifact returns Artifact:
 Node returns Node:
     'node:' name=RosNames
     (
+    ('lifecycle:' isLifecycle=boolean0)|
     ('publishers:'
         BEGIN
         publisher+=Publisher*
@@ -105,10 +106,21 @@ Node returns Node:
     )
     )*
     ;
+
+enum LifecycleState returns LifecycleState:
+    UNCONFIGURED = 'Unconfigured' |
+    INACTIVE = 'Inactive' |
+    ACTIVE = 'Active' |
+    FINALIZED = 'Finalized'
+;
 ```
 
 An `Artifact` holds **at most one** `Node`. One node per artifact; multiple nodes means multiple
 artifacts (or multiple files).
+
+A node may declare `lifecycle: true` (or `false`) directly under `node:`. When `lifecycle: true`
+is declared, the node models a managed lifecycle node (`rclcpp_lifecycle::LifecycleNode` /
+`rclpy.lifecycle.Node`), and individual interfaces may declare an `active_in:` state list.
 
 The block list is a repeated alternation `( A | B | … )*` — the grammar permits **any order and even
 repetition**. Convention must supply the order. Emit the grammar's own declaration order:
@@ -127,6 +139,7 @@ Publisher returns Publisher:
         BEGIN
             'type:' message=[TopicSpec|EString]
             ('ns:' namespace=Namespace)?
+            ('active_in:' '[' activeStates+=LifecycleState (',' activeStates+=LifecycleState)* ']')?
             ('qos:' qos=QualityOfService)?
         END
     ;
@@ -138,7 +151,9 @@ Publisher returns Publisher:
 | `ServiceServer`, `ServiceClient` | `[ServiceSpec\|EString]` | `srvs:` |
 | `ActionServer`, `ActionClient` | `[ActionSpec\|EString]` | `actions:` |
 
-Member order `type:` → `ns:` → `qos:` is **fixed**. `type:` is mandatory; the other two are optional.
+Member order `type:` → `ns:` → `active_in:` → `qos:` is **fixed**. `type:` is mandatory; the other
+three are optional. `active_in:` is only valid on nodes declaring `lifecycle: true`. Valid states
+are `Unconfigured`, `Inactive`, `Active`, `Finalized` (e.g. `active_in: [Active]`).
 
 `type:` is a **cross-reference**, not a string. It must resolve to a `TopicSpec`/`ServiceSpec`/
 `ActionSpec` declared in a `.ros` file that is reachable in the workspace. If it does not resolve,

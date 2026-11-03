@@ -490,11 +490,25 @@ RosTopicConnection returns RosTopicConnection:
 ;
 ```
 
-**Emit only `RosSystemConnection`** — `- [label_a , label_b]` referencing local interface labels.
+**Emit only `RosSystemConnection`** — `- [label_a , label_b]` referencing local interface labels
+(or qualified labels `<node>.<interface>` when multiple nodes declare identical interface names).
 
 Three separate validator methods (`checkIfInterfaceInSystem`, `checkPortPatterns`, `MatchPortMsgs`)
 each open with an unconditional `connection as RosSystemConnectionImpl`. Any `RosConnection` variant
 throws `ClassCastException` in all three. The grammar's own comment concedes the branch is unused.
+
+### Scoping and Endpoint Disambiguation
+
+`RosSystemConnection` endpoints (`from` and `to`) reference declared `RosInterface` elements:
+`- [from_endpoint, to_endpoint]`
+
+The custom scoping provider (`RosSystemScopeProvider.xtend` and `RosSystemQNP.xtend`) supports two addressing formats:
+
+1. **Short unqualified names**: e.g. `- ["scan", "scan_in"]`
+   Accepted when the interface name is unique across the entire system. 100% backward-compatible with existing models.
+2. **Hierarchical qualified names**: e.g. `- ["slam.map", "nav2.map"]` or `- ["subsys.slam.map", "nav2.map"]`
+   Syntax: `<node_name>.<interface_name>` or `<subsystem_name>.<node_name>.<interface_name>` (the separator `::` is also accepted, e.g. `slam::map`).
+   Enables deterministic connection resolution when multiple nodes declare identically named interfaces (such as multiple `map`, `scan`, `cmd_vel`, or `tf` topics). The scope provider exports short names *only* when globally unique across the system; ambiguous names must be qualified by node name.
 
 ### Direction — `checkPortPatterns` (ERROR)
 

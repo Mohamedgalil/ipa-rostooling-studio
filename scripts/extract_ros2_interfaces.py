@@ -101,7 +101,7 @@ def wrap_comment(text, indent="", width=96):
 
 
 class Interface:
-    def __init__(self, block, name, type_ref, qos_depth, file, line):
+    def __init__(self, block, name, type_ref, qos_depth, file, line, active_states=None):
         self.block = block
         self.name = name
         self.type_ref = type_ref        # 'pkg/msg/Type' or None when unresolved
@@ -109,6 +109,7 @@ class Interface:
         self.qos_depth = qos_depth
         self.file = file
         self.line = line
+        self.active_states = list(active_states) if active_states else []
 
     def key(self):
         return (self.block, self.name)
@@ -150,9 +151,10 @@ class Flag:
 
 
 class NodeDraft:
-    def __init__(self, name, confident):
+    def __init__(self, name, confident, is_lifecycle=False):
         self.name = name
         self.confident = confident      # was the node name a literal in the source?
+        self.is_lifecycle = is_lifecycle
         self.interfaces = OrderedDict()  # key -> Interface
         self.params = OrderedDict()      # name -> Param
         self.files = set()               # source files this node's declarations came from
@@ -175,19 +177,24 @@ class PackageDraft:
         self.fallback = None             # NodeDraft for calls with no node class
         self.fallbacks = []              # that bucket, split per build target (see below)
         self.target_node_names = {}      # build target (or None) -> literal node name
+        self.target_lifecycles = {}      # build target (or None) -> bool
         self.flags = []
         self.notes = []
         self.languages = set()
         self.targets = {}                # source path -> build target (artifact) name
 
-    def node_for(self, name, confident):
+    def node_for(self, name, confident, is_lifecycle=False):
         if name not in self.nodes:
-            self.nodes[name] = NodeDraft(name, confident)
+            self.nodes[name] = NodeDraft(name, confident, is_lifecycle=is_lifecycle)
+        elif is_lifecycle:
+            self.nodes[name].is_lifecycle = True
         return self.nodes[name]
 
-    def fallback_node(self):
+    def fallback_node(self, is_lifecycle=False):
         if self.fallback is None:
-            self.fallback = NodeDraft(self.name, False)
+            self.fallback = NodeDraft(self.name, False, is_lifecycle=is_lifecycle)
+        elif is_lifecycle:
+            self.fallback.is_lifecycle = True
         return self.fallback
 
 
@@ -526,6 +533,7 @@ def emit_companion_msgs(resolver, out_dir, report_root, referenced):
 
 PY_METHOD_BLOCK = {
     "create_publisher": "publishers",
+    "create_lifecycle_publisher": "publishers",
     "create_subscription": "subscribers",
     "create_service": "serviceservers",
     "create_client": "serviceclients",
@@ -533,6 +541,7 @@ PY_METHOD_BLOCK = {
 # (type arg index, name arg index) for the rclpy methods above
 PY_METHOD_ARGS = {
     "create_publisher": (0, 1),
+    "create_lifecycle_publisher": (0, 1),
     "create_subscription": (0, 1),
     "create_service": (0, 1),
     "create_client": (0, 1),
@@ -641,6 +650,7 @@ class PyFileVisitor(ast.NodeVisitor):
         self.class_stack = []
         self.func_stack = []
         self.node_classes = {}     # class name -> node name (literal) or None
+        self.lifecycle_classes = set()
         self.calls = []            # (owner class or None, ast.Call)
         self.call_funcs = {}       # id(ast.Call) -> enclosing function, for local names
 
@@ -648,9 +658,16 @@ class PyFileVisitor(ast.NodeVisitor):
 
     def visit_ClassDef(self, node):
         for base in node.bases:
+            try:
+                base_repr = ast.unparse(base)
+            except Exception:
+                base_repr = ""
             base_name = base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", None)
-            if base_name == "Node":
+            is_lc = "LifecycleNode" in base_repr or "lifecycle" in base_repr
+            if base_name in ("Node", "LifecycleNode") or is_lc:
                 self.node_classes[node.name] = self._node_name_of(node)
+                if is_lc or base_name == "LifecycleNode":
+                    self.lifecycle_classes.add(node.name)
                 break
         self.class_stack.append(node.name)
         self.generic_visit(node)
@@ -666,7 +683,9 @@ class PyFileVisitor(ast.NodeVisitor):
                 args = list(sub.args)
                 if isinstance(fn.value, ast.Call) and getattr(fn.value.func, "id", "") == "super":
                     pass
-                elif getattr(fn.value, "id", None) == "Node":
+                elif getattr(fn.value, "id", None) in ("Node", "LifecycleNode"):
+                    args = args[1:]
+                elif isinstance(fn.value, ast.Attribute) and fn.value.attr in ("Node", "LifecycleNode"):
                     args = args[1:]
                 else:
                     continue
@@ -744,7 +763,7 @@ def extract_python(pkg, path, resolver, report_root):
 
     named = {c: n for c, n in visitor.node_classes.items() if n}
     for cls, name in named.items():
-        pkg.node_for(name, True)
+        pkg.node_for(name, True, is_lifecycle=(cls in visitor.lifecycle_classes))
     for cls, name in visitor.node_classes.items():
         if not name:
             pkg.flags.append(Flag(
@@ -761,7 +780,7 @@ def extract_python(pkg, path, resolver, report_root):
                 and isinstance(sub.value, ast.Call) and sub.value.args):
             fn = sub.value.func
             if (fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)) in (
-                    "Node", "create_node"):
+                    "Node", "create_node", "LifecycleNode", "create_lifecycle_node"):
                 val = py_literal(sub.value.args[0])
                 if isinstance(val, str):
                     handles[ast.unparse(sub.targets[0])] = val
@@ -772,7 +791,7 @@ def extract_python(pkg, path, resolver, report_root):
         handle = call.args[0] if (getattr(fn, "attr", getattr(fn, "id", None)) in PY_ACTION_CTOR
                                   and call.args) else getattr(fn, "value", None)
         name = handles.get(ast.unparse(handle)) if handle is not None else None
-        target = pkg.node_for(name, True) if name else _py_target(pkg, owner, named)
+        target = pkg.node_for(name, True) if name else _py_target(pkg, owner, named, visitor.lifecycle_classes)
         before = len(pkg.flags)
         if _handle_py_call(pkg, target, call, visitor, resolver, report_root, path):
             found_any = True
@@ -781,12 +800,22 @@ def extract_python(pkg, path, resolver, report_root):
     return found_any
 
 
-def _py_target(pkg, owner, named):
+def _py_target(pkg, owner, named, lifecycle_classes=None):
     if owner and owner in named:
-        return pkg.node_for(named[owner], True)
+        node = pkg.node_for(named[owner], True)
+        if lifecycle_classes and owner in lifecycle_classes:
+            node.is_lifecycle = True
+        return node
     if len(named) == 1:
-        return pkg.node_for(next(iter(named.values())), True)
-    return pkg.fallback_node()
+        owner_cls = next(iter(named.keys()))
+        node = pkg.node_for(named[owner_cls], True)
+        if lifecycle_classes and owner_cls in lifecycle_classes:
+            node.is_lifecycle = True
+        return node
+    node = pkg.fallback_node()
+    if lifecycle_classes and owner in lifecycle_classes:
+        node.is_lifecycle = True
+    return node
 
 
 def _handle_py_call(pkg, target, call, visitor, resolver, report_root, path):
@@ -902,7 +931,8 @@ def _record_interface(pkg, target, block, name_node, type_node, qos, visitor,
             # pieces, each runtime piece shown as {its source expression}. Still flagged.
             reason += (". Kept as '%s' with its literal type %s; each {...} is a runtime "
                        "value, not part of the real name" % (partial, ref))
-            target.add_interface(Interface(block, partial, ref, qos, path, line))
+            active_states = ["Active"] if (getattr(target, "is_lifecycle", False) and block == "publishers") else []
+            target.add_interface(Interface(block, partial, ref, qos, path, line, active_states=active_states))
         pkg.flags.append(Flag(block, reason, path, line, snippet))
         return ref is not None
     ref = py_type_ref(type_node, visitor.imports)
@@ -911,7 +941,8 @@ def _record_interface(pkg, target, block, name_node, type_node, qos, visitor,
             block, "'%s' has a type that is not a resolvable class literal" % name,
             path, line, snippet))
         return False
-    iface = Interface(block, name, ref, qos, path, line)
+    active_states = ["Active"] if (getattr(target, "is_lifecycle", False) and block == "publishers") else []
+    iface = Interface(block, name, ref, qos, path, line, active_states=active_states)
     target.add_interface(iface)
     return True
 
@@ -953,6 +984,7 @@ def _record_param(pkg, target, name_node, val_node, visitor, path, call, prefix=
 
 CPP_METHOD_BLOCK = {
     "create_publisher": "publishers",
+    "create_lifecycle_publisher": "publishers",
     "create_subscription": "subscribers",
     "create_service": "serviceservers",
     "create_client": "serviceclients",
@@ -1053,7 +1085,7 @@ def cpp_collect_free_node_names(src, root):
     plain string literal sitting in the source, so leaving it unread broke this script's
     one promise: everything literal is emitted.
 
-    Returns the distinct literals found, sorted so a run is reproducible.
+    Returns the distinct (literal, is_lifecycle) tuples found, sorted so a run is reproducible.
     """
     out = set()
     stack = [root]
@@ -1067,17 +1099,21 @@ def cpp_collect_free_node_names(src, root):
             continue
         qualified = ts_text(src, fn).replace(" ", "")
         hit = any(qualified.endswith(tail) for tail in NODE_FACTORY_TAILS)
+        is_lifecycle = "LifecycleNode" in qualified
         if not hit:
             # std::make_shared<rclcpp::Node>(...) -- the type is a template argument.
             fname, targs = cpp_callee(src, cur)
             if fname in ("make_shared", "make_unique") and targs:
-                hit = targs[0].replace(" ", "").split("::")[-1] in ("Node", "LifecycleNode")
+                tail = targs[0].replace(" ", "").split("::")[-1]
+                hit = tail in ("Node", "LifecycleNode")
+                if tail == "LifecycleNode":
+                    is_lifecycle = True
         if not hit:
             continue
         args = cpp_args(cur)
         lit = cpp_string_literal(src, args[0]) if args else None
         if lit:
-            out.add(lit)
+            out.add((lit, is_lifecycle))
     return sorted(out)
 
 
@@ -1147,7 +1183,7 @@ def cpp_collect_aliases(src, root, aliases):
         stack.extend(cur.children)
 
 
-def cpp_collect_node_classes(src, root, node_classes):
+def cpp_collect_node_classes(src, root, node_classes, lifecycle_classes=None):
     """class X : public rclcpp::Node  ->  {'X': 'literal-name' or None}."""
     stack = [root]
     while stack:
@@ -1157,9 +1193,13 @@ def cpp_collect_node_classes(src, root, node_classes):
             bases = ts_find(cur, "base_class_clause", depth=1)
             if name_node is not None and bases is not None:
                 base_text = ts_text(src, bases)
-                if "rclcpp::Node" in base_text or "rclcpp_lifecycle::LifecycleNode" in base_text:
+                is_lifecycle = ("rclcpp_lifecycle::LifecycleNode" in base_text or
+                                "LifecycleNode" in base_text)
+                if "rclcpp::Node" in base_text or is_lifecycle:
                     cls = ts_text(src, name_node)
                     node_classes.setdefault(cls, None)
+                    if is_lifecycle and lifecycle_classes is not None:
+                        lifecycle_classes.add(cls)
         elif cur.type == "field_initializer_list":
             for init in ts_children(cur, "field_initializer"):
                 head = init.children[0]
@@ -1371,6 +1411,7 @@ def extract_cpp(pkg, paths, parser, resolver, report_root):
     headers, the calls live in the .cpp."""
     trees = []
     aliases, node_classes = {}, {}
+    lifecycle_classes = set()
     for path in paths:
         try:
             with open(path, "rb") as fh:
@@ -1382,15 +1423,15 @@ def extract_cpp(pkg, paths, parser, resolver, report_root):
         tree = parser.parse(src)
         trees.append((path, src, tree))
         cpp_collect_aliases(src, tree.root_node, aliases)
-        cpp_collect_node_classes(src, tree.root_node, node_classes)
+        cpp_collect_node_classes(src, tree.root_node, node_classes, lifecycle_classes)
 
     if not trees:
         return False
     pkg.languages.add("cpp")
 
     named = {c: n for c, n in node_classes.items() if n}
-    for name in named.values():
-        pkg.node_for(name, True)
+    for cls, name in named.items():
+        pkg.node_for(name, True, is_lifecycle=(cls in lifecycle_classes))
     for cls, name in node_classes.items():
         if not name:
             pkg.flags.append(Flag(
@@ -1402,13 +1443,24 @@ def extract_cpp(pkg, paths, parser, resolver, report_root):
     # A node built in main() belongs to the BUILD TARGET whose source declares it, not to
     # the package: one add_executable() is one executable with one main().
     seen = OrderedDict()          # build target -> (set of literal names, a file to cite)
+    target_lifecycles = {}
     for path, src, tree in trees:
         key = pkg.targets.get(os.path.abspath(path))
-        for lit in cpp_collect_free_node_names(src, tree.root_node):
+        for item in cpp_collect_free_node_names(src, tree.root_node):
+            if isinstance(item, tuple):
+                lit, is_lc = item
+            else:
+                lit, is_lc = item, False
             seen.setdefault(key, (set(), path))[0].add(lit)
+            if is_lc:
+                target_lifecycles[key] = True
     for key, (names, path) in seen.items():
         if len(names) == 1:
-            pkg.target_node_names[key] = next(iter(names))
+            name = next(iter(names))
+            pkg.target_node_names[key] = name
+            if target_lifecycles.get(key):
+                pkg.target_lifecycles[key] = True
+                node = pkg.node_for(name, True, is_lifecycle=True)
         else:
             pkg.flags.append(Flag(
                 "node-name",
@@ -1420,11 +1472,11 @@ def extract_cpp(pkg, paths, parser, resolver, report_root):
     found = False
     for path, src, tree in trees:
         found |= _cpp_walk(pkg, path, src, tree, aliases, named, resolver, report_root,
-                           trees)
+                           trees, lifecycle_classes)
     return found
 
 
-def _cpp_walk(pkg, path, src, tree, aliases, named, resolver, report_root, trees):
+def _cpp_walk(pkg, path, src, tree, aliases, named, resolver, report_root, trees, lifecycle_classes=None):
     found = False
     stack = [tree.root_node]
     while stack:
@@ -1440,7 +1492,7 @@ def _cpp_walk(pkg, path, src, tree, aliases, named, resolver, report_root, trees
         line = cur.start_point[0] + 1
         snippet = " ".join(ts_text(src, cur).split())[:140]
         owner = _cpp_enclosing_class(src, cur)
-        target = _cpp_target(pkg, owner, named)
+        target = _cpp_target(pkg, owner, named, lifecycle_classes)
         before = len(pkg.flags)
 
         if fname in CPP_METHOD_BLOCK and not ns:
@@ -1465,12 +1517,22 @@ def _cpp_walk(pkg, path, src, tree, aliases, named, resolver, report_root, trees
     return found
 
 
-def _cpp_target(pkg, owner, named):
+def _cpp_target(pkg, owner, named, lifecycle_classes=None):
     if owner and owner in named:
-        return pkg.node_for(named[owner], True)
+        node = pkg.node_for(named[owner], True)
+        if lifecycle_classes and owner in lifecycle_classes:
+            node.is_lifecycle = True
+        return node
     if len(named) == 1:
-        return pkg.node_for(next(iter(named.values())), True)
-    return pkg.fallback_node()
+        owner_cls = next(iter(named.keys()))
+        node = pkg.node_for(named[owner_cls], True)
+        if lifecycle_classes and owner_cls in lifecycle_classes:
+            node.is_lifecycle = True
+        return node
+    node = pkg.fallback_node()
+    if lifecycle_classes and owner in lifecycle_classes:
+        node.is_lifecycle = True
+    return node
 
 
 def _cpp_first_string_arg(src, args):
@@ -1543,7 +1605,8 @@ def _cpp_record_iface(pkg, target, block, targs, name_arg, qos, src, path, line,
             block, "'%s' has template type %s, which does not resolve to a "
                    "pkg/kind/Type reference" % (name, targs[0]), path, line, snippet))
         return False
-    iface = Interface(block, name, ref, qos, path, line)
+    active_states = ["Active"] if (getattr(target, "is_lifecycle", False) and block == "publishers") else []
+    iface = Interface(block, name, ref, qos, path, line, active_states=active_states)
     iface.raw_type = targs[0]
     target.add_interface(iface)
     return True
@@ -1684,7 +1747,8 @@ def resolve_fallback_artifacts(pkg):
 
     for key, items in groups.items():
         name = pkg.target_node_names.get(key)
-        draft = NodeDraft(name or pkg.name, bool(name))
+        is_lc = pkg.target_lifecycles.get(key, False)
+        draft = NodeDraft(name or pkg.name, bool(name), is_lifecycle=is_lc)
         for kind, item in items:
             if kind == "i":
                 draft.add_interface(item)
@@ -1715,6 +1779,8 @@ def flag_artifact(flag, nodes, targets):
 def emit_node(node, resolver, report_root, emit_qos, targets):
     artifact = artifact_name(node, targets)
     lines = ["    %s:" % artifact, "      node: %s" % sanitize_node_name(node.name)]
+    if getattr(node, "is_lifecycle", False):
+        lines.append("      lifecycle: true")
     for block in BLOCK_ORDER:
         entries = sorted((i for i in node.interfaces.values() if i.block == block),
                          key=lambda i: i.name)
@@ -1725,6 +1791,8 @@ def emit_node(node, resolver, report_root, emit_qos, targets):
             status, comment = resolver.resolve(iface.type_ref, report_root)
             lines.append("        '%s':" % iface.name)
             lines.append("          type: '%s' %s" % (iface.type_ref, comment))
+            if getattr(node, "is_lifecycle", False) and iface.active_states:
+                lines.append("          active_in: [%s]" % ", ".join(iface.active_states))
             if emit_qos and iface.qos_depth is not None:
                 lines.append("          qos:")
                 lines.append("            depth: %d" % iface.qos_depth)
