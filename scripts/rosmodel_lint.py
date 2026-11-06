@@ -706,6 +706,14 @@ ROSSYSTEM_TOP_KEYS = [
     "connections",
 ]
 
+# ROS 2 Jazzy registered launch substitutions for $(...) parameter expressions.
+KNOWN_LAUNCH_SUBSTITUTIONS = {
+    "all", "and", "anon", "any", "command", "dirname", "env", "optenv",
+    "equals", "eval", "exec-in-pkg", "file-content", "filename", "find-exec",
+    "find-pkg-prefix", "find-pkg-share", "if", "launch_log_dir", "log_dir",
+    "not", "not-equals", "or", "param", "var",
+}
+
 # RosSystem.xtext:60-75 -- fixed member order for a RosNode (rule 22).
 ROSSYSTEM_NODE_KEYS = ["from", "namespace", "interfaces", "parameters"]
 
@@ -973,6 +981,11 @@ SUBSYSTEMS_KEY_RE = re.compile(r"^(?P<indent>[ \t]*)subSystems:[ \t]*(?:#.*)?$")
 # line, which is how a `subSystems:` block ends.
 SUBSYSTEMS_ENTRY_RE = re.compile(r"""^(?:"[^"]*"|'[^']*'|[^\s:#][^:#]*?)[ \t]*(?:#.*)?$""")
 
+CONNECTIONS_KEY_RE = re.compile(r"^(?P<indent>[ \t]*)connections:[ \t]*(?:#.*)?$")
+RE_CONN_LINE = re.compile(
+    r"""^(?P<lead>[ \t]*(?:-[ \t]*)?)\[?\s*(?P<a>"[^"]*"|'[^']*'|[^\s,;\]]+)\s*[,;]\s*(?P<b>"[^"]*"|'[^']*'|[^\s,;\]]+)\s*\]?\s*;?\s*$"""
+)
+
 
 def normalise_bare_subsystems(text):
     """Rewrite a MULTI-entry bare `subSystems:` block as a YAML block sequence, in memory.
@@ -1055,6 +1068,63 @@ def normalise_bare_subsystems(text):
                 synth.add(k + 1)
         i = max(j, i + 1)
     return "".join(out), synth
+
+
+def normalise_connections(text):
+    """Normalize connection entries in a `connections:` block in memory.
+
+    Accepts connections written with comma or semicolon delimiters and optional
+    trailing semicolons:
+      - Standard: `- [from, to]`
+      - Semicolon separator: `- [from; to]`, `- ["from"; "to"]`
+      - Unbracketed: `- from; to`, `- "from"; "to"`
+      - Trailing semicolon: `- [from, to];`, `- [from; to];`, `- from; to;`
+
+    Converts semicolon or unbracketed forms into the standard `- [from, to]` form
+    line-for-line before YAML composition, preserving comments and line numbers,
+    so PyYAML can parse them without failing on syntax or list shape errors.
+    """
+    lines = text.splitlines(True)
+    out = list(lines)
+    i = 0
+    while i < len(lines):
+        m = CONNECTIONS_KEY_RE.match(lines[i].rstrip("\r\n"))
+        if not m:
+            i += 1
+            continue
+        key_indent = len(m.group("indent").expandtabs(TAB_STOP))
+        j = i + 1
+        while j < len(lines):
+            raw = lines[j].rstrip("\r\n")
+            body = raw.strip()
+            if not body or body.startswith("#"):
+                j += 1
+                continue
+            stripped = raw.lstrip(" \t")
+            indent = len(raw[:len(raw) - len(stripped)].expandtabs(TAB_STOP))
+            if indent <= key_indent:
+                break
+            code, had_comment = ros_split_comment(raw)
+            comment_part = raw[len(code):] if had_comment else ""
+            conn_match = RE_CONN_LINE.match(code)
+            if conn_match:
+                if ";" in code or not (code.strip().startswith("-") and "[" in code and "]" in code):
+                    a = conn_match.group("a").strip()
+                    b = conn_match.group("b").strip()
+                    lead = conn_match.group("lead")
+                    if "-" not in lead:
+                        lead = lead.rstrip() + "  - " if lead else "    - "
+                    else:
+                        dash_idx = lead.find("-")
+                        lead_indent = lead[:dash_idx]
+                        lead = lead_indent + "- "
+                    if comment_part and not comment_part.startswith(" "):
+                        comment_part = " " + comment_part
+                    nl = "\r\n" if lines[j].endswith("\r\n") else "\n"
+                    out[j] = f"{lead}[{a}, {b}]{comment_part}{nl}"
+            j += 1
+        i = max(j, i + 1)
+    return "".join(out)
 
 
 def is_mapping(node):
@@ -1467,6 +1537,7 @@ class Linter(object):
         # The one multi-entry `subSystems:` form the grammar accepts is not composable YAML;
         # see normalise_bare_subsystems. Line-for-line, so the marks below stay the author's.
         source, self.synth_subsystem_lines = normalise_bare_subsystems(source)
+        source = normalise_connections(source)
 
         try:
             self.root = yaml.compose(io.StringIO(source))
@@ -2650,13 +2721,14 @@ class Linter(object):
                            % ", ".join(ROSSYSTEM_TOP_KEYS))
 
         if "fromFile" not in present:
-            self.warn(node_line(sys_key), "RM053",
-                      "'fromFile:' is absent.",
-                      "Omitting it is corpus-normal (32/52 files) but trips a live bug: "
-                      "fromFileHelper dereferences system.fromFile.empty and "
-                      "system.fromFile.toString with no null guard, and the field defaults to "
-                      "null (SystemImpl.java:70). Always emit a quoted fromFile containing '/' "
-                      "(validator-rules.md sec 2.2).")
+            if not self.is_generating_system(sys_key.value, sys_key):
+                self.warn(node_line(sys_key), "RM053",
+                          "'fromFile:' is absent.",
+                          "Omitting it is corpus-normal (32/52 files) but trips a live bug: "
+                          "fromFileHelper dereferences system.fromFile.empty and "
+                          "system.fromFile.toString with no null guard, and the field defaults to "
+                          "null (SystemImpl.java:70). Always emit a quoted fromFile containing '/' "
+                          "(validator-rules.md sec 2.2).")
 
         if subsystems_val is not None:
             self.check_subsystems(subsystems_val, interfaces, node_names, local_from)
@@ -2676,6 +2748,42 @@ class Linter(object):
                             "RosSystem.xtext:13-45 is an alternation, so convention decides. "
                             "Observed corpus order is %s (emission-profile rule 25)."
                             % " -> ".join(ROSSYSTEM_TOP_KEYS))
+
+    def is_generating_system(self, sys_name, sys_key):
+        """Check if this system is meant to generate a launch file rather than reference an existing one."""
+        markers = (
+            "# generates launch",
+            "# generate launch",
+            "# generates_launch",
+            "# launch generator",
+            "# generates launch file",
+            "# target launch",
+            "# deployment system",
+        )
+        line_idx = node_line(sys_key) - 1
+        src_line = self.lines[line_idx] if 0 <= line_idx < len(self.lines) else ""
+        if any(marker in src_line.lower() for marker in markers):
+            return True
+
+        for line in self.lines[:5]:
+            if any(marker in line.lower() for marker in markers):
+                return True
+
+        if self.path:
+            model_dir = os.path.dirname(os.path.abspath(self.path))
+            ws_dir = os.path.dirname(model_dir)
+            candidates = [
+                os.path.join(ws_dir, "src-gen", sys_name, "launch", "%s.launch.py" % sys_name),
+                os.path.join(ws_dir, sys_name, "launch", "%s.launch.py" % sys_name),
+                os.path.join(ws_dir, "launch", "%s.launch.py" % sys_name),
+                os.path.join(model_dir, "src-gen", sys_name, "launch", "%s.launch.py" % sys_name),
+                os.path.join(model_dir, "..", "src-gen", sys_name, "launch", "%s.launch.py" % sys_name),
+            ]
+            for cand in candidates:
+                if os.path.isfile(cand):
+                    return True
+
+        return False
 
     def check_subsystems(self, node, interfaces, local_node_names, local_from):
         """Resolve each subSystems: entry against assets/node_index.json's system table and
@@ -2845,7 +2953,15 @@ class Linter(object):
 
                 for iface_name, kind in node_info["interfaces"].items():
                     interfaces.setdefault(iface_name, []).append(
-                        {"kind": kind, "line": line, "node": owner, "target": None})
+                        {
+                            "kind": kind,
+                            "line": line,
+                            "node": node_label,
+                            "subsystem": ref,
+                            "owner": owner,
+                            "target": None,
+                        }
+                    )
 
     def check_from_file(self, node):
         if not is_scalar(node):
@@ -3200,6 +3316,34 @@ class Linter(object):
                            "terminal BOOLEAN is 'true'|'false' only (Basics.xtext:173). "
                            "Uppercase silently becomes a ParameterString "
                            "(emission-profile rule 18).")
+            elif is_scalar(value_node) and "$(" in value_node.value:
+                val_str = value_node.value
+                depth = 0
+                unbalanced = False
+                for c in val_str:
+                    if c == "(":
+                        depth += 1
+                    elif c == ")":
+                        depth -= 1
+                        if depth < 0:
+                            unbalanced = True
+                            break
+                if depth != 0:
+                    unbalanced = True
+                if unbalanced:
+                    self.error(node_line(value_node), "RM098",
+                               "Launch substitution in parameter '%s' has unbalanced parentheses: '%s'."
+                               % (key.value, val_str),
+                               "Launch substitution expressions $(...) must have balanced parentheses.")
+                else:
+                    for m in re.finditer(r"\$\(([a-zA-Z0-9_\-]+)", val_str):
+                        sub_name = m.group(1)
+                        if sub_name not in KNOWN_LAUNCH_SUBSTITUTIONS:
+                            self.error(node_line(value_node), "RM098",
+                                       "Unknown launch substitution '%s' in parameter '%s'."
+                                       % (sub_name, key.value),
+                                       "Allowed substitutions in ROS 2 Jazzy include: %s."
+                                       % ", ".join(sorted(KNOWN_LAUNCH_SUBSTITUTIONS)))
             elif (is_scalar(value_node) and is_quoted(value_node)
                   and re.match(r"^\s*[\[{].*[\]}]\s*$", value_node.value, re.S)):
                 self.error(node_line(value_node), "RM095",
@@ -3233,37 +3377,86 @@ class Linter(object):
         if not is_sequence(node):
             self.error(node_line(node), "RM060",
                        "'connections:' is not a list.",
-                       "Each connection is a list item: - [from_iface, to_iface] "
+                       "Each connection is a list item: - [from_iface, to_iface] or - [from_iface; to_iface] "
                        "(RosSystem.xtext:126-127).")
             return
 
         for item in node.value:
             line = node_line(item)
+            from_name = None
+            to_name = None
+            from_node = None
+            to_node = None
 
-            if not is_sequence(item):
+            if is_sequence(item):
+                if len(item.value) == 2:
+                    from_node, to_node = item.value
+                    if is_scalar(from_node) and is_scalar(to_node):
+                        from_name = from_node.value
+                        to_name = to_node.value
+                elif len(item.value) == 1 and is_scalar(item.value[0]):
+                    raw_val = item.value[0].value
+                    for sep in (";", ","):
+                        if sep in raw_val:
+                            parts = [p.strip().rstrip(";").strip("\"'") for p in raw_val.split(sep) if p.strip()]
+                            if len(parts) == 2:
+                                from_name, to_name = parts
+                                from_node = item.value[0]
+                                to_node = item.value[0]
+                                break
+                            elif len(parts) != 2:
+                                self.error(line, "RM060",
+                                           "Connection has %d elements; exactly 2 are required." % len(parts),
+                                           "RosSystemConnection is '-' '[' from ',' to ']' or '-' '[' from ';' to ']' (RosSystem.xtext:126-127).")
+                                from_name = "__handled__"
+                                break
+                    if from_name is None:
+                        self.error(line, "RM060",
+                                   "Connection has %d elements; exactly 2 are required." % len(item.value),
+                                   "RosSystemConnection is '-' '[' from ',' to ']' or '-' '[' from ';' to ']' (RosSystem.xtext:126-127).")
+                        continue
+                    elif from_name == "__handled__":
+                        continue
+                else:
+                    self.error(line, "RM060",
+                               "Connection has %d elements; exactly 2 are required."
+                               % len(item.value),
+                               "RosSystemConnection is '-' '[' from ',' to ']' or '-' '[' from ';' to ']' (RosSystem.xtext:126-127).")
+                    continue
+            elif is_scalar(item):
+                raw_val = item.value
+                for sep in (";", ","):
+                    if sep in raw_val:
+                        parts = [p.strip().rstrip(";").strip("\"'") for p in raw_val.split(sep) if p.strip()]
+                        if len(parts) == 2:
+                            from_name, to_name = parts
+                            from_node = item
+                            to_node = item
+                            break
+                        elif len(parts) != 2:
+                            self.error(line, "RM060",
+                                       "Connection has %d elements; exactly 2 are required." % len(parts),
+                                       "RosSystemConnection is '-' '[' from ',' to ']' or '-' '[' from ';' to ']' (RosSystem.xtext:126-127).")
+                            from_name = "__handled__"
+                            break
+                if from_name is None:
+                    self.error(line, "RM060",
+                               "Connection is not a two-element list.",
+                               "Emit only the RosSystemConnection form - [from_iface, to_iface] or - [from_iface; to_iface] referencing named RosInterface labels.")
+                    continue
+                elif from_name == "__handled__":
+                    continue
+            else:
                 self.error(line, "RM060",
                            "Connection is not a two-element list.",
-                           "Emit only the RosSystemConnection form - [from_iface, to_iface] "
-                           "referencing named RosInterface labels. The RosConnection branch "
-                           "(referencing ros::Publisher directly) triggers a ClassCastException "
-                           "in all three @Check methods, which cast unconditionally to "
-                           "RosSystemConnectionImpl (validator-rules.md sec 3.4).")
+                           "Emit only the RosSystemConnection form - [from_iface, to_iface] or - [from_iface; to_iface] referencing named RosInterface labels.")
                 continue
 
-            if len(item.value) != 2:
-                self.error(line, "RM060",
-                           "Connection has %d elements; exactly 2 are required."
-                           % len(item.value),
-                           "RosSystemConnection is '-' '[' from ',' to ']' "
-                           "(RosSystem.xtext:126-127).")
+            if from_name is None or to_name is None:
                 continue
 
-            from_node, to_node = item.value
-            if not (is_scalar(from_node) and is_scalar(to_node)):
-                continue
-
-            from_name = from_node.value
-            to_name = to_node.value
+            from_name = from_name.strip().rstrip(";").strip().strip("\"'")
+            to_name = to_name.strip().rstrip(";").strip().strip("\"'")
 
             from_iface = self.resolve_endpoint(interfaces, from_name, from_node, "from")
             to_iface = self.resolve_endpoint(interfaces, to_name, to_node, "to")
@@ -3306,7 +3499,11 @@ class Linter(object):
             candidates = interfaces.get(iface_name, [])
             matched = [
                 c for c in candidates
-                if c["node"] == prefix or c["node"].endswith("." + prefix) or prefix.endswith("." + c["node"])
+                if (c["node"] == prefix
+                    or c.get("owner") == prefix
+                    or (c.get("subsystem") and "%s.%s" % (c["subsystem"], c["node"]) == prefix)
+                    or c["node"].endswith("." + prefix)
+                    or prefix.endswith("." + c["node"]))
             ]
             if matched:
                 return matched[0]
@@ -3316,7 +3513,7 @@ class Linter(object):
         if not candidates:
             return None
         if len(candidates) > 1:
-            owners = ", ".join(sorted(set(c["node"] for c in candidates)))
+            owners = ", ".join(sorted(set(c.get("owner", c["node"]) for c in candidates)))
             qualified_examples = ", ".join("'%s.%s'" % (c["node"], name) for c in candidates[:2])
             self.warn(node_line(node), "RM065",
                       "Connection '%s' endpoint '%s' is declared in %d nodes (%s)."
