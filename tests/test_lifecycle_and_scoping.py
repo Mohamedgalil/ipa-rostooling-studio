@@ -271,3 +271,108 @@ def test_linter_scoped_connections(tmp_path):
     rm065_ambig = [f for f in linter_ambig.findings if f.rule == "RM065"]
     assert len(rm065_ambig) >= 1, "Unqualified duplicate endpoint must produce RM065"
     assert "slam.map" in rm065_ambig[0].hint
+
+
+def test_linter_semicolon_connections(tmp_path):
+    # System using various semicolon connection formats
+    semicolon_sys = tmp_path / "semicolon_test.rossystem"
+    semicolon_sys.write_text("""semicolon_test:
+  fromFile: "test/launch/test.launch.py"  # caller-supplied
+  nodes:
+    "slam":
+      from: "slam_pkg.slam_node"  # project-local
+      interfaces:
+        - "map": pub-> "slam_art::map"
+        - "scan": sub-> "slam_art::scan"
+    "nav2":
+      from: "nav2_pkg.nav2_node"  # project-local
+      interfaces:
+        - "map": sub-> "nav2_art::map"
+        - "scan": pub-> "nav2_art::scan"
+  connections:
+    - [slam.map; nav2.map]
+    - ["nav2.scan"; "slam.scan"]
+    - [slam.map; nav2.map];
+    - [nav2.scan, slam.scan];
+    - slam.map; nav2.map
+    - nav2.scan; slam.scan;
+""")
+
+    linter = rosmodel_lint.Linter(str(semicolon_sys))
+    linter.run()
+    errors = [f for f in linter.findings if f.severity == rosmodel_lint.ERROR]
+    assert not errors, f"Semicolon connection formats produced errors: {errors}"
+
+    # Also test error cases
+    bad_sys = tmp_path / "bad_semicolon_test.rossystem"
+    bad_sys.write_text("""bad_semicolon_test:
+  fromFile: "test/launch/test.launch.py"  # caller-supplied
+  nodes:
+    "slam":
+      from: "slam_pkg.slam_node"  # project-local
+      interfaces:
+        - "map": pub-> "slam_art::map"
+    "nav2":
+      from: "nav2_pkg.nav2_node"  # project-local
+      interfaces:
+        - "map": sub-> "nav2_art::map"
+  connections:
+    - [nav2.map; slam.map] # reverse direction
+    - [slam.unknown; nav2.map] # nonexistent
+    - [slam.map; nav2.map; extra] # 3 elements
+""")
+
+    linter_bad = rosmodel_lint.Linter(str(bad_sys))
+    linter_bad.run()
+    bad_errors = [f for f in linter_bad.findings if f.severity == rosmodel_lint.ERROR]
+    assert len(bad_errors) == 3, f"Expected 3 errors, got: {bad_errors}"
+    rules = [f.rule for f in bad_errors]
+    assert "RM051" in rules, "Reverse direction must trigger RM051"
+    assert "RM050" in rules, "Nonexistent endpoint must trigger RM050"
+    assert "RM060" in rules, "3-element connection must trigger RM060"
+
+
+def test_linter_subsystem_connection_and_rm053_silencing(tmp_path):
+    # Sibling subsystem file
+    subsys_file = tmp_path / "sub_cell.rossystem"
+    subsys_file.write_text("""sub_cell:
+  fromFile: "sub_cell/launch/sub.launch.py"  # caller-supplied
+  nodes:
+    "broadcaster":
+      from: "broadcaster_pkg.broadcaster_node"  # project-local
+      interfaces:
+        - "/joint_states": pub-> "broadcaster::joint_states"
+""")
+
+    # Main system referencing subsystem with qualified connection and # generates launch comment
+    gen_sys = tmp_path / "app_system.rossystem"
+    gen_sys.write_text("""app_system: # generates launch
+  subSystems:
+    "sub_cell"
+  nodes:
+    "coordinator":
+      from: "coord_pkg.coordinator"  # project-local
+      interfaces:
+        - "joint_states": sub-> "coord_node::joint_states"
+  connections:
+    - [broadcaster::/joint_states, coordinator::joint_states]
+""")
+
+    linter = rosmodel_lint.Linter(str(gen_sys))
+    linter.run()
+    errors = [f for f in linter.findings if f.severity == rosmodel_lint.ERROR]
+    assert not errors, f"Subsystem connection produced errors: {errors}"
+    rm053_findings = [f for f in linter.findings if f.rule == "RM053"]
+    assert not rm053_findings, "RM053 must stay quiet for launch generator system"
+
+    # Verify RM053 still warns when no marker or launch file exists
+    plain_sys = tmp_path / "plain_system.rossystem"
+    plain_sys.write_text("""plain_system:
+  nodes:
+    "solo":
+      from: "solo_pkg.solo"  # project-local
+""")
+    linter_plain = rosmodel_lint.Linter(str(plain_sys))
+    linter_plain.run()
+    plain_rm053 = [f for f in linter_plain.findings if f.rule == "RM053"]
+    assert len(plain_rm053) == 1, "RM053 must fire when fromFile is absent and not a generator"

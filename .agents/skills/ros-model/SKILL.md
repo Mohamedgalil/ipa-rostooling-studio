@@ -313,7 +313,7 @@ files contain tabs) — **do not imitate it.** Emit the normalised form.
 Both endpoints must resolve to the *same* spec object, so emit byte-identical `type:` strings on
 both ends.
 
-Use only the `RosSystemConnection` form, `- [from_label , to_label]`, referencing interface **labels
+Use only the `RosSystemConnection` form, `- [from_label , to_label]` (or with semicolon delimiter `- [from_label; to_label]`, with optional trailing `;`), referencing interface **labels
 declared in the same file** (or qualified as `<node>.<interface>` / `<subsystem>.<node>.<interface>`
 to disambiguate when multiple nodes declare identical interface names). The `RosConnection`
 alternative triggers a `ClassCastException` in three separate validator methods.
@@ -632,6 +632,22 @@ only what the source states, and let the Pinned-oracle exclusion section's defau
 **When the source was extracted (see "Converting real source"), your worklist is exactly the
 script's `# FLAG` comments** — the literal cases are already emitted and cited, so every remaining
 decision is one of the three below. A flag that carries a `CANDIDATES:` line is case 1 with the
+
+### 8f. Launch-time computed parameter values and composition rules
+
+RosTooling supports launch-time computed values via ROS 2 launch substitution strings in `ParameterString` values containing `$(`.
+
+Typical uses:
+- `value: "$(command 'xacro $(find-pkg-share simple_ur_cell_gazebo)/urdf/simple_ur_cell_tesseract.urdf.xacro')"`
+- `value: "$(find-pkg-share tesseract_planning)/task_composer/config/task_composer_plugins.yaml"`
+
+Rules:
+1. **Never inline URDF or SRDF:** Reference them via `$(command 'xacro ...')` or `$(find-pkg-share ...)` to maintain model abstraction.
+2. **String-only in v1:** The parameter must be `type: String`. If assigned to a non-String parameter, a warning is emitted and `value_type=str` is forced.
+3. **Syntax validation:** Parentheses must be balanced, and substitution names must be registered in ROS 2 launch frontend (`RM098`).
+4. **Generating system vs subsystem:**
+   - A generating system (one that generates an application launch file) has **no `fromFile:`**.
+   - Sending-side connection labels must equal the real topic/action names because the generator remaps the receiving side to the sender's label.
 enumeration already computed; confirm it against the source rather than re-deriving it, and note
 that the script only sees the package it was given.
 
