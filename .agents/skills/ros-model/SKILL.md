@@ -9,16 +9,10 @@ Emit files for an **indentation-sensitive Xtext DSL**. It looks like YAML. It is
 Indentation is lexed into mandatory `BEGIN`/`END` tokens; a wrong indent is a parse error, not a
 style nit.
 
-`$ARGUMENTS` is the target: a path to a ROS 2 package, or a bare system name (emit a
-`.rossystem`). If empty, ask which of the two the user wants before emitting anything.
+`$ARGUMENTS` is the target: a path to a ROS 2 package, or a bare system name (author a
+`.rossystem` via the MCP tools). If empty, ask which of the two the user wants before creating anything.
 
-**`.rossystem` compositions are built through the RosTooling MCP tools, not typed out.** When the
-`rostooling-mcp` server is connected, every node, connection, parameter and process goes through
-`ros_add_node` / `ros_connect_interfaces` / `ros_set_parameter` / `ros_add_process` /
-`ros_remove_element` (see *Building a `.rossystem` with the semantic MCP tools*), and every model
-file is checked with `validate_ros_model`. The Java/Xtext server applies each change to the Ecore
-model and edits the file surgically; the hard rules below are what you check its output — and your
-few remaining hand edits — against.
+**Never synthesize `.ros`, `.ros2`, or `.rossystem` text with `Write`/`Edit` and validate afterward when the `rostooling-mcp` server is connected.** All three model types MUST be authored and modified through the semantic MCP tools: `ros_add_spec` (`.ros`), `ros2_*` (`.ros2`), and `ros_*` (`.rossystem`) (see *Building `.ros`, `.ros2`, and `.rossystem` models with the semantic MCP tools*), then verified with `validate_ros_model`. The Java/Xtext server applies each change to the Ecore model and writes only the affected spans surgically; reserve manual file edits strictly for provenance/`# FLAG` comments on top of MCP- or extractor-produced lines, or offline fallback when no MCP server is connected.
 
 **When it is a path with source in it, start at "Converting real source" below — running the
 extractors is mandatory, not a shortcut.** One `.ros2` per *package*, named after the package it
@@ -117,9 +111,7 @@ python scripts/extract_rossystem.py <launch-file> \
     --models <project>/rosnodes -o <project>/<system>.rossystem --json <project>/system_record.json --no-lint
 ```
 
-Pass `--no-lint`: validation is `validate_ros_model`'s job (see *Validation*). The `.rossystem` the
-second script writes is the starting point — every further change to it goes through the semantic
-MCP tools.
+Pass `--no-lint`: validation is `validate_ros_model`'s job (see *Validation*). Any `.ros`, `.ros2`, or `.rossystem` the extractors emit is only the starting point — every subsequent addition, update, QoS change, or removal goes through the semantic MCP tools (`ros_add_spec`, `ros2_*`, `ros_*`), never by rewriting or extending the file by hand.
 
 Paths above are relative to the workspace root (this repo). When installed as a Python package via
 `pip install -e .`, the same tools are directly available on `PATH` as `extract-ros2-interfaces`
@@ -235,41 +227,50 @@ attempts emitted the five nodes perfectly and silently dropped the `subSystems:`
 reuse in a two-paragraph request that had nothing else to say was emitted every time. Busy requests
 lose their preamble.
 
-## Building a `.rossystem` with the semantic MCP tools — MANDATORY when connected
+## Building `.ros`, `.ros2`, and `.rossystem` models with the semantic MCP tools — MANDATORY when connected
 
-The `rostooling-mcp` server exposes coordinate-free, semantic editing tools. Each one sends a
-GLSP operation to the RosTooling Java/Xtext server, which applies it to the Ecore model, writes
-only the affected spans of the file (comments and formatting elsewhere survive), re-parses it and
-returns the Xtext validation result. You never pass coordinates and no `.layout` file is needed —
-the diagram is laid out automatically.
+The `rostooling-mcp` server exposes coordinate-free, semantic editing tools for `.ros`, `.ros2`, and `.rossystem` models. Each tool sends a GLSP operation (`createNode`, `createEdge`, `editRosProperty`, `deleteElement`) to the RosTooling Java/Xtext server, which applies it to the Ecore AST, writes only the affected spans of the file (comments and formatting elsewhere survive), re-parses it, and returns the Xtext validation result. **Do NOT draft `.ros`, `.ros2`, or `.rossystem` files with `Write`/`Edit` and run `validate_ros_model` afterward** — create and mutate every construct directly through these MCP tools. No coordinates and no `.layout` file are needed.
+
+### `.ros` message / service / action spec tools
 
 | Tool | Does | Key arguments |
 |---|---|---|
-| `ros_add_node` | adds a node instance; **creates the `.rossystem` if it does not exist** | `system_path`, `node_name`, `from` = `"<package>.<node>"` (§4b), optional `namespace`, `system_name` |
+| `ros_add_spec` | adds a `msg` / `srv` / `action` spec and its typed fields; **creates the `.ros` file if it does not exist** | `spec_path`, `spec_name`, `kind` (`msg`/`srv`/`action`), optional `package_name`, `fields` (`{ name, type, section? }[]`) |
+
+### `.ros2` package & node tools
+
+| Tool | Does | Key arguments |
+|---|---|---|
+| `ros2_add_artifact` | adds an artifact/node contract; **creates the `.ros2` file if it does not exist** | `package_path`, `artifact_name`, optional `node_name`, `package_name`, `from_git_repo`, `lifecycle` |
+| `ros2_add_interface` | adds a publisher, subscriber, service server/client, or action server/client to a node | `package_path`, `artifact`, `kind` (`pub`/`sub`/`ss`/`sc`/`as`/`ac`), `name`, `type`, optional `namespace`, `active_in`, `qos` |
+| `ros2_add_parameter` | adds a typed parameter declaration (with optional `default_value` / `value` / `namespace`) | `package_path`, `artifact`, `name`, `type` (`String`/`Integer`/`Double`/`Boolean`/`Base64`/`Array`), optional `default_value`, `value`, `namespace` |
+| `ros2_set_qos` | sets or clears QoS profile and policy fields on an existing interface | `package_path`, `artifact`, `interface_name`, optional QoS fields |
+| `ros2_set_property` | updates a property on `"root"`, `<artifact>`, `<artifact>.<interface>`, or `<artifact>.<param>` | `package_path`, `target`, `property` (`type`, `default`, `value`, `isLifecycle`, `fromGitRepo`, `namespace`, `activeStates`, `name`), `value` |
+| `ros2_remove_element` | removes an artifact, `<artifact>.<interface>`, `<artifact>.<param>`, spec, or spec field | `package_path`, `element` |
+
+### `.rossystem` composition tools
+
+| Tool | Does | Key arguments |
+|---|---|---|
+| `ros_add_node` | adds a node instance; **creates the `.rossystem` if it does not exist** | `system_path`, `node_name`, `from` = `"<package>.<node>"` (§4b), optional `namespace`, `system_name`, `from_file` |
+| `ros_add_subsystem` | adds a `subSystems:` entry referencing another `.rossystem` in the workspace | `system_path`, `subsystem_name`, optional `system_name`, `from_file` |
+| `ros_set_system_property` | sets a top-level system property (`name` or `fromFile`) | `system_path`, `property` (`name`/`fromFile`), `value` |
 | `ros_connect_interfaces` | connects two interfaces (pub/sub, service server/client, action server/client) | `from`, `to` as `"<node>.<interface>"` — order does not matter |
 | `ros_set_parameter` | sets a parameter value on a node instance | `node`, `parameter` (must be declared by the node type), `value`, optional `type_hint` |
 | `ros_add_process` | groups nodes into a process (composable container) or extends one | `process_name`, `nodes`, optional `threads` |
 | `ros_remove_element` | removes a node (with its connections), process, subsystem or connection | `element`, or `from` + `to` |
 | `export_system_diagram` | writes the auto-laid-out diagram as SVG and returns a structural summary | `system_path`, optional `output_path` |
 
-The loop, after the inventory of the previous section:
+The workflow, after the inventory of the previous section:
 
-1. Make sure every `.ros2`/`.ros` the system references is in the model's workspace (the system
-   file's directory tree, or staged there with `scripts/collect_deps.py`, §8c). The tools resolve
-   `from:` and message types through the Xtext workspace exactly like `validate_ros_model`.
-2. `ros_add_node` once per node, **in source order** (pass `system_name` on the first call). Each
-   result lists the instance's interfaces as ready-to-use `"<node>.<interface>"` refs and its
-   declared parameters — wire from those, never from memory. An unknown `from:` is refused.
-3. `ros_connect_interfaces` for every connection, `ros_set_parameter` for every parameter value,
-   `ros_add_process` for every process.
-4. Read every result. `"success": false` with an `"error"` field means **nothing was written** — fix
-   the call (the result lists the available interfaces/parameters). `"success": false` with a
-   non-empty `"errors"` list means the edit was applied but the model now has validation errors —
-   fix them before going on.
-5. Hand edits are limited to what no tool covers: `fromFile:` (rule 5), `subSystems:` (§8d) and the
-   provenance / `INFERRED` / `# FLAG` trailing comments (§8c, §8e). Later tool calls keep them.
-6. `validate_ros_model` on the finished file — the gate is `"isValid": true` with 0 errors — then
-   `export_system_diagram` when a diagram is wanted.
+1. Create any custom message/service/action `.ros` files with `ros_add_spec` (or extract/stage vendored specs with `extract_ros2_interfaces.py` / `scripts/collect_deps.py`, §8c).
+2. Create or update any custom `.ros2` node models with `ros2_add_artifact` -> `ros2_add_interface` -> `ros2_add_parameter` -> `ros2_set_qos` / `ros2_set_property` (and keep extractor-generated `.ros2` output intact, editing via `ros2_*` rather than rewriting text).
+3. Make sure every `.ros2`/`.ros` the system references sits in the `.rossystem`'s workspace directory tree.
+4. `ros_add_node` once per node **in source order** (pass `system_name` and `from_file` on the first call, or use `ros_add_subsystem` for `subSystems:` entries). Each result lists the instance's interfaces as ready-to-use `"<node>.<interface>"` refs and its declared parameters — wire from those, never from memory. An unknown `from:` is refused.
+5. `ros_connect_interfaces` for every connection, `ros_set_parameter` for every parameter value, `ros_add_process` for every process.
+6. Read every result. `"success": false` with an `"error"` field means **nothing was written** — fix the call. `"success": false` with a non-empty `"errors"` list means the edit was applied but the model now has Xtext validation errors — fix them before going on.
+7. Manual edits are strictly limited to inserting optional provenance / `# FLAG` comments (if needed after creation) — later MCP tool calls preserve them.
+8. `validate_ros_model` on every finished `.ros`, `.ros2`, and `.rossystem` file — the gate is `"isValid": true` with 0 errors — then `export_system_diagram` when a diagram is wanted.
 
 What the server writes, so the self-check does not trip over it: interfaces are listed explicitly
 under each node in the order they were first connected; connection endpoints are node-qualified and
@@ -277,10 +278,7 @@ quoted (`- [ "lidar::scan" , "detector::scan_in" ]`), which stays unambiguous wh
 of the same node type is added later; publisher / server endpoints come first; parameters are
 written only for names the node type declares. Do not re-sort or re-quote tool output by hand.
 
-If `extract_rossystem.py` already produced the file from a launch file, keep it and make every
-further change with these tools. **Without a connected MCP server** you may write the file by hand
-following the rules below, and you must say in your report that it was not validated by the
-language server.
+If `extract_ros2_interfaces.py` or `extract_rossystem.py` already produced a file from source/launch, keep it and make every further change with these MCP tools. **Without a connected MCP server** you may write the file by hand following the syntax rules below as an offline fallback, and you must state in your report that it was not authored or validated with the MCP server.
 
 ---
 
@@ -468,9 +466,7 @@ fromFile: "ur_bringup/launch/ur5e.launch.py"   # on disk: /abs/path/ur_bringup/l
 fromFile: "TODO_PACKAGE/launch/TODO.launch.py"
 ```
 
-The sentinel needs no comment (its `TODO_PACKAGE` path marks it). Every other `fromFile:`
-carries a provenance comment. No MCP tool sets `fromFile:`: add it by hand once the tools have
-created the file — later tool calls keep it.
+The sentinel needs no comment (its `TODO_PACKAGE` path marks it). Pass `from_file` directly to `ros_add_node` / `ros_add_subsystem` (or set it afterward via `ros_set_system_property` with `property="fromFile"`) — add an optional `# ...` provenance comment afterward if needed, and later MCP calls preserve it.
 
 On rung 2, report the on-disk path you confirmed. On rung 3, report **SYNTHESISED — not extracted
 from the source, supplied only to avoid the `fromFileHelper` NPE** and, if you saw a candidate path
@@ -951,10 +947,7 @@ Run every line against the emitted file:
     exemptions applied (no source on disk / missing dependencies, saying which packages were
     therefore read by hand). Anything the scripts emitted is unchanged unless a §8e resolution
     required editing that exact line.
-20. **Built and validated with the toolchain.** Every `.rossystem` node, connection, parameter and
-    process went through the semantic MCP tools (or the report says no MCP server was connected),
-    and `validate_ros_model` returned `"isValid": true` for every file you wrote, with its
-    dependencies in the workspace. No `.layout` file and no coordinates were produced.
+20. **Built and validated with the toolchain.** Every `.ros` spec, `.ros2` package/node/interface/parameter/QoS, and `.rossystem` node/subsystem/connection/parameter/process went through the semantic MCP tools (`ros_add_spec`, `ros2_*`, `ros_*` — or the report says no MCP server was connected), and `validate_ros_model` returned `"isValid": true` for every file you wrote, with its dependencies in the workspace. No `.layout` file and no coordinates were produced.
 
 ## Validation
 
@@ -967,9 +960,7 @@ Run every line against the emitted file:
   `.ros` / `.ros2` dependencies in its directory (stage vendored ones with
   `scripts/collect_deps.py <file>... <dir>`, §8c); validating a file in isolation always shows
   errors.
-- **Run it after every hand edit** (and after the extractors: run them with `--no-lint` and
-  validate their output with `validate_ros_model`). The semantic `.rossystem` tools already return
-  the server's diagnostics with each call, but finish with one explicit `validate_ros_model` run.
+- **Run `validate_ros_model` after every change** (and after the extractors: run them with `--no-lint` and validate their output with `validate_ros_model`). The semantic MCP tools (`ros_add_spec`, `ros2_*`, `ros_*`) already return the server's diagnostics with each call, and finishing with one explicit `validate_ros_model` run confirms cross-file linking across the workspace.
 - **0 errors is necessary, not sufficient.** A draft still carrying `# FLAG` comments validates
   clean — every automated signal says "done" while the model has known holes. Count them with
   `grep -c '# FLAG' <file>`: a non-zero count is not finished unless every surviving flag is named
@@ -1006,9 +997,11 @@ The `rostooling-mcp` Model Context Protocol server (`rostooling-languages` binar
 `--jar <path>` or `ROSMODEL_JAR` / `ROSMODEL_JAVA` / `ROSMODEL_CATALOGUE_DIR`) runs the RosTooling
 Java/Xtext server headlessly — no VS Code needed:
 
-- **Semantic `.rossystem` editing** — `ros_add_node`, `ros_connect_interfaces`,
-  `ros_set_parameter`, `ros_add_process`, `ros_remove_element`, `export_system_diagram` (see
-  *Building a `.rossystem` with the semantic MCP tools*).
+- **Semantic `.ros` / `.ros2` / `.rossystem` authoring** — `ros_add_spec`, `ros2_add_artifact`,
+  `ros2_add_interface`, `ros2_add_parameter`, `ros2_set_qos`, `ros2_set_property`,
+  `ros2_remove_element`, `ros_add_node`, `ros_add_subsystem`, `ros_set_system_property`,
+  `ros_connect_interfaces`, `ros_set_parameter`, `ros_add_process`, `ros_remove_element`,
+  `export_system_diagram` (see *Building `.ros`, `.ros2`, and `.rossystem` models with the semantic MCP tools*).
 - **`validate_ros_model`** — validates syntax, cross-file `type:` / `from:` references, arrow
   targets, and Xtext validator constraints on `.ros`, `.ros2`, or `.rossystem` files.
 - **`generate_ros2_wrappers`** — generates C++ (`cpp`), Python (`python`), or Hybrid (`both`) ROS 2
